@@ -72,14 +72,6 @@ func postKey(_ combination: String, pid: pid_t) throws {
 
 func postText(_ text: String, pid: pid_t) throws {
   for character in text {
-    if character == "\n" || character == "\r\n" {
-      try postKey("return", pid: pid)
-      continue
-    }
-    if character == "\t" {
-      try postKey("tab", pid: pid)
-      continue
-    }
     let units = Array(String(character).utf16)
     for down in [true, false] {
       guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: down) else {

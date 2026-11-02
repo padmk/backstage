@@ -107,7 +107,7 @@ let tools: [ToolDefinition] = [
     required: ["app", "element", "value"], annotations: [:]),
   ToolDefinition(
     name: "type_text",
-    description: "Insert text at an element, or without one send it as keys to the app's focused element. Delivery `value_appended_at_end` means an unfocused one-line field took it at its end, ignoring the cursor. Nothing is typed if the element cannot take it.",
+    description: "Insert text at an element, or without one send it as keys to the app's focused element. Delivery `value_appended_at_end` means an unfocused one-line field took it at its end, ignoring the cursor. Line breaks and tabs need an element that takes text directly; otherwise send them with press_key. Nothing is typed if the element cannot take it.",
     properties: [
       ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
       ("text", ["type": "string", "maxLength": 100000] as JSON),

@@ -42,7 +42,7 @@ private func line(for element: AXUIElement, role: String, number: Int, depth: In
   return text
 }
 
-func renderTree(roots: [AXUIElement], pid: pid_t, table: ElementTable, maxElements: Int) -> RenderedTree {
+func renderTree(roots: [AXUIElement], pid: pid_t, table: ElementTable, maxElements: Int, shownToAgent: Bool) -> RenderedTree {
   var tree = RenderedTree(lines: [], partialReason: nil)
   let deadline = Date().addingTimeInterval(treeDeadlineSeconds)
 
@@ -75,7 +75,7 @@ func renderTree(roots: [AXUIElement], pid: pid_t, table: ElementTable, maxElemen
       return
     }
 
-    let number = table.number(for: element, pid: pid)
+    let number = table.number(for: element, pid: pid, shownToAgent: shownToAgent)
     tree.lines.append(line(for: element, role: role, number: number, depth: depth, actionNames: actionNames))
     kids.forEach { visit($0, depth: depth + 1) }
   }
@@ -101,6 +101,7 @@ func hasModal(_ window: AXUIElement) -> Bool {
 struct LastRead {
   var request: JSON
   var lines: [String]
+  var isPartial: Bool
 }
 
 func changeReport(before: [String], after: [String]) -> JSON {

@@ -100,13 +100,16 @@ func prepareAccessibility(of application: AXUIElement, pid: pid_t) {
 }
 
 private let maxRememberedElements = 20000
+private let rolesIdentifiedByValue: Set<String> = [kAXStaticTextRole, kAXCellRole, kAXRowRole]
 
 // What an element is, without its value. A list may reuse an element for another row, and a number must not
 // silently come to mean something else than what the agent read.
 private func fingerprint(of element: AXUIElement) -> [String?] {
-  [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXIdentifierAttribute].map {
-    stringAttribute(element, $0)
-  }
+  let names = [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXIdentifierAttribute]
+  var parts = names.map { stringAttribute(element, $0) }
+  // These show their content only as a value.
+  if rolesIdentifiedByValue.contains(parts[0] ?? "") { parts.append(describeValue(attribute(element, kAXValueAttribute))) }
+  return parts
 }
 
 // Numbers stay the same for the same element across reads, so an agent can compare states. They belong
@@ -123,12 +126,13 @@ final class ElementTable {
   private var entries: [Int: Entry] = [:]
   private var nextNumber = 1
 
-  func number(for element: AXUIElement, pid: pid_t) -> Int {
+  // What an element is counts from what the agent saw, so a read it did not see never updates that.
+  func number(for element: AXUIElement, pid: pid_t, shownToAgent: Bool) -> Int {
     let seen = fingerprint(of: element)
     let hash = CFHash(element)
     return lock.withLock {
       if let known = numbersByHash[hash]?.first(where: { CFEqual($0.element, element) }) {
-        entries[known.number]?.fingerprint = seen
+        if shownToAgent { entries[known.number]?.fingerprint = seen }
         return known.number
       }
       if entries.count >= maxRememberedElements { forgetOldest() }

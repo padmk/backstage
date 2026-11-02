@@ -11,6 +11,8 @@ private let pressActions = ["AXPress", "AXConfirm", "AXPick", "AXOpen"]
 private let maxRememberedReads = 32
 private let singleLineRoles: Set<String> = [kAXTextFieldRole, kAXComboBoxRole, "AXSearchField"]
 private let secureSubrole = "AXSecureTextField"
+private let valueWatchChecks = 10
+private let valueWatchInterval = 0.05
 
 func onMain<T>(_ work: () -> T) -> T {
   Thread.isMainThread ? work() : DispatchQueue.main.sync(execute: work)
@@ -137,7 +139,7 @@ private func header(app: AppIdentity, application: AXUIElement, selected: AXUIEl
   return parts.joined(separator: " ")
 }
 
-private func readTree(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> (header: String, tree: RenderedTree) {
+private func readTree(app: AppIdentity, params: JSON, session: ApprovalSession, shownToAgent: Bool) throws -> (header: String, tree: RenderedTree) {
   let application = try applicationElement(app)
   let maxElements = min(max(params["max_elements"] as? Int ?? defaultMaxElements, 1), 5000)
   var roots: [AXUIElement]
@@ -151,7 +153,7 @@ private func readTree(app: AppIdentity, params: JSON, session: ApprovalSession) 
     roots = [selected!] + openMenus(of: application)
   }
   return (header(app: app, application: application, selected: selected),
-          renderTree(roots: roots, pid: app.pid, table: session.table, maxElements: maxElements))
+          renderTree(roots: roots, pid: app.pid, table: session.table, maxElements: maxElements, shownToAgent: shownToAgent))
 }
 
 // Runs an action, then reports what changed in the app's last read, so the agent sees the effect and no
@@ -162,13 +164,17 @@ private func acting(app: AppIdentity, session: ApprovalSession, _ action: () thr
     result["state"] = ["unknown": true, "reason": "Nothing was read before this action, so changes cannot be reported."] as JSON
     return result
   }
+  if last.isPartial {
+    result["state"] = ["unknown": true, "reason": "The last read was partial, so changes cannot be reported. Read a smaller area with root."] as JSON
+    return result
+  }
   let deadline = Date().addingTimeInterval(settleSeconds)
   var after = last.lines
   repeat {
     sleep(seconds: 0.1)
     let read: RenderedTree
     do {
-      read = try readTree(app: app, params: last.request, session: session).tree
+      read = try readTree(app: app, params: last.request, session: session, shownToAgent: false).tree
     } catch {
       let reason = (error as? HelperError)?.message ?? error.localizedDescription
       result["state"] = ["unknown": true, "reason": "The earlier read cannot be repeated: \(reason)"] as JSON
@@ -182,7 +188,7 @@ private func acting(app: AppIdentity, session: ApprovalSession, _ action: () thr
     if after != last.lines { break }
   } while Date() < deadline
   result["state"] = changeReport(before: last.lines, after: after)
-  session.lock.withLock { session.lastReads[app.pid] = LastRead(request: last.request, lines: after) }
+  session.lock.withLock { session.lastReads[app.pid] = LastRead(request: last.request, lines: after, isPartial: false) }
   return result
 }
 
@@ -235,57 +241,116 @@ private func setValue(app: AppIdentity, params: JSON, session: ApprovalSession) 
   guard outcome == .success else { throw axFailure(outcome, "setting the value") }
   // A secure field cannot be read back.
   if stringAttribute(element, kAXSubroleAttribute) == secureSubrole { return ["delivery": "accessibility", "verified": false] }
-  if CFEqual(before, value) || valueChanges(of: element, from: before) { return ["delivery": "accessibility", "verified": true] }
-  throw HelperError(code: "outcome_unknown", message: "The app accepted the value, but the element still shows the old one. Read the state before trying again.")
-}
-
-// Apps may apply a change a moment after accepting it.
-private func valueChanges(of element: AXUIElement, from before: AnyObject?) -> Bool {
-  for _ in 0..<6 {
-    if !CFEqual(attribute(element, kAXValueAttribute), before) { return true }
-    sleep(seconds: 0.05)
+  if sameValue(before, value) { return ["delivery": "accessibility", "verified": true] }
+  switch watchValue(of: element, from: before, until: value) {
+  case .reached:
+    return ["delivery": "accessibility", "verified": true]
+  case .unchanged:
+    throw HelperError(code: "outcome_unknown", message: "The app accepted the value, but the element still shows the old one. Read the state before trying again.")
+  case .unreadable:
+    return ["delivery": "accessibility", "verified": false]
+  case .changed:
+    // The app stored something else, for example by limiting a number.
+    return ["delivery": "accessibility", "verified": false, "value": describeValue(attribute(element, kAXValueAttribute)) ?? ""]
   }
-  return false
 }
 
-// Each route ends the request once text may have arrived, so nothing is inserted twice.
+private func sameValue(_ first: AnyObject?, _ second: AnyObject?) -> Bool {
+  guard let first, let second else { return first == nil && second == nil }
+  return CFEqual(first, second)
+}
+
+private enum ValueWatch {
+  case reached, changed, unchanged, unreadable
+}
+
+// Apps may apply a change a moment after accepting it. Stops early once the value differs from `before`,
+// or, when a target is given, once it matches the target.
+private func watchValue(of element: AXUIElement, from before: AnyObject?, until target: AnyObject? = nil) -> ValueWatch {
+  var outcome = ValueWatch.unchanged
+  for _ in 0..<valueWatchChecks {
+    let current = attribute(element, kAXValueAttribute)
+    if current == nil, before != nil {
+      outcome = .unreadable
+    } else if let target, sameValue(current, target) {
+      return .reached
+    } else if !sameValue(current, before) {
+      if target == nil { return .changed }
+      outcome = .changed
+    } else {
+      outcome = .unchanged
+    }
+    sleep(seconds: valueWatchInterval)
+  }
+  return outcome
+}
+
+private func requireTextForKeys(_ text: String) throws {
+  // Return may submit a form and Tab moves the focus, so these never go out as a side effect of text.
+  if text.contains(where: { $0.isNewline || $0 == "\t" }) {
+    throw HelperError(code: "invalid_request", message: "This route sends keys, so line breaks and tabs are refused. Use press_key for them.")
+  }
+}
+
+// Once text may have arrived, no later route runs, so nothing is inserted twice.
 private func typeText(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
   let text = try string(params, "text")
   guard !text.isEmpty else { throw HelperError(code: "invalid_request", message: "text is empty.") }
   guard let number = params["element"] as? Int else {
+    try requireTextForKeys(text)
     try postText(text, pid: app.pid)
     return ["delivery": "key_events", "verified": false]
   }
   let element = try session.table.element(number, pid: app.pid)
   let isSecure = stringAttribute(element, kAXSubroleAttribute) == secureSubrole
   let isSingleLine = isSecure || singleLineRoles.contains(stringAttribute(element, kAXRoleAttribute) ?? "")
-  // Return would submit the form instead of breaking the line.
   if isSingleLine, text.contains(where: \.isNewline) {
     throw HelperError(code: "invalid_request", message: "This field holds one line. Use press_key with return to submit it.")
   }
 
   let before = isSecure ? nil : textAttribute(element, kAXValueAttribute)
   if let before {
-    // An unfocused text field answers success to this and changes nothing, so the value is checked.
-    if isSettable(element, kAXSelectedTextAttribute),
-      AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as NSString) == .success {
-      if textAttribute(element, kAXSelectedTextAttribute) == text || valueChanges(of: element, from: before as NSString) {
-        return ["delivery": "accessibility", "verified": true]
+    if isSettable(element, kAXSelectedTextAttribute) {
+      let selectedBefore = textAttribute(element, kAXSelectedTextAttribute)
+      let outcome = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as NSString)
+      if outcome == .cannotComplete { throw axFailure(outcome, "inserting the text") }
+      if outcome == .success {
+        // Replacing a selection with the same text leaves the value as it was.
+        if selectedBefore == text { return ["delivery": "accessibility", "verified": false] }
+        switch watchValue(of: element, from: before as NSString) {
+        case .changed, .reached:
+          return ["delivery": "accessibility", "verified": true]
+        case .unreadable:
+          return ["delivery": "accessibility", "verified": false]
+        case .unchanged:
+          // Only an unfocused one-line field is known to answer success and change nothing.
+          if !isSingleLine || boolAttribute(element, kAXFocusedAttribute) {
+            throw HelperError(code: "outcome_unknown", message: "The app accepted the text, but the element still shows the old value. Read the state before trying again.")
+          }
+        }
       }
     }
-    // Only plain one-line fields: writing the value of a document would lose its formatting.
-    if isSingleLine, isSettable(element, kAXValueAttribute) {
+    // Only plain one-line fields, because writing a document's value would lose its formatting, and only
+    // unfocused ones, because a focused field has a cursor that keys can respect.
+    if isSingleLine, !boolAttribute(element, kAXFocusedAttribute), isSettable(element, kAXValueAttribute) {
       let appended = before + text
-      if AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, appended as NSString) == .success {
-        if valueChanges(of: element, from: before as NSString) {
+      let outcome = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, appended as NSString)
+      if outcome == .cannotComplete { throw axFailure(outcome, "inserting the text") }
+      if outcome == .success {
+        switch watchValue(of: element, from: before as NSString, until: appended as NSString) {
+        case .reached:
           return ["delivery": "value_appended_at_end", "verified": true]
+        case .changed, .unreadable:
+          return ["delivery": "value_appended_at_end", "verified": false]
+        case .unchanged:
+          throw HelperError(code: "outcome_unknown", message: "The app accepted the text, but the field still shows the old value. Read the state before trying again.")
         }
-        throw HelperError(code: "outcome_unknown", message: "The app accepted the text, but the field still shows the old value. Read the state before trying again.")
       }
     }
   }
 
   // Keys go wherever the app's focus is, so they are sent only once it is on this element.
+  try requireTextForKeys(text)
   AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
   sleep(seconds: 0.05)
   let focused = attribute(AXUIElementCreateApplication(app.pid), kAXFocusedUIElementAttribute)
@@ -293,8 +358,9 @@ private func typeText(app: AppIdentity, params: JSON, session: ApprovalSession) 
     throw HelperError(code: "action_failed", message: "Could not focus this element, so nothing was typed.")
   }
   try postText(text, pid: app.pid)
-  let verified = before.map { valueChanges(of: element, from: $0 as NSString) } ?? false
-  return ["delivery": "key_events", "verified": verified]
+  guard let before else { return ["delivery": "key_events", "verified": false] }
+  if case .changed = watchValue(of: element, from: before as NSString) { return ["delivery": "key_events", "verified": true] }
+  return ["delivery": "key_events", "verified": false]
 }
 
 private func scroll(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
@@ -401,10 +467,10 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     return try activate(app)
 
   case "get_window_state":
-    let read = try readTree(app: app, params: params, session: session)
+    let read = try readTree(app: app, params: params, session: session, shownToAgent: true)
     session.lock.withLock {
       if session.lastReads.count >= maxRememberedReads { session.lastReads.removeAll() }
-      session.lastReads[app.pid] = LastRead(request: params, lines: read.tree.lines)
+      session.lastReads[app.pid] = LastRead(request: params, lines: read.tree.lines, isPartial: read.tree.partialReason != nil)
     }
     var text = read.header + "\n" + read.tree.lines.joined(separator: "\n")
     if let reason = read.tree.partialReason { text += "\n[Partial: \(reason)]" }

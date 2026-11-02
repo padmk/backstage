@@ -36,6 +36,8 @@ struct ApprovalTexts {
   let title: (String) -> String
   let wants: (String) -> String
   let farReaching: String
+  let updatedWhileRunning: (String) -> String
+  let restartForPermanent: String
   let labels: ApprovalLabels
   let agent: String
 }
@@ -44,6 +46,8 @@ private let english = ApprovalTexts(
   title: { "Allow control of \($0)?" },
   wants: { "\($0) wants to see this app's windows, click in them and type." },
   farReaching: "This app can run commands or change your system, so this reaches beyond the app itself.",
+  updatedWhileRunning: { "\($0) was updated while running, so its signature cannot be confirmed. This approval lasts until it quits." },
+  restartForPermanent: "Restart it to use a permanent approval.",
   labels: ApprovalLabels(
     session: "Allow for This Session", always: "Always Allow", decline: "Decline",
     countdown: "Declines automatically in {seconds} s", unlocked: "Approval buttons are now available"),
@@ -53,6 +57,8 @@ private let polish = ApprovalTexts(
   title: { "Zezwolić na sterowanie aplikacją „\($0)”?" },
   wants: { "\($0) chce widzieć okna tej aplikacji, klikać w nich i pisać." },
   farReaching: "Ta aplikacja może uruchamiać polecenia lub zmieniać system, więc zgoda sięga dalej niż sama aplikacja.",
+  updatedWhileRunning: { "Aplikacja „\($0)” została zaktualizowana w trakcie działania, więc nie da się potwierdzić jej podpisu. Ta zgoda obowiązuje do jej zamknięcia." },
+  restartForPermanent: "Uruchom ją ponownie, aby korzystać ze stałej zgody.",
   labels: ApprovalLabels(
     session: "Zezwól na tę sesję", always: "Zezwalaj zawsze", decline: "Odmów",
     countdown: "Automatyczna odmowa za {seconds} s", unlocked: "Przyciski zgody są już dostępne"),
@@ -67,6 +73,17 @@ func readableClientName(_ name: String?) -> String? {
   let words = (name ?? "").split(whereSeparator: { "-_ ".contains($0) })
   guard !words.isEmpty else { return nil }
   return words.map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+}
+
+// errSecCSStaticCodeChanged: the running code no longer matches the file on disk.
+private let codeChangedOnDisk: OSStatus = -67034
+
+private func wasUpdatedWhileRunning(_ app: AppIdentity) -> Bool {
+  guard app.pid > 0 else { return false }
+  var code: SecCode?
+  let attributes = [kSecGuestAttributePid: NSNumber(value: app.pid)] as CFDictionary
+  guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess, let code else { return false }
+  return SecCodeCheckValidity(code, [], nil) == codeChangedOnDisk
 }
 
 private func validStaticCode(of app: AppIdentity) -> SecStaticCode? {
@@ -227,11 +244,16 @@ enum ApprovalGate {
     let language = session.lock.withLock { session.language }
     let clientName = session.lock.withLock { session.clientName }
     let chosen = texts(language: language)
+    var warning = isFarReaching ? [chosen.farReaching] : []
+    if wasUpdatedWhileRunning(app) {
+      warning.append(chosen.updatedWhileRunning(app.name))
+      if !isFarReaching { warning.append(chosen.restartForPermanent) }
+    }
     let request = ApprovalRequest(
       title: chosen.title(app.name),
       // The bundle id and location tell the real app from another one using its name.
       message: chosen.wants(readableClientName(clientName) ?? chosen.agent) + "\n\n\(app.bundleId)\n\(app.path ?? "")",
-      warning: isFarReaching ? chosen.farReaching : nil,
+      warning: warning.isEmpty ? nil : warning.joined(separator: " "),
       bundleIdentifier: app.bundleId,
       brandName: "backstage",
       offersAlways: !isFarReaching && appSigner != nil,
