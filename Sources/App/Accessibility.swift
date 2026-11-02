@@ -29,10 +29,13 @@ func isSettable(_ element: AXUIElement, _ name: String) -> Bool {
   return AXUIElementIsAttributeSettable(element, name as CFString, &settable) == .success && settable.boolValue
 }
 
+// Raising a window would bring it over the user's work, so agents neither see that action nor can run it.
+private let unavailableActions: Set<String> = ["AXShowDefaultUI", "AXShowAlternateUI", kAXRaiseAction]
+
 func actions(of element: AXUIElement) -> [String] {
   var names: CFArray?
   guard AXUIElementCopyActionNames(element, &names) == .success else { return [] }
-  return (names as? [String]) ?? []
+  return ((names as? [String]) ?? []).filter { !unavailableActions.contains($0) }
 }
 
 func frame(of element: AXUIElement) -> CGRect? {

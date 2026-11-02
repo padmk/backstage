@@ -1,6 +1,6 @@
-// The native approval window. Return never approves. The approving buttons unlock only after the window
-// has been key for a moment and lock again when it loses focus, so input meant for another window cannot
-// grant access.
+// The native approval window. It appears without taking the user's focus, under whatever they are doing, so
+// input meant for something else must not grant access. Return never approves, and the approving buttons
+// unlock only once the pointer has moved and stayed over the window for a moment.
 
 import AppKit
 import SwiftUI
@@ -28,9 +28,18 @@ enum Decision: String {
   case decline, session, always
 }
 
+// Appears over the user's work without taking their focus: the app stays inactive, and keys keep going
+// where they were going. Only clicking in the panel makes it key.
+private let unlockDelaySeconds = 0.6
+
 private final class ApprovalPanel: NSPanel {
   override var canBecomeKey: Bool { true }
-  override var canBecomeMain: Bool { true }
+  override var canBecomeMain: Bool { false }
+}
+
+// The panel is not key when the user reaches for a button, and that first click has to count.
+private final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 private struct WindowBackground: NSViewRepresentable {
@@ -70,7 +79,6 @@ private struct ApprovalView: View {
   let request: ApprovalRequest
   let deadline: Date
   let decide: (Decision) -> Void
-  @State private var windowIsKey = false
   @State private var approvalUnlocked = false
 
   var body: some View {
@@ -140,20 +148,41 @@ private struct ApprovalView: View {
     .padding(.bottom, 24)
     .frame(width: 520)
     .background(WindowBackground())
-    .onAppear { windowIsKey = NSApp.keyWindow != nil }
-    .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in windowIsKey = true }
-    .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in windowIsKey = false }
-    .task(id: windowIsKey) {
-      approvalUnlocked = false
-      guard windowIsKey else { return }
-      try? await Task.sleep(nanoseconds: 600_000_000)
-      guard !Task.isCancelled else { return }
-      approvalUnlocked = true
-      NSAccessibility.post(
-        element: NSApp as Any,
-        notification: .announcementRequested,
-        userInfo: [.announcement: request.labels.unlocked, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+    .task {
+      await watchForDeliberatePointer()
     }
+  }
+
+  // A pointer resting where the window appeared, or just passing through, says nothing about the user's
+  // intent. People who do not use a pointer get the window as key, and the delay alone.
+  private func watchForDeliberatePointer() async {
+    let usesKeyboard = NSWorkspace.shared.isVoiceOverEnabled || NSWorkspace.shared.isSwitchControlEnabled || NSApp.isFullKeyboardAccessEnabled
+    let start = NSEvent.mouseLocation
+    var hasMoved = false
+    var heldSince: Date?
+    while !Task.isCancelled {
+      let pointer = NSEvent.mouseLocation
+      hasMoved = hasMoved || pointer != start
+      let isOver = NSApp.windows.contains { $0 is ApprovalPanel && $0.isVisible && $0.frame.contains(pointer) }
+      if usesKeyboard || (hasMoved && isOver) {
+        heldSince = heldSince ?? Date()
+      } else {
+        heldSince = nil
+      }
+      let shouldUnlock = heldSince.map { Date().timeIntervalSince($0) >= unlockDelaySeconds } ?? false
+      if shouldUnlock != approvalUnlocked {
+        approvalUnlocked = shouldUnlock
+        if shouldUnlock { announceUnlocked() }
+      }
+      try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+  }
+
+  private func announceUnlocked() {
+    NSAccessibility.post(
+      element: NSApp as Any,
+      notification: .announcementRequested,
+      userInfo: [.announcement: request.labels.unlocked, .priority: NSAccessibilityPriorityLevel.high.rawValue])
   }
 }
 
@@ -190,11 +219,11 @@ func askUser(_ request: ApprovalRequest, connection: Connection) -> Decision {
 
   DispatchQueue.main.async {
     let deadline = Date().addingTimeInterval(TimeInterval(request.timeoutSeconds))
-    let content = NSHostingView(rootView: ApprovalView(request: request, deadline: deadline, decide: settle))
+    let content = FirstClickHostingView(rootView: ApprovalView(request: request, deadline: deadline, decide: settle))
     content.layoutSubtreeIfNeeded()
     let window = ApprovalPanel(
       contentRect: NSRect(origin: .zero, size: content.fittingSize),
-      styleMask: [.titled, .fullSizeContentView],
+      styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel],
       backing: .buffered,
       defer: false)
     window.title = request.title
@@ -215,8 +244,14 @@ func askUser(_ request: ApprovalRequest, connection: Connection) -> Decision {
       window.center()
     }
     panel = window
-    window.makeKeyAndOrderFront(nil)
-    NSApp.activate(ignoringOtherApps: true)
+    window.orderFrontRegardless()
+    if NSWorkspace.shared.isVoiceOverEnabled || NSWorkspace.shared.isSwitchControlEnabled || NSApp.isFullKeyboardAccessEnabled {
+      window.makeKey()
+    }
+    NSAccessibility.post(
+      element: NSApp as Any,
+      notification: .announcementRequested,
+      userInfo: [.announcement: request.title, .priority: NSAccessibilityPriorityLevel.high.rawValue])
     #if SELF_TEST
     runWindowSelfTest()
     #endif

@@ -1,5 +1,5 @@
 // Keyboard and mouse events addressed to one process. They never go to the global event stream, so they
-// cannot reach another app and do not move the cursor. The API gives no proof of delivery.
+// cannot reach another app and do not move the cursor. No API gives proof of delivery.
 
 import AppKit
 import Carbon.HIToolbox
@@ -83,22 +83,62 @@ func postText(_ text: String, pid: pid_t) throws {
   }
 }
 
-func postClick(at point: CGPoint, pid: pid_t, count: Int) throws {
+// Where a pointer event goes in a window the app is not showing in front.
+struct PointerTarget {
+  let window: CGWindowID?
+  let origin: CGPoint
+}
+
+// The window server routes a pointer event by what is under the real cursor unless the event names its
+// window, so these fields are what lets it reach a background window without moving the cursor. Flags are
+// set explicitly, because the event would otherwise carry whatever keys the user is holding.
+private func route(_ event: CGEvent, point: CGPoint, target: PointerTarget, pid: pid_t, extra: [(UInt32, Int64)]) {
+  event.flags = []
+  guard let window = target.window else { return }
+  setEventWindowLocation?(event, CGPoint(x: point.x - target.origin.x, y: point.y - target.origin.y))
+  let number = Int64(window)
+  for (field, value) in [(40, Int64(pid)), (51, number), (91, number), (92, number)] + extra {
+    if let name = CGEventField(rawValue: field) { event.setIntegerValueField(name, value: value) }
+  }
+}
+
+private func clickFields(state: Int64, gesture: Int64) -> [(UInt32, Int64)] {
+  [(1, state), (3, 0), (7, touchSubtype), (58, gesture)]
+}
+
+// A window that never saw a move has stale tracking state and ignores the event that follows.
+private func postMove(to point: CGPoint, source: CGEventSource?, target: PointerTarget, pid: pid_t, gesture: Int64) throws {
+  guard let moved = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else {
+    throw HelperError(code: "action_failed", message: "Could not create a mouse event.")
+  }
+  route(moved, point: point, target: target, pid: pid, extra: clickFields(state: 0, gesture: gesture))
+  post(moved, to: pid)
+  sleep(seconds: pointerEventGap)
+}
+
+func postClick(at point: CGPoint, target: PointerTarget, pid: pid_t, count: Int) throws {
+  let source = CGEventSource(stateID: .hidSystemState)
+  let gesture = Int64.random(in: 1...Int64(Int32.max))
+  try postMove(to: point, source: source, target: target, pid: pid, gesture: gesture)
   for click in 1...min(max(1, count), 3) {
     for type in [CGEventType.leftMouseDown, .leftMouseUp] {
-      guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
+      guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
         throw HelperError(code: "action_failed", message: "Could not create a mouse event.")
       }
-      event.setIntegerValueField(.mouseEventClickState, value: Int64(click))
-      event.postToPid(pid)
+      route(event, point: point, target: target, pid: pid, extra: clickFields(state: Int64(click), gesture: gesture))
+      post(event, to: pid)
+      sleep(seconds: pointerEventGap)
     }
   }
 }
 
-func postScroll(at point: CGPoint, pid: pid_t, lines: Int32) throws {
+func postScroll(at point: CGPoint, target: PointerTarget, pid: pid_t, lines: Int32) throws {
+  let source = CGEventSource(stateID: .hidSystemState)
+  try postMove(to: point, source: source, target: target, pid: pid, gesture: Int64.random(in: 1...Int64(Int32.max)))
   guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0) else {
     throw HelperError(code: "action_failed", message: "Could not create a scroll event.")
   }
   event.location = point
-  event.postToPid(pid)
+  route(event, point: point, target: target, pid: pid, extra: [])
+  post(event, to: pid)
 }

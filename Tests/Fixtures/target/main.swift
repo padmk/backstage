@@ -88,7 +88,9 @@ final class Controller: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     // Last, so the main window is window 0 for the driver.
     main.orderFront(nil)
     windows = [main, second]
-    log("ready")
+    main.contentView?.layoutSubtreeIfNeeded()
+    let center = raw.convert(NSPoint(x: raw.bounds.midX, y: raw.bounds.midY), to: nil)
+    log("ready", "\(Int(center.x)),\(Int(main.frame.height - center.y))")
   }
 
   @objc func pressed() {

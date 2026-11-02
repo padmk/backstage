@@ -9,7 +9,7 @@ private let handshakeProtocols = ["2025-11-25", "2025-06-18", "2025-03-26", "202
 private let serverInfo: JSON = ["name": Product.commandName, "version": Product.version]
 
 // The policy comes first: clients cut long server instructions, and several servers share that budget.
-let instructions = "Operate Mac apps in the background. Read with get_window_state, act by element number and check `state` in the reply. The user approves each app in a window, so the first call for an app can take minutes. Prefer shell commands or other tools when they can do the job."
+let instructions = "Operate Mac apps in the background. Read with get_window_state, act by element number and check `state` in the reply. Everything runs in the background: nothing here brings an app forward, though an app may do so itself in response to an action. When an action does not land, tell the user instead of working around it. The user approves each app in a window, so the first call for an app can take minutes. Prefer shell commands or other tools when they can do the job."
 
 final class MCPServer: @unchecked Sendable {
   private let helper: HelperClient

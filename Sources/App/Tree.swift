@@ -7,7 +7,6 @@ let defaultMaxElements = 800
 let treeDeadlineSeconds: TimeInterval = 10
 private let maxDepth = 60
 private let silentContainers: Set<String> = ["AXGroup", "AXSplitGroup", "AXLayoutArea", "AXUnknown"]
-private let hiddenActions: Set<String> = ["AXShowDefaultUI", "AXShowAlternateUI"]
 
 struct RenderedTree {
   var lines: [String]
@@ -66,7 +65,7 @@ func renderTree(roots: [AXUIElement], pid: pid_t, table: ElementTable, maxElemen
     }
     let kids = (childrenValue as? [AXUIElement]) ?? []
     let role = stringAttribute(element, kAXRoleAttribute) ?? "AXUnknown"
-    let actionNames = actions(of: element).filter { !hiddenActions.contains($0) }
+    let actionNames = actions(of: element)
 
     // Containers that say nothing would only add noise.
     let says = stringAttribute(element, kAXTitleAttribute) ?? stringAttribute(element, kAXDescriptionAttribute)

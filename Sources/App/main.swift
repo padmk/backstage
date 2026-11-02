@@ -1,4 +1,4 @@
-// Background helper that reads and operates Mac apps with public Apple APIs. It runs as its own app so
+// Background helper that reads and operates Mac apps. It runs as its own app so
 // that macOS ties Accessibility and Screen Recording to it. It serves line-delimited JSON on a Unix socket
 // in a directory only this user can open, and decides every approval itself.
 

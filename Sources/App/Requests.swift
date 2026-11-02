@@ -98,16 +98,6 @@ private func launch(_ query: String, session: ApprovalSession, connection: Conne
   return describe(launched)
 }
 
-private func activate(_ app: AppIdentity) throws -> JSON {
-  guard let path = app.path else { throw HelperError(code: "action_failed", message: "\(app.name) has no location.") }
-  let configuration = NSWorkspace.OpenConfiguration()
-  configuration.activates = true
-  NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: path), configuration: configuration) { _, _ in }
-  sleep(seconds: 0.4)
-  let active = onMain { NSRunningApplication(processIdentifier: app.pid)?.isActive ?? false }
-  return ["active": active]
-}
-
 private func applicationElement(_ app: AppIdentity) throws -> AXUIElement {
   try requireAccessibility()
   let element = AXUIElementCreateApplication(app.pid)
@@ -217,7 +207,7 @@ private func press(app: AppIdentity, params: JSON, session: ApprovalSession) thr
   guard let box = frame(of: element) else {
     throw HelperError(code: "action_failed", message: "The element has no action and no position.")
   }
-  try postClick(at: CGPoint(x: box.midX, y: box.midY), pid: app.pid, count: 1)
+  try postClick(at: CGPoint(x: box.midX, y: box.midY), target: pointerTarget(for: element), pid: app.pid, count: 1)
   return ["delivery": "pointer_event", "verified": false]
 }
 
@@ -392,7 +382,7 @@ private func scroll(app: AppIdentity, params: JSON, session: ApprovalSession) th
   guard vertical, let box = frame(of: element) else {
     throw HelperError(code: "action_failed", message: "No scroll bar was found for this element.")
   }
-  try postScroll(at: CGPoint(x: box.midX, y: box.midY), pid: app.pid, lines: Int32((forward ? -10 : 10) * pages))
+  try postScroll(at: CGPoint(x: box.midX, y: box.midY), target: pointerTarget(for: element), pid: app.pid, lines: Int32((forward ? -10 : 10) * pages))
   return ["delivery": "pointer_event", "verified": false]
 }
 
@@ -407,7 +397,7 @@ private func clickAt(app: AppIdentity, params: JSON) throws -> JSON {
   guard x >= 0, y >= 0, x <= box.width, y <= box.height else {
     throw HelperError(code: "out_of_window", message: "The point is outside the window (\(Int(box.width))×\(Int(box.height))).")
   }
-  try postClick(at: CGPoint(x: box.minX + x, y: box.minY + y), pid: app.pid, count: params["count"] as? Int ?? 1)
+  try postClick(at: CGPoint(x: box.minX + x, y: box.minY + y), target: pointerTarget(for: window), pid: app.pid, count: params["count"] as? Int ?? 1)
   return ["delivery": "pointer_event", "verified": false, "window": stringAttribute(window, kAXTitleAttribute) ?? ""]
 }
 
@@ -453,7 +443,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     break
   }
 
-  guard ["activate_app", "get_window_state", "screenshot", "press", "set_value", "type_text", "press_key", "scroll", "click_at"].contains(method) else {
+  guard ["get_window_state", "screenshot", "press", "set_value", "type_text", "press_key", "scroll", "click_at"].contains(method) else {
     throw HelperError(code: "unknown_method", message: "Unknown method \(method).")
   }
 
@@ -463,9 +453,6 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   try connection.throwIfCancelled()
 
   switch method {
-  case "activate_app":
-    return try activate(app)
-
   case "get_window_state":
     let read = try readTree(app: app, params: params, session: session, shownToAgent: true)
     session.lock.withLock {

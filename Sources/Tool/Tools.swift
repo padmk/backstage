@@ -62,13 +62,6 @@ let tools: [ToolDefinition] = [
     ],
     required: ["app"], annotations: [:]),
   ToolDefinition(
-    name: "activate_app",
-    description: "Bring an app to the front. This takes the user's focus; use it only when a background action did not land.",
-    properties: [
-      ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON)
-    ],
-    required: ["app"], annotations: [:]),
-  ToolDefinition(
     name: "get_window_state",
     description: "Read a window as lines of numbered elements with their state and actions. The first line lists the app's windows. Numbers stay valid across reads in this session.",
     properties: [
@@ -116,7 +109,7 @@ let tools: [ToolDefinition] = [
     required: ["app", "text"], annotations: [:]),
   ToolDefinition(
     name: "press_key",
-    description: "Send a key or combination, such as return or cmd+s. Menu shortcuts may need the app in front.",
+    description: "Send a key or combination, such as return or cmd+s, to the app in the background. It may not arrive at an app in the background, so check the effect, and prefer pressing the menu item.",
     properties: [
       ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
       ("key", ["type": "string", "maxLength": 64] as JSON)
@@ -134,7 +127,7 @@ let tools: [ToolDefinition] = [
     required: ["app", "element", "direction"], annotations: [:]),
   ToolDefinition(
     name: "click_at",
-    description: "Send a click at a point in window coordinates without moving the cursor. Apps may ignore it in the background; use it only when no element can do the job.",
+    description: "Send a click at a point in window coordinates, in the background and without moving the cursor. Use it only when no element can do the job, and check the effect.",
     properties: [
       ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
       ("x", ["type": "number", "minimum": 0] as JSON),
