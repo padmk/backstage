@@ -1,0 +1,54 @@
+// Captures one window, at one image pixel per window point so its coordinates work with click_at.
+
+import AppKit
+import ApplicationServices
+import ScreenCaptureKit
+
+private let captureTimeoutSeconds = 15
+private let maxFrameDifference: CGFloat = 24
+
+func captureWindow(pid: pid_t, window: AXUIElement) throws -> JSON {
+  guard CGPreflightScreenCaptureAccess() else {
+    throw HelperError(code: "permission_missing", message: "Screen Recording is not granted to the helper.")
+  }
+  guard let target = frame(of: window) else {
+    throw HelperError(code: "action_failed", message: "The window has no position.")
+  }
+  let title = stringAttribute(window, kAXTitleAttribute)
+  let done = DispatchSemaphore(value: 0)
+  var outcome: Result<JSON, Error> = .failure(HelperError(code: "action_failed", message: "No screenshot."))
+
+  Task.detached {
+    do {
+      let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+      let difference = { (candidate: SCWindow) -> CGFloat in
+        abs(candidate.frame.minX - target.minX) + abs(candidate.frame.minY - target.minY)
+          + abs(candidate.frame.width - target.width) + abs(candidate.frame.height - target.height)
+      }
+      let matches = content.windows
+        .filter { $0.owningApplication?.processID == pid && $0.windowLayer == 0 && difference($0) <= maxFrameDifference }
+      // Windows at the same place are told apart by title; an unresolved tie must not show the wrong one.
+      let exact = matches.filter { $0.title == title }
+      guard let match = exact.count == 1 ? exact[0] : (matches.count == 1 ? matches[0] : nil) else {
+        throw HelperError(code: "window_not_found", message: "The window could not be matched for capture (\(matches.count) candidates).")
+      }
+      let configuration = SCStreamConfiguration()
+      configuration.width = Int(match.frame.width)
+      configuration.height = Int(match.frame.height)
+      configuration.showsCursor = false
+      let filter = SCContentFilter(desktopIndependentWindow: match)
+      let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+      guard let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
+        throw HelperError(code: "action_failed", message: "The image could not be encoded.")
+      }
+      outcome = .success(["png_base64": data.base64EncodedString(), "width": image.width, "height": image.height, "title": match.title ?? ""])
+    } catch {
+      outcome = .failure(error)
+    }
+    done.signal()
+  }
+  guard done.wait(timeout: .now() + .seconds(captureTimeoutSeconds)) == .success else {
+    throw HelperError(code: "timeout", message: "The capture did not finish in time.")
+  }
+  return try outcome.get()
+}
