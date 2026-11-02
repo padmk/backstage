@@ -24,6 +24,7 @@ app:
 	mkdir -p $(APP).partial/Contents/MacOS $(APP).partial/Contents/Helpers $(APP).partial/Contents/Resources
 	cp $(BUILD)/$(APP_NAME) $(APP).partial/Contents/MacOS/$(APP_NAME)
 	cp $(BUILD)/$(COMMAND)-tool $(APP).partial/Contents/Helpers/$(COMMAND)
+	cp assets/AppIcon.icns $(APP).partial/Contents/Resources/
 	sed -e 's/@APP_NAME@/$(APP_NAME)/g' -e 's/@VERSION@/$(VERSION)/g' -e 's/@BUNDLE_ID@/$(BUNDLE_ID)/g' \
 	    -e 's/@MINIMUM_MACOS@/$(MINIMUM_MACOS)/g' packaging/Info.plist > $(APP).partial/Contents/Info.plist
 	plutil -lint -s $(APP).partial/Contents/Info.plist

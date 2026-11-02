@@ -149,7 +149,16 @@ private func readTree(app: AppIdentity, params: JSON, session: ApprovalSession, 
 // Runs an action, then reports what changed in the app's last read, so the agent sees the effect and no
 // action claims a success it did not observe.
 private func acting(app: AppIdentity, session: ApprovalSession, _ action: () throws -> JSON) throws -> JSON {
-  var result = try action()
+  let frontBefore = onMain { NSWorkspace.shared.frontmostApplication }
+  var result: JSON
+  do {
+    result = try action()
+  } catch {
+    _ = returnFocus(to: frontBefore, from: app.pid)
+    throw error
+  }
+  defer { _ = returnFocus(to: frontBefore, from: app.pid) }
+  if returnFocus(to: frontBefore, from: app.pid) { result["focus_returned"] = true }
   guard let last = session.lock.withLock({ session.lastReads[app.pid] }) else {
     result["state"] = ["unknown": true, "reason": "Nothing was read before this action, so changes cannot be reported."] as JSON
     return result
@@ -180,6 +189,16 @@ private func acting(app: AppIdentity, session: ApprovalSession, _ action: () thr
   result["state"] = changeReport(before: last.lines, after: after)
   session.lock.withLock { session.lastReads[app.pid] = LastRead(request: last.request, lines: after, isPartial: false) }
   return result
+}
+
+// An app can bring itself forward in response to an action, for example when it shows or closes a dialog.
+// The user was working in another app, so that app gets the focus back. Returns whether it had to.
+private func returnFocus(to previous: NSRunningApplication?, from pid: pid_t) -> Bool {
+  guard let previous, previous.processIdentifier != pid, !previous.isTerminated else { return false }
+  return onMain {
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return false }
+    return previous.activate()
+  }
 }
 
 private func press(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
@@ -421,6 +440,8 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     return ["accessibility": accessibility, "screen_recording": screen] as JSON
 
   case "quit":
+    // The user's window comes back in the process that replaces this one.
+    if isControlWindowOpen { scheduleReopen() }
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
       unlink(Configuration.socketPath)
       exit(0)
@@ -431,7 +452,10 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     return ["approvals": ApprovalStore.list()] as JSON
 
   case "approvals_revoke":
-    return ["revoked": try ApprovalStore.revoke(bundleId: string(params, "bundle_id"))] as JSON
+    let bundleId = try string(params, "bundle_id")
+    let stored = try ApprovalStore.revoke(bundleId: bundleId)
+    let inSession = revokeSessionApprovals(bundleId: bundleId)
+    return ["revoked": stored || inSession] as JSON
 
   case "list_apps":
     return ["apps": visibleApps().map(describe)] as JSON

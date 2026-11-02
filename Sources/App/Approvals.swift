@@ -27,6 +27,10 @@ private let farReaching: Set<String> = [
   "com.microsoft.VSCode", "dev.zed.Zed",
 ]
 
+func isFarReaching(_ bundleId: String) -> Bool { farReaching.contains(bundleId) }
+func isNeverApproved(_ bundleId: String) -> Bool { neverApproved.contains(bundleId) || bundleId == Bundle.main.bundleIdentifier }
+
+private let timedApprovalSeconds: TimeInterval = 3600
 private let declineMemorySeconds: TimeInterval = 60
 // Shorter than what the client still has left after one full approval window.
 private let approvalQueueSeconds: TimeInterval = 25
@@ -49,7 +53,7 @@ private let english = ApprovalTexts(
   updatedWhileRunning: { "\($0) was updated while running, so its signature cannot be confirmed. This approval lasts until it quits." },
   restartForPermanent: "Restart it to use a permanent approval.",
   labels: ApprovalLabels(
-    session: "Allow for This Session", always: "Always Allow", decline: "Decline",
+    session: "Allow for This Session", hour: "Allow for 1 Hour", always: "Always Allow", decline: "Decline",
     countdown: "Declines automatically in {seconds} s", unlocked: "Approval buttons are now available"),
   agent: "An agent")
 
@@ -60,7 +64,7 @@ private let polish = ApprovalTexts(
   updatedWhileRunning: { "Aplikacja „\($0)” została zaktualizowana w trakcie działania, więc nie da się potwierdzić jej podpisu. Ta zgoda obowiązuje do jej zamknięcia." },
   restartForPermanent: "Uruchom ją ponownie, aby korzystać ze stałej zgody.",
   labels: ApprovalLabels(
-    session: "Zezwól na tę sesję", always: "Zezwalaj zawsze", decline: "Odmów",
+    session: "Zezwól na tę sesję", hour: "Zezwól na godzinę", always: "Zezwalaj zawsze", decline: "Odmów",
     countdown: "Automatyczna odmowa za {seconds} s", unlocked: "Przyciski zgody są już dostępne"),
   agent: "Agent")
 
@@ -86,6 +90,18 @@ private func wasUpdatedWhileRunning(_ app: AppIdentity) -> Bool {
   return SecCodeCheckValidity(code, [], nil) == codeChangedOnDisk
 }
 
+// A universal app's default slice can differ from the one this Mac runs, and Apple's apps have no team id,
+// so their signer would not match the running process's. arm64e is what they run on Apple silicon.
+private func staticCodeAsItRuns(at path: String) -> SecStaticCode? {
+  let url = URL(fileURLWithPath: path) as CFURL
+  var code: SecStaticCode?
+  #if arch(arm64)
+  let slice = [kSecCodeAttributeArchitecture: NSNumber(value: CPU_TYPE_ARM64), kSecCodeAttributeSubarchitecture: NSNumber(value: CPU_SUBTYPE_ARM64E)] as CFDictionary
+  if SecStaticCodeCreateWithPathAndAttributes(url, [], slice, &code) == errSecSuccess, let code { return code }
+  #endif
+  return SecStaticCodeCreateWithPath(url, [], &code) == errSecSuccess ? code : nil
+}
+
 private func validStaticCode(of app: AppIdentity) -> SecStaticCode? {
   var staticCode: SecStaticCode?
   if app.pid > 0 {
@@ -97,8 +113,7 @@ private func validStaticCode(of app: AppIdentity) -> SecStaticCode? {
     else { return nil }
     return staticCode
   }
-  guard let path = app.path,
-    SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &staticCode) == errSecSuccess, let staticCode,
+  guard let path = app.path, let staticCode = staticCodeAsItRuns(at: path),
     SecStaticCodeCheckValidity(staticCode, SecCSFlags(rawValue: kSecCSDoNotValidateResources), nil) == errSecSuccess
   else { return nil }
   return staticCode
@@ -106,7 +121,7 @@ private func validStaticCode(of app: AppIdentity) -> SecStaticCode? {
 
 // Approvals name who signed the app, so another app claiming the same bundle id is asked for. A signature
 // that does not verify counts as none. The running process is what gets checked once there is one.
-func signer(of app: AppIdentity) -> String? {
+func signingIdentity(of app: AppIdentity) -> String? {
   guard let staticCode = validStaticCode(of: app) else { return nil }
   var information: CFDictionary?
   guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
@@ -125,12 +140,18 @@ enum ApprovalStore {
   private static var path: String { Configuration.home + "/approvals.json" }
   private static let lock = NSLock()
 
+  // Expired approvals count as absent, and leave the file on the next write.
   private static func read() -> [[String: String]] {
     guard let data = FileManager.default.contents(atPath: path),
       let object = try? JSONSerialization.jsonObject(with: data) as? JSON,
       let approvals = object["approvals"] as? [[String: String]]
     else { return [] }
-    return approvals
+    let now = Date()
+    return approvals.filter { entry in
+      guard let text = entry["expires_at"] else { return true }
+      guard let expiry = ISO8601DateFormatter().date(from: text) else { return false }
+      return expiry > now
+    }
   }
 
   private static func write(_ approvals: [[String: String]]) throws {
@@ -149,10 +170,12 @@ enum ApprovalStore {
     return lock.withLock { read().contains { $0["bundle_id"] == bundleId && $0["signer"] == signer } }
   }
 
-  static func add(bundleId: String, signer: String) throws {
+  static func add(bundleId: String, signer: String, until: Date?) throws {
     try lock.withLock {
       let others = read().filter { $0["bundle_id"] != bundleId }
-      try write(others + [["bundle_id": bundleId, "signer": signer]])
+      var entry = ["bundle_id": bundleId, "signer": signer]
+      if let until { entry["expires_at"] = ISO8601DateFormatter().string(from: until) }
+      try write(others + [entry])
     }
   }
 
@@ -171,7 +194,16 @@ enum ApprovalStore {
   }
 }
 
-private func writeDecisionLog(client: String?, bundleId: String, decision: String) {
+func recentDecisions(limit: Int) -> [String] {
+  guard let text = try? String(contentsOfFile: Configuration.home + "/decisions.jsonl", encoding: .utf8) else { return [] }
+  return text.split(separator: "\n").suffix(limit).reversed().compactMap { line in
+    guard let data = line.data(using: .utf8), let entry = try? JSONSerialization.jsonObject(with: data) as? JSON else { return nil }
+    let parts = [entry["time"], entry["app"], entry["decision"], entry["client"]].map { ($0 as? String) ?? "" }
+    return parts.joined(separator: "  ")
+  }
+}
+
+func writeDecisionLog(client: String?, bundleId: String, decision: String) {
   let entry: JSON = [
     "time": ISO8601DateFormatter().string(from: Date()), "client": client ?? NSNull(), "app": bundleId, "decision": decision,
   ]
@@ -214,7 +246,7 @@ enum ApprovalGate {
     if neverApproved.contains(app.bundleId) || app.bundleId == Bundle.main.bundleIdentifier || app.pid == getpid() {
       throw HelperError(code: "not_allowed", message: "\(app.name) is never available to agents.")
     }
-    let appSigner = signer(of: app)
+    let appSigner = signingIdentity(of: app)
     // Without a signature the approval holds only for this process.
     let sessionKey = "\(app.bundleId)|\(appSigner ?? "pid:\(app.pid):\(app.launchDate?.timeIntervalSince1970 ?? 0)")"
     let isFarReaching = farReaching.contains(app.bundleId)
@@ -255,7 +287,7 @@ enum ApprovalGate {
       message: chosen.wants(readableClientName(clientName) ?? chosen.agent) + "\n\n\(app.bundleId)\n\(app.path ?? "")",
       warning: warning.isEmpty ? nil : warning.joined(separator: " "),
       bundleIdentifier: app.bundleId,
-      brandName: "backstage",
+      brandName: Configuration.appName,
       offersAlways: !isFarReaching && appSigner != nil,
       timeoutSeconds: approvalTimeoutSeconds,
       labels: chosen.labels)
@@ -267,12 +299,16 @@ enum ApprovalGate {
     switch decision {
     case .session:
       session.lock.withLock { _ = session.approved.insert(sessionKey) }
-    case .always:
+    case .always, .hour:
       // Kept only in the store, so revoking it reaches sessions already running.
       do {
         guard let appSigner else { throw HelperError(code: "store_failed", message: "The app has no valid signature.") }
-        try ApprovalStore.add(bundleId: app.bundleId, signer: appSigner)
+        try ApprovalStore.add(bundleId: app.bundleId, signer: appSigner, until: decision == .hour ? Date().addingTimeInterval(timedApprovalSeconds) : nil)
       } catch {
+        // A session approval has no end time, so it cannot stand in for a limited one.
+        if decision == .hour {
+          throw HelperError(code: "store_failed", message: "The approval for \(app.name) could not be saved.")
+        }
         NSLog("backstage: could not save a permanent approval: \(error)")
         session.lock.withLock { _ = session.approved.insert(sessionKey) }
       }

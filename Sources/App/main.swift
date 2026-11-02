@@ -14,10 +14,23 @@ if let index = arguments.firstIndex(of: "--home"), arguments.indices.contains(in
 // The system-wide timeout applies to every element, so one hung app cannot hold a request for long.
 AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 2)
 
+final class AppDelegate: NSObject, NSApplicationDelegate {
+  func applicationDidFinishLaunching(_ notification: Notification) {
+    if !arguments.contains("--background") { showControlWindow() }
+  }
+
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    showControlWindow()
+    return true
+  }
+}
+
 // Read before anything can replace the executable, so the app reports the build it runs.
 _ = ownBuildIdentity
 startServer()
 
 let application = NSApplication.shared
+let appDelegate = AppDelegate()
+application.delegate = appDelegate
 application.setActivationPolicy(.accessory)
 application.run()

@@ -7,6 +7,7 @@ import SwiftUI
 
 struct ApprovalLabels {
   let session: String
+  let hour: String
   let always: String
   let decline: String
   let countdown: String
@@ -25,7 +26,7 @@ struct ApprovalRequest {
 }
 
 enum Decision: String {
-  case decline, session, always
+  case decline, session, hour, always
 }
 
 // Appears over the user's work without taking their focus: the app stays inactive, and keys keep going
@@ -120,6 +121,11 @@ private struct ApprovalView: View {
         .disabled(!approvalUnlocked)
 
         if request.offersAlways {
+          Button { decide(.hour) } label: {
+            Text(request.labels.hour).frame(maxWidth: .infinity)
+          }
+          .disabled(!approvalUnlocked)
+
           Button { decide(.always) } label: {
             Text(request.labels.always).frame(maxWidth: .infinity)
           }
