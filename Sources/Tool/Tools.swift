@@ -109,7 +109,7 @@ let tools: [ToolDefinition] = [
     required: ["app", "text"], annotations: [:]),
   ToolDefinition(
     name: "press_key",
-    description: "Send a key or combination, such as return or cmd+s, to the app in the background. It may not arrive at an app in the background, so check the effect, and prefer pressing the menu item.",
+    description: "Send a key or combination, such as return or cmd+s, to the app in the background. A native view receives it once it has focus, so click the view with click_at first. Other apps and combinations may behave differently, so check the effect, and prefer pressing the menu item.",
     properties: [
       ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
       ("key", ["type": "string", "maxLength": 64] as JSON)
