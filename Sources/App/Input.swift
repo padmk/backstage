@@ -142,3 +142,45 @@ func postScroll(at point: CGPoint, target: PointerTarget, pid: pid_t, lines: Int
   route(event, point: point, target: target, pid: pid, extra: [])
   post(event, to: pid)
 }
+
+// The last resort for a window that ignores background input: the app comes forward, the click goes through
+// the real cursor, and the cursor goes back to where it was. The caller gives the focus back.
+func postForegroundClick(at point: CGPoint, window: AXUIElement, pid: pid_t, count: Int) throws {
+  guard let app = NSRunningApplication(processIdentifier: pid) else {
+    throw HelperError(code: "app_not_found", message: "The app is no longer running.")
+  }
+  _ = onMain { app.activate() }
+  AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+  let deadline = Date().addingTimeInterval(1)
+  while onMain({ NSWorkspace.shared.frontmostApplication?.processIdentifier }) != pid, Date() < deadline {
+    sleep(seconds: 0.05)
+  }
+  guard onMain({ NSWorkspace.shared.frontmostApplication?.processIdentifier }) == pid else {
+    throw HelperError(code: "action_failed", message: "The app did not come forward, so nothing was clicked.")
+  }
+  sleep(seconds: 0.15)
+  let cursor = CGEvent(source: nil)?.location
+  let source = CGEventSource(stateID: .hidSystemState)
+  defer {
+    if let cursor { CGWarpMouseCursorPosition(cursor) }
+    CGAssociateMouseAndMouseCursorPosition(1)
+  }
+  guard let moved = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else {
+    throw HelperError(code: "action_failed", message: "Could not create a mouse event.")
+  }
+  moved.flags = []
+  moved.post(tap: .cghidEventTap)
+  sleep(seconds: pointerEventGap)
+  for click in 1...min(max(1, count), 3) {
+    for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+      guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
+        throw HelperError(code: "action_failed", message: "Could not create a mouse event.")
+      }
+      event.flags = []
+      event.setIntegerValueField(.mouseEventClickState, value: Int64(click))
+      event.post(tap: .cghidEventTap)
+      sleep(seconds: pointerEventGap)
+    }
+  }
+  sleep(seconds: 0.1)
+}

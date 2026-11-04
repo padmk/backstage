@@ -45,3 +45,60 @@ func pointerTarget(for element: AXUIElement) -> PointerTarget {
   guard let window, let box = frame(of: window) else { return PointerTarget(window: nil, origin: .zero) }
   return PointerTarget(window: windowNumber(of: window), origin: box.origin)
 }
+
+private typealias PostEventRecord = @convention(c) (UnsafeRawPointer, UnsafeRawPointer) -> Int32
+private typealias ProcessForPid = @convention(c) (pid_t, UnsafeMutableRawPointer) -> Int32
+
+private let postEventRecord = lookUp("SLPSPostEventRecordTo", as: PostEventRecord.self, in: skyLight)
+private let processForPid = lookUp("GetProcessForPID", as: ProcessForPid.self, in: dlopen(nil, RTLD_NOW))
+// The app drops a record that arrives while it still handles the one before.
+private let keyRecordSettleSeconds = 0.12
+
+private func windowRecord(kind: UInt8, window: CGWindowID) -> [UInt8] {
+  var record = [UInt8](repeating: 0, count: 0xF8)
+  record[0x04] = 0xF8
+  record[0x08] = kind
+  withUnsafeBytes(of: window.littleEndian) { bytes in
+    for index in 0..<4 { record[0x3C + index] = bytes[index] }
+  }
+  return record
+}
+
+// Chromium takes pointer and key input only in its key window, and a window in an app the user is not using
+// is not key. These records make `window` key inside the app, without activating the app or raising the
+// window, so the user's front app keeps its focus. Returns whether every record was posted.
+func makeKeyInApp(window: CGWindowID, pid: pid_t) -> Bool {
+  guard let postEventRecord, let processForPid else { return false }
+  var serial = [UInt8](repeating: 0, count: 8)
+  guard processForPid(pid, &serial) == 0 else { return false }
+  var focus = windowRecord(kind: 0x0D, window: window)
+  focus[0x8A] = 0x01
+  var posted = postEventRecord(serial, focus) == 0
+  sleep(seconds: keyRecordSettleSeconds)
+  for kind: UInt8 in [0x01, 0x02] {
+    var makeKey = windowRecord(kind: kind, window: window)
+    makeKey[0x3A] = 0x10
+    for index in 0x20..<0x30 { makeKey[index] = 0xFF }
+    posted = postEventRecord(serial, makeKey) == 0 && posted
+  }
+  sleep(seconds: keyRecordSettleSeconds)
+  return posted
+}
+
+private var chromiumApps: [String: Bool] = [:]
+private let chromiumAppsLock = NSLock()
+
+// Chromium browsers keep their engine in a framework with helper apps inside it; Electron apps ship
+// Electron Framework. AppKit apps are left alone: there the key records made the app report itself active.
+func isChromiumApp(path: String?) -> Bool {
+  guard let path else { return false }
+  if let known = chromiumAppsLock.withLock({ chromiumApps[path] }) { return known }
+  let frameworks = path + "/Contents/Frameworks"
+  let names = (try? FileManager.default.contentsOfDirectory(atPath: frameworks)) ?? []
+  let found = names.contains("Electron Framework.framework") || names.contains { name in
+    name.hasSuffix(" Framework.framework")
+      && FileManager.default.fileExists(atPath: "\(frameworks)/\(name)/Versions/Current/Helpers")
+  }
+  chromiumAppsLock.withLock { chromiumApps[path] = found }
+  return found
+}

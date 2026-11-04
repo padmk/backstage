@@ -56,7 +56,7 @@ let tools: [ToolDefinition] = [
     required: [], annotations: [:]),
   ToolDefinition(
     name: "launch_app",
-    description: "Start an app without requesting activation. It may still show a window.",
+    description: "Start an app in the background. If it takes the focus while starting, the app you were in gets it back and the new app stays behind it. An app that is already running is left as it is.",
     properties: [
       ("app", ["type": "string", "description": "App name or bundle id, not a path"] as JSON)
     ],
@@ -127,13 +127,14 @@ let tools: [ToolDefinition] = [
     required: ["app", "element", "direction"], annotations: [:]),
   ToolDefinition(
     name: "click_at",
-    description: "Send a click at a point in window coordinates, in the background and without moving the cursor. Use it only when no element can do the job, and check the effect.",
+    description: "Send a click at a point in window coordinates, in the background and without moving the cursor. Use it only when no element can do the job, and check the effect, for example with a screenshot.",
     properties: [
       ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
       ("x", ["type": "number", "minimum": 0] as JSON),
       ("y", ["type": "number", "minimum": 0] as JSON),
       ("window", ["type": "integer", "minimum": 0, "description": "Window index shown in get_window_state; default the first"] as JSON),
-      ("count", ["type": "integer", "minimum": 1, "maximum": 3] as JSON)
+      ("count", ["type": "integer", "minimum": 1, "maximum": 3] as JSON),
+      ("foreground", ["type": "boolean", "description": "Last resort when a background click did not land: the window comes forward for the click, then the previous app gets the focus back and the cursor returns. Tell the user you used it."] as JSON)
     ],
     required: ["app", "x", "y"], annotations: [:]),
 ]

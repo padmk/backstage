@@ -7,6 +7,9 @@ import ApplicationServices
 
 private let settleSeconds = 1.0
 private let launchTimeoutSeconds = 20
+// How long a starting app is watched for taking the focus, and how long it must leave it alone once started.
+private let launchFocusWatchSeconds = 8.0
+private let launchQuietSeconds = 1.5
 private let pressActions = ["AXPress", "AXConfirm", "AXPick", "AXOpen"]
 private let maxRememberedReads = 32
 private let singleLineRoles: Set<String> = [kAXTextFieldRole, kAXComboBoxRole, "AXSearchField"]
@@ -79,6 +82,13 @@ private func launch(_ query: String, session: ApprovalSession, connection: Conne
   try ApprovalGate.require(
     AppIdentity(pid: 0, bundleId: bundleId, name: name, launchDate: nil, path: url.path), session: session, connection: connection)
 
+  // Opening a running app sends it a reopen event, which can show a window and take the focus, so it is left as it is.
+  if let running = onMain({ NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first { !$0.isTerminated } }) {
+    var result = describe(running)
+    result["already_running"] = true
+    return result
+  }
+  let frontBefore = onMain { NSWorkspace.shared.frontmostApplication }
   let configuration = NSWorkspace.OpenConfiguration()
   configuration.activates = false
   configuration.addsToRecentItems = false
@@ -90,12 +100,41 @@ private func launch(_ query: String, session: ApprovalSession, connection: Conne
     failure = error
     done.signal()
   }
-  guard done.wait(timeout: .now() + .seconds(launchTimeoutSeconds)) == .success else {
-    throw HelperError(code: "timeout", message: "\(name) did not start in time.")
+  // The app can take the focus before the launch is reported, so it is watched while waiting too.
+  let launchDeadline = Date().addingTimeInterval(TimeInterval(launchTimeoutSeconds))
+  var returnedEarly = false
+  while done.wait(timeout: .now() + 0.05) == .timedOut {
+    if let frontBefore, frontBefore.bundleIdentifier != bundleId,
+       onMain({ NSWorkspace.shared.frontmostApplication?.bundleIdentifier }) == bundleId {
+      returnedEarly = onMain { frontBefore.activate() } || returnedEarly
+    }
+    guard Date() < launchDeadline else { throw HelperError(code: "timeout", message: "\(name) did not start in time.") }
   }
   if let failure { throw HelperError(code: "action_failed", message: failure.localizedDescription) }
   guard let launched else { throw HelperError(code: "action_failed", message: "\(name) did not start.") }
-  return describe(launched)
+  let focusReturned = keepFocusWhileStarting(launched, previous: frontBefore) || returnedEarly
+  var result = describe(launched)
+  if focusReturned { result["focus_returned"] = true }
+  return result
+}
+
+// Many apps activate themselves as they start, despite the request not to. While it starts, the app the user
+// was in gets the focus back each time, which also leaves the new app's windows behind it. Returns whether it had to.
+private func keepFocusWhileStarting(_ launched: NSRunningApplication, previous: NSRunningApplication?) -> Bool {
+  guard let previous, previous.processIdentifier != launched.processIdentifier else { return false }
+  let deadline = Date().addingTimeInterval(launchFocusWatchSeconds)
+  var quietSince = Date()
+  var returned = false
+  while Date() < deadline, !launched.isTerminated {
+    if onMain({ NSWorkspace.shared.frontmostApplication?.processIdentifier }) == launched.processIdentifier {
+      returned = onMain { previous.activate() } || returned
+      quietSince = Date()
+    } else if launched.isFinishedLaunching, Date().timeIntervalSince(quietSince) >= launchQuietSeconds {
+      break
+    }
+    sleep(seconds: 0.05)
+  }
+  return returned
 }
 
 private func applicationElement(_ app: AppIdentity) throws -> AXUIElement {
@@ -226,6 +265,7 @@ private func press(app: AppIdentity, params: JSON, session: ApprovalSession) thr
   guard let box = frame(of: element) else {
     throw HelperError(code: "action_failed", message: "The element has no action and no position.")
   }
+  prepareInput(app: app, window: attribute(element, kAXWindowAttribute).map { $0 as! AXUIElement })
   try postClick(at: CGPoint(x: box.midX, y: box.midY), target: pointerTarget(for: element), pid: app.pid, count: 1)
   return ["delivery": "pointer_event", "verified": false]
 }
@@ -307,6 +347,7 @@ private func typeText(app: AppIdentity, params: JSON, session: ApprovalSession) 
   guard !text.isEmpty else { throw HelperError(code: "invalid_request", message: "text is empty.") }
   guard let number = params["element"] as? Int else {
     try requireTextForKeys(text)
+    prepareInput(app: app, window: nil)
     try postText(text, pid: app.pid)
     return ["delivery": "key_events", "verified": false]
   }
@@ -360,6 +401,7 @@ private func typeText(app: AppIdentity, params: JSON, session: ApprovalSession) 
 
   // Keys go wherever the app's focus is, so they are sent only once it is on this element.
   try requireTextForKeys(text)
+  prepareInput(app: app, window: attribute(element, kAXWindowAttribute).map { $0 as! AXUIElement })
   AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
   sleep(seconds: 0.05)
   let focused = attribute(AXUIElementCreateApplication(app.pid), kAXFocusedUIElementAttribute)
@@ -405,6 +447,17 @@ private func scroll(app: AppIdentity, params: JSON, session: ApprovalSession) th
   return ["delivery": "pointer_event", "verified": false]
 }
 
+// Chromium ignores input to a window that is not key, so its window is made key inside the app first. An app
+// the user is working in already has its key window.
+private func prepareInput(app: AppIdentity, window: AXUIElement?) {
+  guard isChromiumApp(path: app.path),
+        onMain({ NSRunningApplication(processIdentifier: app.pid)?.isActive }) == false else { return }
+  let application = AXUIElementCreateApplication(app.pid)
+  let target = window ?? attribute(application, kAXMainWindowAttribute).map { $0 as! AXUIElement } ?? windows(of: application).first
+  guard let target, let number = windowNumber(of: target) else { return }
+  _ = makeKeyInApp(window: number, pid: app.pid)
+}
+
 private func clickAt(app: AppIdentity, params: JSON) throws -> JSON {
   let application = try applicationElement(app)
   let x = try number(params, "x")
@@ -416,7 +469,14 @@ private func clickAt(app: AppIdentity, params: JSON) throws -> JSON {
   guard x >= 0, y >= 0, x <= box.width, y <= box.height else {
     throw HelperError(code: "out_of_window", message: "The point is outside the window (\(Int(box.width))×\(Int(box.height))).")
   }
-  try postClick(at: CGPoint(x: box.minX + x, y: box.minY + y), target: pointerTarget(for: window), pid: app.pid, count: params["count"] as? Int ?? 1)
+  let point = CGPoint(x: box.minX + x, y: box.minY + y)
+  let count = params["count"] as? Int ?? 1
+  if params["foreground"] as? Bool == true {
+    try postForegroundClick(at: point, window: window, pid: app.pid, count: count)
+    return ["delivery": "foreground_pointer_event", "verified": false, "window": stringAttribute(window, kAXTitleAttribute) ?? ""]
+  }
+  prepareInput(app: app, window: window)
+  try postClick(at: point, target: pointerTarget(for: window), pid: app.pid, count: count)
   return ["delivery": "pointer_event", "verified": false, "window": stringAttribute(window, kAXTitleAttribute) ?? ""]
 }
 
@@ -507,6 +567,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     try requireAccessibility()
     let key = try string(params, "key")
     return try acting(app: app, session: session) {
+      prepareInput(app: app, window: nil)
       try postKey(key, pid: app.pid)
       return ["delivery": "key_events", "verified": false]
     }
