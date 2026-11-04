@@ -62,6 +62,22 @@ let tools: [ToolDefinition] = [
     ],
     required: ["app"], annotations: [:]),
   ToolDefinition(
+    name: "list_operations",
+    description: "List the ready operations, hints and pitfalls Backstage knows for well-known apps. Without app: the apps that have them. With app: its operations and their arguments. Prefer an operation to working through the window: it is faster, runs in the background and checks its own result. Needs no approval.",
+    properties: [
+      ("app", ["type": "string", "description": "App name or bundle id"] as JSON)
+    ],
+    required: [], annotations: [:]),
+  ToolDefinition(
+    name: "run_operation",
+    description: "Run one operation from list_operations. The reply carries the result and, for a change, `verified`. `outcome_unknown` means the change may have been made: read the state before trying again.",
+    properties: [
+      ("app", ["type": "string", "description": "App name or bundle id"] as JSON),
+      ("operation", ["type": "string", "description": "Operation name from list_operations, such as create"] as JSON),
+      ("arguments", ["type": "object", "description": "The operation's arguments, as list_operations describes them"] as JSON)
+    ],
+    required: ["app", "operation"], annotations: [:]),
+  ToolDefinition(
     name: "get_window_state",
     description: "Read a window as lines of numbered elements with their state and actions. The first line lists the app's windows. Numbers stay valid across reads in this session.",
     properties: [

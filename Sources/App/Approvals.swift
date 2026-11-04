@@ -268,7 +268,7 @@ enum ApprovalGate {
     }
     let request = ApprovalRequest(
       title: chosen.title(readableClientName(clientName) ?? chosen.agent, app.name),
-      message: chosen.wants,
+      message: [chosen.wants, knowledge(forBundleId: app.bundleId)?.access].compactMap { $0 }.joined(separator: " "),
       path: app.path,
       warning: warning.isEmpty ? nil : warning.joined(separator: " "),
       bundleIdentifier: app.bundleId,

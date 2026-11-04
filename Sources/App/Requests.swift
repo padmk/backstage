@@ -523,6 +523,12 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   case "launch_app":
     return try launch(string(params, "app"), session: session, connection: connection)
 
+  case "list_operations":
+    return try listOperations(params)
+
+  case "run_operation":
+    return try runOperation(params, session: session, connection: connection)
+
   default:
     break
   }
@@ -543,7 +549,8 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
       if session.lastReads.count >= maxRememberedReads { session.lastReads.removeAll() }
       session.lastReads[app.pid] = LastRead(request: params, lines: read.tree.lines, isPartial: read.tree.partialReason != nil)
     }
-    var text = read.header + "\n" + read.tree.lines.joined(separator: "\n")
+    let knowledge = knowledgeLines(forBundleId: app.bundleId)
+    var text = ([read.header] + knowledge + read.tree.lines).joined(separator: "\n")
     if let reason = read.tree.partialReason { text += "\n[Partial: \(reason)]" }
     return ["tree": text] as JSON
 
