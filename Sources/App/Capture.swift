@@ -28,8 +28,13 @@ func captureWindow(pid: pid_t, window: AXUIElement) throws -> JSON {
       let matches = content.windows
         .filter { $0.owningApplication?.processID == pid && $0.windowLayer == 0 && difference($0) <= maxFrameDifference }
       // Windows at the same place are told apart by title; an unresolved tie must not show the wrong one.
+      // Hidden windows of the same size (such as Chromium's) are dropped next.
       let exact = matches.filter { $0.title == title }
-      guard let match = exact.count == 1 ? exact[0] : (matches.count == 1 ? matches[0] : nil) else {
+      let onScreen = matches.filter(\.isOnScreen)
+      let picked = exact.count == 1 ? exact[0]
+        : matches.count == 1 ? matches[0]
+        : onScreen.count == 1 ? onScreen[0] : nil
+      guard let match = picked else {
         throw HelperError(code: "window_not_found", message: "The window could not be matched for capture (\(matches.count) candidates).")
       }
       let configuration = SCStreamConfiguration()

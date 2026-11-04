@@ -37,7 +37,7 @@ func sleep(seconds: Double) {
 enum Configuration {
   static var home = NSHomeDirectory() + "/Library/Application Support/Backstage"
   static var socketPath: String { home + "/helper.sock" }
-  static var appName: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Backstage" }
+  static var appName: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "helper" }
   static var buildVersion: String {
     Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
   }

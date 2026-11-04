@@ -309,7 +309,7 @@ enum ApprovalGate {
         if decision == .hour {
           throw HelperError(code: "store_failed", message: "The approval for \(app.name) could not be saved.")
         }
-        NSLog("backstage: could not save a permanent approval: \(error)")
+        NSLog("\(Configuration.appName): could not save a permanent approval: \(error)")
         session.lock.withLock { _ = session.approved.insert(sessionKey) }
       }
     case .decline:
