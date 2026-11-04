@@ -20,9 +20,22 @@ func runScript(_ body: String, arguments: JSON = [:], target: String, timeout: T
     }
     """
   let input = String(data: try JSONSerialization.data(withJSONObject: arguments), encoding: .utf8) ?? "{}"
+  let finished = try runProcess(osascript, ["-l", "JavaScript", "-e", source, "--", input], target: target, timeout: timeout)
+  guard finished.status == 0 else {
+    throw scriptFailure(finished.errors, target: target)
+  }
+  let text = finished.output.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard let data = text.data(using: .utf8), let value = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
+    throw HelperError(code: "action_failed", message: "\(target) gave an answer that could not be read.")
+  }
+  return value
+}
+
+// Runs a child of the helper, which macOS treats as acting for the helper, and kills it when it overruns.
+func runProcess(_ path: String, _ arguments: [String], target: String, timeout: TimeInterval) throws -> (status: Int32, output: String, errors: String) {
   let process = Process()
-  process.executableURL = URL(fileURLWithPath: osascript)
-  process.arguments = ["-l", "JavaScript", "-e", source, "--", input]
+  process.executableURL = URL(fileURLWithPath: path)
+  process.arguments = arguments
   let output = Pipe()
   let errors = Pipe()
   process.standardOutput = output
@@ -50,15 +63,7 @@ func runScript(_ body: String, arguments: JSON = [:], target: String, timeout: T
     throw HelperError(code: "timeout", message: "\(target) did not answer within \(Int(timeout)) seconds.")
   }
   _ = readers.wait(timeout: .now() + 2)
-
-  guard process.terminationStatus == 0 else {
-    throw scriptFailure(String(data: errorData, encoding: .utf8) ?? "", target: target)
-  }
-  let text = (String(data: outputData, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-  guard let data = text.data(using: .utf8), let value = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
-    throw HelperError(code: "action_failed", message: "\(target) gave an answer that could not be read.")
-  }
-  return value
+  return (process.terminationStatus, String(data: outputData, encoding: .utf8) ?? "", String(data: errorData, encoding: .utf8) ?? "")
 }
 
 private func scriptFailure(_ text: String, target: String) -> HelperError {

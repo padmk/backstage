@@ -40,7 +40,10 @@ struct AppKnowledge {
   var operations: [Operation] = []
 }
 
-let appCatalog: [AppKnowledge] = [notesKnowledge, remindersKnowledge, calendarKnowledge, settingsKnowledge, homeKnowledge]
+let appCatalog: [AppKnowledge] = [
+  notesKnowledge, remindersKnowledge, calendarKnowledge, contactsKnowledge, mailKnowledge, settingsKnowledge, shortcutsKnowledge,
+  musicKnowledge, homeKnowledge,
+]
 
 func knowledge(forBundleId bundleId: String) -> AppKnowledge? {
   appCatalog.first { $0.bundleId == bundleId }

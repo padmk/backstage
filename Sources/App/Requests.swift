@@ -500,8 +500,6 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     return ["accessibility": accessibility, "screen_recording": screen] as JSON
 
   case "quit":
-    // The user's window comes back in the process that replaces this one.
-    if isControlWindowOpen { scheduleReopen() }
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
       unlink(Configuration.socketPath)
       exit(0)

@@ -109,3 +109,18 @@ func timeText(_ date: Date) -> String {
 }
 
 func dayText(_ date: Date) -> String { formatter("yyyy-MM-dd").string(from: date) }
+
+// MARK: Access, for the App Access list
+
+func eventAccessState(_ type: EKEntityType) -> GrantState {
+  switch EKEventStore.authorizationStatus(for: type) {
+  case .fullAccess: .granted
+  case .notDetermined: .notAsked
+  default: .denied
+  }
+}
+
+// Shows macOS's prompt when it has not asked yet.
+func requestEventAccess(_ type: EKEntityType) {
+  _ = try? lock.withLock { try requireAccess(to: type) }
+}

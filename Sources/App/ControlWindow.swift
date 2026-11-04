@@ -6,6 +6,7 @@ import SwiftUI
 
 private struct ControlTexts {
   let permissions, accessibility, screenRecording, granted, missing, openSettings, restart, restartHint: String
+  let appAccess, appAccessHint, allowAll, notAsked, denied, checkedWhenRunning, asking: String
   let apps, none, add, always, oneHour, oneDay, oneWeek, session, remove, until, cannotAdd, saveFailed, recent, nothingRecent, farReaching: String
 }
 
@@ -13,6 +14,9 @@ private let englishTexts = ControlTexts(
   permissions: "macOS Permissions", accessibility: "Accessibility", screenRecording: "Screen Recording",
   granted: "Granted", missing: "Missing", openSettings: "Open Settings…", restart: "Restart",
   restartHint: "A new Screen Recording grant applies after a restart, which ends session approvals.",
+  appAccess: "App Access",
+  appAccessHint: "Allow these once, so ready operations do not stop to ask in the middle of a task. Agents still need your approval for each app.",
+  allowAll: "Allow All…", notAsked: "Not asked", denied: "Off in System Settings", checkedWhenRunning: "Shown once the app runs", asking: "Waiting for your answer…",
   apps: "Apps Agents May Control", none: "No approved apps. An agent asks the first time it needs one.", add: "Add App…",
   always: "Always", oneHour: "For 1 Hour", oneDay: "For 1 Day", oneWeek: "For 1 Week", session: "This session",
   remove: "Remove", until: "Until", cannotAdd: "This app cannot be approved here.", saveFailed: "The change could not be saved.", recent: "Recent Decisions",
@@ -50,6 +54,8 @@ private final class ControlModel: ObservableObject {
   @Published var screenRecording = false
   @Published var rows: [AppRow] = []
   @Published var recent: [String] = []
+  @Published var grants: [String: GrantState] = [:]
+  @Published var asking: Set<String> = []
   @Published var problem: String?
   private var timer: Timer?
 
@@ -76,6 +82,23 @@ private final class ControlModel: ObservableObject {
     if all != rows { rows = all }
     let latest = recentDecisions(limit: 15)
     if latest != recent { recent = latest }
+    let states = Dictionary(uniqueKeysWithValues: appGrants.map { ($0.id, grantState($0)) })
+    if states != grants { grants = states }
+  }
+
+  // macOS asks one prompt at a time and waits for the answer, so the requests run in turn, off the main thread.
+  func request(_ chosen: [AppGrant]) {
+    let pending = chosen.filter { !asking.contains($0.id) }
+    asking.formUnion(pending.map(\.id))
+    DispatchQueue.global().async {
+      for grant in pending {
+        requestGrant(grant)
+        DispatchQueue.main.async {
+          self.asking.remove(grant.id)
+          self.refresh()
+        }
+      }
+    }
   }
 
   // Only the signer the user approved can be kept longer, never another copy found under the same bundle id.
@@ -142,10 +165,46 @@ private struct PermissionRow: View {
       Text(name)
       Spacer()
       Text(isGranted ? controlTexts.granted : controlTexts.missing).foregroundStyle(.secondary)
-      Button(controlTexts.openSettings) {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { NSWorkspace.shared.open(url) }
+      Button(controlTexts.openSettings) { openPrivacyPane(pane) }
+    }
+  }
+}
+
+private func openPrivacyPane(_ pane: String) {
+  if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { NSWorkspace.shared.open(url) }
+}
+
+// A switch per grant. Turning one on asks macOS; once macOS has an answer, only System Settings can change it,
+// so the switch opens the right pane there.
+private struct GrantRow: View {
+  let grant: AppGrant
+  @ObservedObject var model: ControlModel
+
+  private var state: GrantState { model.grants[grant.id] ?? .unknown }
+
+  private var status: String? {
+    if model.asking.contains(grant.id) { return controlTexts.asking }
+    switch state {
+    case .granted: return nil
+    case .notAsked: return controlTexts.notAsked
+    case .denied: return controlTexts.denied
+    case .unknown: return controlTexts.checkedWhenRunning
+    }
+  }
+
+  var body: some View {
+    Toggle(isOn: Binding(
+      get: { state == .granted },
+      set: { on in
+        if on, state == .notAsked || state == .unknown { model.request([grant]) } else { openPrivacyPane(grant.pane) }
+      }
+    )) {
+      VStack(alignment: .leading) {
+        Text(grant.name)
+        Text([grant.purpose, status].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
       }
     }
+    .disabled(model.asking.contains(grant.id))
   }
 }
 
@@ -180,6 +239,20 @@ private struct ControlView: View {
             Button(controlTexts.restart, action: restartApp)
           }
         }
+      }
+      Section {
+        ForEach(appGrants) { GrantRow(grant: $0, model: model) }
+      } header: {
+        HStack {
+          Text(controlTexts.appAccess)
+          Spacer()
+          Button(controlTexts.allowAll) {
+            model.request(appGrants.filter { model.grants[$0.id] != .granted && model.grants[$0.id] != .denied })
+          }
+          .disabled(!appGrants.contains { model.grants[$0.id] == .notAsked || model.grants[$0.id] == .unknown })
+        }
+      } footer: {
+        Text(controlTexts.appAccessHint).font(.caption).foregroundStyle(.secondary)
       }
       Section(controlTexts.apps) {
         if model.rows.isEmpty {
@@ -223,12 +296,14 @@ private struct ControlView: View {
       }
     }
     .formStyle(.grouped)
-    .frame(width: 600, height: 640)
+    .frame(width: 600, height: 760)
   }
 }
 
-// Without --background, so the window opens again once this process has gone.
-func scheduleReopen() {
+// After a restart the user asked for, the window opens again in front, in the process that replaces this one.
+// A restart they did not ask for, such as after an update, leaves the window closed: bringing it back would
+// open the app a second time, which macOS treats as the user reopening it and brings to the front.
+private func scheduleReopen() {
   let script = Process()
   script.executableURL = URL(fileURLWithPath: "/bin/sh")
   script.arguments = ["-c", "sleep 1; /usr/bin/open \"$0\"", Bundle.main.bundlePath]
@@ -278,7 +353,7 @@ func showControlWindow() {
   NSApp.mainMenu = controlMenu()
   if controlWindow == nil {
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 600, height: 640), styleMask: [.titled, .closable, .miniaturizable],
+      contentRect: NSRect(x: 0, y: 0, width: 600, height: 760), styleMask: [.titled, .closable, .miniaturizable],
       backing: .buffered, defer: false)
     window.title = Configuration.appName
     window.isReleasedWhenClosed = false
