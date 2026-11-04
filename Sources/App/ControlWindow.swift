@@ -18,16 +18,7 @@ private let englishTexts = ControlTexts(
   remove: "Remove", until: "Until", cannotAdd: "This app cannot be approved here.", saveFailed: "The change could not be saved.", recent: "Recent Decisions",
   nothingRecent: "Nothing yet.", farReaching: "Reaches beyond itself, so it is approved one session at a time.")
 
-private let polishTexts = ControlTexts(
-  permissions: "Uprawnienia macOS", accessibility: "Dostępność", screenRecording: "Nagrywanie ekranu",
-  granted: "Przyznane", missing: "Brak", openSettings: "Otwórz Ustawienia…", restart: "Uruchom ponownie",
-  restartHint: "Nowe uprawnienie do nagrywania ekranu działa po ponownym uruchomieniu, które kończy zgody sesyjne.",
-  apps: "Aplikacje, którymi mogą sterować agenci", none: "Brak zatwierdzonych aplikacji. Agent zapyta, gdy pierwszy raz którejś potrzebuje.", add: "Dodaj aplikację…",
-  always: "Zawsze", oneHour: "Na godzinę", oneDay: "Na dobę", oneWeek: "Na tydzień", session: "Ta sesja",
-  remove: "Usuń", until: "Do", cannotAdd: "Tej aplikacji nie można tu zatwierdzić.", saveFailed: "Nie udało się zapisać zmiany.", recent: "Ostatnie decyzje",
-  nothingRecent: "Jeszcze nic.", farReaching: "Jej zasięg wykracza poza nią samą, więc zgoda obowiązuje jedną sesję.")
-
-private let controlTexts = (Locale.preferredLanguages.first ?? "en").lowercased().hasPrefix("pl") ? polishTexts : englishTexts
+private let controlTexts = englishTexts
 
 private struct AppRow: Identifiable, Equatable {
   enum Duration: Equatable {

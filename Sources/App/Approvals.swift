@@ -37,8 +37,9 @@ private let approvalQueueSeconds: TimeInterval = 25
 let approvalTimeoutSeconds = 170
 
 struct ApprovalTexts {
-  let title: (String) -> String
-  let wants: (String) -> String
+  // Who asks for what: the agent's name, then the app's.
+  let title: (String, String) -> String
+  let wants: String
   let farReaching: String
   let updatedWhileRunning: (String) -> String
   let restartForPermanent: String
@@ -46,32 +47,18 @@ struct ApprovalTexts {
   let agent: String
 }
 
-private let english = ApprovalTexts(
-  title: { "Allow control of \($0)?" },
-  wants: { "\($0) wants to see this app's windows, click in them and type." },
-  farReaching: "This app can run commands or change your system, so this reaches beyond the app itself.",
-  updatedWhileRunning: { "\($0) was updated while running, so its signature cannot be confirmed. This approval lasts until it quits." },
-  restartForPermanent: "Restart it to use a permanent approval.",
+private let texts = ApprovalTexts(
+  title: { "\($0) wants to control \($1)" },
+  wants: "Can read windows, click and type.",
+  farReaching: "Can run commands or change your system. Session only.",
+  updatedWhileRunning: { _ in "App updated while running. Access lasts until it quits." },
+  restartForPermanent: "Restart the app for longer access.",
   labels: ApprovalLabels(
-    session: "Allow for This Session", hour: "Allow for 1 Hour", always: "Always Allow", decline: "Decline",
-    countdown: "Declines automatically in {seconds} s", unlocked: "Approval buttons are now available"),
+    session: "Allow for this session", hour: "Allow for 1 hour", always: "Always", decline: "Deny",
+    countdown: "Denies in {time}", unlocked: "Approval buttons are now available",
+    moveHere: "Move pointer here to enable approval.", holdStill: "Hold still to enable approval.",
+    ready: "Click to choose.", allowFor: "For all agents:", bundleId: "Bundle ID", path: "Path"),
   agent: "An agent")
-
-private let polish = ApprovalTexts(
-  title: { "Zezwolić na sterowanie aplikacją „\($0)”?" },
-  wants: { "\($0) chce widzieć okna tej aplikacji, klikać w nich i pisać." },
-  farReaching: "Ta aplikacja może uruchamiać polecenia lub zmieniać system, więc zgoda sięga dalej niż sama aplikacja.",
-  updatedWhileRunning: { "Aplikacja „\($0)” została zaktualizowana w trakcie działania, więc nie da się potwierdzić jej podpisu. Ta zgoda obowiązuje do jej zamknięcia." },
-  restartForPermanent: "Uruchom ją ponownie, aby korzystać ze stałej zgody.",
-  labels: ApprovalLabels(
-    session: "Zezwól na tę sesję", hour: "Zezwól na godzinę", always: "Zezwalaj zawsze", decline: "Odmów",
-    countdown: "Automatyczna odmowa za {seconds} s", unlocked: "Przyciski zgody są już dostępne"),
-  agent: "Agent")
-
-private func texts(language: String?) -> ApprovalTexts {
-  let preferred = language ?? Locale.preferredLanguages.first ?? "en"
-  return preferred.lowercased().hasPrefix("pl") ? polish : english
-}
 
 func readableClientName(_ name: String?) -> String? {
   let words = (name ?? "").split(whereSeparator: { "-_ ".contains($0) })
@@ -229,7 +216,6 @@ final class ApprovalSession {
   let table = ElementTable()
   var lastReads: [pid_t: LastRead] = [:]
   var clientName: String?
-  var language: String?
   // Guarded by the lock of the session registry.
   var attachedConnections = 0
   var detachedAt = Date()
@@ -273,18 +259,17 @@ enum ApprovalGate {
     // Another request may have been answered while this one waited.
     if isApproved() { return }
 
-    let language = session.lock.withLock { session.language }
     let clientName = session.lock.withLock { session.clientName }
-    let chosen = texts(language: language)
+    let chosen = texts
     var warning = isFarReaching ? [chosen.farReaching] : []
     if wasUpdatedWhileRunning(app) {
       warning.append(chosen.updatedWhileRunning(app.name))
       if !isFarReaching { warning.append(chosen.restartForPermanent) }
     }
     let request = ApprovalRequest(
-      title: chosen.title(app.name),
-      // The bundle id and location tell the real app from another one using its name.
-      message: chosen.wants(readableClientName(clientName) ?? chosen.agent) + "\n\n\(app.bundleId)\n\(app.path ?? "")",
+      title: chosen.title(readableClientName(clientName) ?? chosen.agent, app.name),
+      message: chosen.wants,
+      path: app.path,
       warning: warning.isEmpty ? nil : warning.joined(separator: " "),
       bundleIdentifier: app.bundleId,
       brandName: Configuration.appName,

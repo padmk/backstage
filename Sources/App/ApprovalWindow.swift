@@ -1,5 +1,5 @@
-// The native approval window. It appears without taking the user's focus, under whatever they are doing, so
-// input meant for something else must not grant access. Return never approves, and the approving buttons
+// The native approval window: a small panel at the top of the screen, over the user's work. It never takes the
+// keyboard, so typing meant for something else cannot answer it, and only a click does. The approving buttons
 // unlock only once the pointer has moved and stayed over the window for a moment.
 
 import AppKit
@@ -12,11 +12,19 @@ struct ApprovalLabels {
   let decline: String
   let countdown: String
   let unlocked: String
+  let moveHere: String
+  let holdStill: String
+  let ready: String
+  let allowFor: String
+  let bundleId: String
+  let path: String
 }
 
 struct ApprovalRequest {
   let title: String
   let message: String
+  // The location, with the bundle id, tells the real app from another one using its name.
+  let path: String?
   let warning: String?
   let bundleIdentifier: String
   let brandName: String
@@ -29,12 +37,15 @@ enum Decision: String {
   case decline, session, hour, always
 }
 
-// Appears over the user's work without taking their focus: the app stays inactive, and keys keep going
-// where they were going. Only clicking in the panel makes it key.
 private let unlockDelaySeconds = 0.6
+// How far the pointer may drift while it counts as resting.
+private let restTolerance: CGFloat = 3
+private let panelWidth: CGFloat = 520
+private let topMargin: CGFloat = 10
 
+// Never key, even when clicked or with keyboard navigation on, so keys keep going where the user was typing.
 private final class ApprovalPanel: NSPanel {
-  override var canBecomeKey: Bool { true }
+  override var canBecomeKey: Bool { false }
   override var canBecomeMain: Bool { false }
 }
 
@@ -46,7 +57,7 @@ private final class FirstClickHostingView<Content: View>: NSHostingView<Content>
 private struct WindowBackground: NSViewRepresentable {
   func makeNSView(context: Context) -> NSVisualEffectView {
     let view = NSVisualEffectView()
-    view.material = .hudWindow
+    view.material = .popover
     view.blendingMode = .behindWindow
     view.state = .active
     return view
@@ -55,130 +66,164 @@ private struct WindowBackground: NSViewRepresentable {
   func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }
 
-private struct ApprovalIcon: View {
-  let bundleIdentifier: String
-
-  private var icon: NSImage? {
-    NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
-      .map { NSWorkspace.shared.icon(forFile: $0.path) }
-  }
-
-  var body: some View {
-    Group {
-      if let icon {
-        Image(nsImage: icon).resizable()
-      } else {
-        Image(systemName: "cursorarrow.rays").font(.system(size: 64, weight: .light))
-      }
-    }
-    .frame(width: 112, height: 112)
-    .accessibilityHidden(true)
-  }
+private func appIcon(path: String?, bundleIdentifier: String) -> NSImage? {
+  if let path, FileManager.default.fileExists(atPath: path) { return NSWorkspace.shared.icon(forFile: path) }
+  return NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
+    .map { NSWorkspace.shared.icon(forFile: $0.path) }
 }
+
+private enum GateState { case moveHere, holdStill, ready }
 
 private struct ApprovalView: View {
   let request: ApprovalRequest
   let deadline: Date
   let decide: (Decision) -> Void
-  @State private var approvalUnlocked = false
+  @State private var gate = GateState.moveHere
+  private var approvalUnlocked: Bool { gate == .ready }
 
   var body: some View {
-    VStack(spacing: 0) {
-      ApprovalIcon(bundleIdentifier: request.bundleIdentifier).padding(.bottom, 22)
+    VStack(alignment: .leading, spacing: 0) {
+      HStack(spacing: 8) {
+        Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 28, height: 28).accessibilityHidden(true)
+        Text(request.brandName).font(.system(size: 13, weight: .semibold))
+        Spacer(minLength: 8)
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+          let remaining = max(0, Int(deadline.timeIntervalSince(context.date).rounded(.up)))
+          Text(request.labels.countdown.replacingOccurrences(
+            of: "{time}", with: String(format: "%d:%02d", remaining / 60, remaining % 60)))
+            .font(.system(size: 12))
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+            .fixedSize()
+            .accessibilityHidden(true)
+        }
+      }
 
-      Text(request.brandName.uppercased())
-        .font(.system(size: 12, weight: .semibold))
-        .tracking(1.4)
-        .foregroundStyle(.secondary)
-        .padding(.bottom, 8)
+      HStack(alignment: .top, spacing: 12) {
+        Group {
+          if let icon = appIcon(path: request.path, bundleIdentifier: request.bundleIdentifier) {
+            Image(nsImage: icon).resizable()
+          } else {
+            Image(systemName: "app.dashed").resizable().foregroundStyle(.secondary)
+          }
+        }
+        .frame(width: 36, height: 36)
+        .accessibilityHidden(true)
 
-      Text(request.title)
-        .font(.system(size: 26, weight: .semibold))
-        .multilineTextAlignment(.center)
-        .fixedSize(horizontal: false, vertical: true)
-        .padding(.bottom, 10)
-        .accessibilityAddTraits(.isHeader)
+        VStack(alignment: .leading, spacing: 3) {
+          Text(request.title)
+            .font(.system(size: 17, weight: .semibold))
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityAddTraits(.isHeader)
+          Text(request.message)
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+      .padding(.top, 16)
 
-      Text(request.message)
-        .font(.system(size: 15))
-        .foregroundStyle(.secondary)
-        .multilineTextAlignment(.center)
-        .fixedSize(horizontal: false, vertical: true)
+      Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 4) {
+        identityRow(request.labels.bundleId, request.bundleIdentifier)
+        if let path = request.path { identityRow(request.labels.path, path) }
+      }
+      .padding(.top, 12)
 
       if let warning = request.warning {
-        Label(warning, systemImage: "exclamationmark.triangle.fill")
-          .font(.system(size: 13))
-          .foregroundStyle(.orange)
-          .fixedSize(horizontal: false, vertical: true)
-          .padding(.top, 14)
+        Label {
+          Text(warning).font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
+        } icon: {
+          Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.top, 12)
       }
 
-      VStack(spacing: 10) {
-        Button { decide(.session) } label: {
-          Text(request.labels.session).frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.borderedProminent)
-        .disabled(!approvalUnlocked)
+      Label(statusText, systemImage: approvalUnlocked ? "cursorarrow.click" : "lock.fill")
+        .font(.system(size: 12))
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
+        .padding(.top, 14)
 
-        if request.offersAlways {
-          Button { decide(.hour) } label: {
-            Text(request.labels.hour).frame(maxWidth: .infinity)
-          }
+      HStack(spacing: 8) {
+        Button { decide(.decline) } label: { Text(request.labels.decline).frame(minWidth: 60) }
+        Spacer(minLength: 8)
+        Button { decide(.session) } label: { Text(request.labels.session).frame(minWidth: 168) }
+          .tint(approvalUnlocked ? .accentColor : .gray)
+          .buttonStyle(.borderedProminent)
           .disabled(!approvalUnlocked)
-
-          Button { decide(.always) } label: {
-            Text(request.labels.always).frame(maxWidth: .infinity)
-          }
-          .disabled(!approvalUnlocked)
-        }
-
-        Button { decide(.decline) } label: {
-          Text(request.labels.decline).frame(maxWidth: .infinity)
-        }
-        .keyboardShortcut(.cancelAction)
       }
       .controlSize(.large)
-      .padding(.top, 26)
+      .padding(.top, 8)
 
-      TimelineView(.periodic(from: .now, by: 1)) { context in
-        let remaining = max(0, Int(deadline.timeIntervalSince(context.date).rounded(.up)))
-        Text(request.labels.countdown.replacingOccurrences(of: "{seconds}", with: String(remaining)))
-          .font(.system(size: 12))
-          .monospacedDigit()
-          .foregroundStyle(.secondary)
+      if request.offersAlways {
+        HStack(spacing: 8) {
+          Text(request.labels.allowFor).font(.system(size: 12)).foregroundStyle(.secondary)
+          Spacer(minLength: 8)
+          Button(request.labels.hour) { decide(.hour) }.disabled(!approvalUnlocked)
+          Button(request.labels.always) { decide(.always) }.disabled(!approvalUnlocked)
+        }
+        .controlSize(.large)
+        .padding(.top, 8)
       }
-      .padding(.top, 14)
     }
-    .padding(.horizontal, 44)
-    .padding(.top, 40)
-    .padding(.bottom, 24)
-    .frame(width: 520)
+    .padding(20)
+    .frame(width: panelWidth)
     .background(WindowBackground())
     .task {
       await watchForDeliberatePointer()
     }
   }
 
+  private var statusText: String {
+    switch gate {
+    case .moveHere: request.labels.moveHere
+    case .holdStill: request.labels.holdStill
+    case .ready: request.labels.ready
+    }
+  }
+
+  @ViewBuilder private func identityRow(_ label: String, _ value: String) -> some View {
+    GridRow {
+      Text(label).font(.system(size: 11)).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+      Text(value).font(.system(size: 12, design: .monospaced)).fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+    }
+  }
+
   // A pointer resting where the window appeared, or just passing through, says nothing about the user's
-  // intent. People who do not use a pointer get the window as key, and the delay alone.
+  // intent: it has to move onto the window and then rest there. People who do not use a pointer get the
+  // buttons after the delay alone.
   private func watchForDeliberatePointer() async {
-    let usesKeyboard = NSWorkspace.shared.isVoiceOverEnabled || NSWorkspace.shared.isSwitchControlEnabled || NSApp.isFullKeyboardAccessEnabled
+    let usesAssistiveTechnology = NSWorkspace.shared.isVoiceOverEnabled || NSWorkspace.shared.isSwitchControlEnabled
     let start = NSEvent.mouseLocation
     var hasMoved = false
-    var heldSince: Date?
+    var restingAt: NSPoint?
+    var restingSince = Date()
     while !Task.isCancelled {
       let pointer = NSEvent.mouseLocation
       hasMoved = hasMoved || pointer != start
       let isOver = NSApp.windows.contains { $0 is ApprovalPanel && $0.isVisible && $0.frame.contains(pointer) }
-      if usesKeyboard || (hasMoved && isOver) {
-        heldSince = heldSince ?? Date()
+      let next: GateState
+      if usesAssistiveTechnology {
+        next = Date().timeIntervalSince(restingSince) >= unlockDelaySeconds ? .ready : .holdStill
+      } else if !(hasMoved && isOver) {
+        restingAt = nil
+        next = .moveHere
+      } else if gate == .ready {
+        next = .ready
       } else {
-        heldSince = nil
+        if restingAt.map({ hypot(pointer.x - $0.x, pointer.y - $0.y) > restTolerance }) ?? true {
+          restingAt = pointer
+          restingSince = Date()
+        }
+        next = Date().timeIntervalSince(restingSince) >= unlockDelaySeconds ? .ready : .holdStill
       }
-      let shouldUnlock = heldSince.map { Date().timeIntervalSince($0) >= unlockDelaySeconds } ?? false
-      if shouldUnlock != approvalUnlocked {
-        approvalUnlocked = shouldUnlock
-        if shouldUnlock { announceUnlocked() }
+      if next != gate {
+        gate = next
+        if next == .ready { announceUnlocked() }
       }
       try? await Task.sleep(nanoseconds: 50_000_000)
     }
@@ -245,15 +290,14 @@ func askUser(_ request: ApprovalRequest, connection: Connection) -> Decision {
     let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
     if let visible = screen?.visibleFrame {
       let size = window.frame.size
-      window.setFrameOrigin(NSPoint(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2))
+      window.setFrameOrigin(NSPoint(x: visible.midX - size.width / 2, y: visible.maxY - size.height - topMargin))
     } else {
       window.center()
     }
     panel = window
+    // The helper starts hidden, and a hidden app shows no window, not even one ordered front regardless.
+    NSApp.unhideWithoutActivation()
     window.orderFrontRegardless()
-    if NSWorkspace.shared.isVoiceOverEnabled || NSWorkspace.shared.isSwitchControlEnabled || NSApp.isFullKeyboardAccessEnabled {
-      window.makeKey()
-    }
     NSAccessibility.post(
       element: NSApp as Any,
       notification: .announcementRequested,

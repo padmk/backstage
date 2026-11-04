@@ -244,7 +244,8 @@ private func press(app: AppIdentity, params: JSON, session: ApprovalSession) thr
   let element = try session.table.element(integer(params, "element"), pid: app.pid)
   let available = actions(of: element)
   if let name = params["action"] as? String {
-    let action = name.hasPrefix("AX") ? name : "AX\(name)"
+    // Standard actions may be named without their AX prefix; an app's own actions are matched as given.
+    let action = available.contains(name) || name.hasPrefix("AX") ? name : "AX\(name)"
     guard available.contains(action) else {
       throw HelperError(code: "action_failed", message: "The element does not offer \(name). It offers: \(available.joined(separator: ", ")).")
     }
@@ -486,7 +487,6 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   case "hello":
     session.lock.withLock {
       session.clientName = params["client_name"] as? String
-      session.language = params["language"] as? String
     }
     return ["version": Configuration.buildVersion, "build": ownBuildIdentity] as JSON
 
