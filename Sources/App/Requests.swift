@@ -38,16 +38,25 @@ private func identity(of app: NSRunningApplication) -> AppIdentity {
     launchDate: app.launchDate, path: app.bundleURL?.path)
 }
 
+// Apps with a Dock icon first. An app without one, such as Control Center, is reachable only when it has items
+// in the menu bar, which are often its only interface; system processes such as the Dock stay out of reach.
 private func resolve(_ query: String) throws -> AppIdentity {
-  let apps = visibleApps()
   let lowered = query.lowercased()
-  let match = apps.first { $0.bundleIdentifier?.lowercased() == lowered }
-    ?? apps.first { $0.localizedName?.lowercased() == lowered }
-    ?? Int(query).flatMap { pid in apps.first { Int($0.processIdentifier) == pid } }
+  let find = { (apps: [NSRunningApplication]) in
+    apps.first { $0.bundleIdentifier?.lowercased() == lowered }
+      ?? apps.first { $0.localizedName?.lowercased() == lowered }
+      ?? Int(query).flatMap { pid in apps.first { Int($0.processIdentifier) == pid } }
+  }
+  let match = find(visibleApps()) ?? find(onMain { NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .accessory } })
+    .flatMap { app in hasMenuExtras(pid: app.processIdentifier) ? app : nil }
   guard let match else {
     throw HelperError(code: "app_not_found", message: "\(query) is not running. Use launch_app first.")
   }
   return identity(of: match)
+}
+
+private func hasMenuExtras(pid: pid_t) -> Bool {
+  AXIsProcessTrusted() && attribute(AXUIElementCreateApplication(pid), "AXExtrasMenuBar") != nil
 }
 
 private func requireSameProcess(_ app: AppIdentity) throws {
@@ -177,6 +186,12 @@ private func readTree(app: AppIdentity, params: JSON, session: ApprovalSession, 
     roots = [try session.table.element(number, pid: app.pid)]
   } else if params["menu_bar"] as? Bool == true, let menu = attribute(application, kAXMenuBarAttribute) {
     roots = [menu as! AXUIElement]
+  } else if params["menu_extras"] as? Bool == true {
+    // The app's own items on the right of the menu bar, such as status icons.
+    guard let extras = attribute(application, "AXExtrasMenuBar") else {
+      throw HelperError(code: "window_not_found", message: "\(app.name) has no items in the menu bar. System items such as Wi-Fi and Sound belong to Control Center.")
+    }
+    roots = [extras as! AXUIElement]
   } else {
     selected = try selectWindow(application, params: params)
     roots = [selected!] + openMenus(of: application)
@@ -481,6 +496,35 @@ private func clickAt(app: AppIdentity, params: JSON) throws -> JSON {
   return ["delivery": "pointer_event", "verified": false, "window": stringAttribute(window, kAXTitleAttribute) ?? ""]
 }
 
+// Each end is an element's center or a point in window coordinates; the window is the element's, or the one chosen.
+private func dragPoint(_ end: String, app: AppIdentity, params: JSON, session: ApprovalSession, window: AXUIElement) throws -> (point: CGPoint, window: AXUIElement) {
+  if let number = params["\(end)_element"] as? Int {
+    let element = try session.table.element(number, pid: app.pid)
+    guard let box = frame(of: element) else { throw HelperError(code: "action_failed", message: "The \(end) element has no position.") }
+    let owner = attribute(element, kAXWindowAttribute).map { $0 as! AXUIElement } ?? window
+    return (CGPoint(x: box.midX, y: box.midY), owner)
+  }
+  guard let x = params["\(end)_x"] as? Double, let y = params["\(end)_y"] as? Double else {
+    throw HelperError(code: "invalid_request", message: "Give \(end)_element, or \(end)_x and \(end)_y.")
+  }
+  guard let box = frame(of: window), x >= 0, y >= 0, x <= box.width, y <= box.height else {
+    throw HelperError(code: "out_of_window", message: "The \(end) point is outside the window.")
+  }
+  return (CGPoint(x: box.minX + x, y: box.minY + y), window)
+}
+
+private func drag(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
+  let window = try selectWindow(try applicationElement(app), params: params)
+  let start = try dragPoint("from", app: app, params: params, session: session, window: window)
+  let end = try dragPoint("to", app: app, params: params, session: session, window: window)
+  guard CFEqual(start.window, end.window) else {
+    throw HelperError(code: "invalid_request", message: "Both ends must be in the same window.")
+  }
+  prepareInput(app: app, window: start.window)
+  try postDrag(from: start.point, to: end.point, target: pointerTarget(for: start.window), pid: app.pid)
+  return ["delivery": "pointer_event", "verified": false]
+}
+
 func handle(method: String, params: JSON, connection: Connection) throws -> Any {
   let session = connection.session
   switch method {
@@ -491,7 +535,10 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     return ["version": Configuration.buildVersion, "build": ownBuildIdentity] as JSON
 
   case "status":
-    return ["accessibility": AXIsProcessTrusted(), "screen_recording": CGPreflightScreenCaptureAccess(), "version": Configuration.buildVersion] as JSON
+    return [
+      "accessibility": AXIsProcessTrusted(), "screen_recording": CGPreflightScreenCaptureAccess(), "version": Configuration.buildVersion,
+      "app_access": appGrants.map { ["name": $0.name, "state": grantState($0).rawValue] as JSON },
+    ] as JSON
 
   case "request_permissions":
     let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
@@ -531,7 +578,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     break
   }
 
-  guard ["get_window_state", "screenshot", "press", "set_value", "type_text", "press_key", "scroll", "click_at"].contains(method) else {
+  guard ["get_window_state", "screenshot", "press", "set_value", "type_text", "press_key", "scroll", "click_at", "drag"].contains(method) else {
     throw HelperError(code: "unknown_method", message: "Unknown method \(method).")
   }
 
@@ -580,6 +627,10 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   case "scroll":
     try requireAccessibility()
     return try acting(app: app, session: session) { try scroll(app: app, params: params, session: session) }
+
+  case "drag":
+    try requireAccessibility()
+    return try acting(app: app, session: session) { try drag(app: app, params: params, session: session) }
 
   default:
     try requireAccessibility()

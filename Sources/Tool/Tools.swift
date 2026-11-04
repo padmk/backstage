@@ -84,6 +84,7 @@ let tools: [ToolDefinition] = [
       ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
       ("window", ["type": "integer", "minimum": 0, "description": "Window index shown in get_window_state; default the first"] as JSON),
       ("menu_bar", ["type": "boolean", "description": "Read the menu bar instead of a window"] as JSON),
+      ("menu_extras", ["type": "boolean", "description": "Read the app's items on the right of the menu bar, such as status icons, instead of a window"] as JSON),
       ("root", ["type": "integer", "minimum": 1, "description": "Read only this element's subtree"] as JSON),
       ("max_elements", ["type": "integer", "minimum": 1, "maximum": 5000] as JSON)
     ],
@@ -141,6 +142,20 @@ let tools: [ToolDefinition] = [
       ("pages", ["type": "integer", "minimum": 1, "maximum": 20] as JSON)
     ],
     required: ["app", "element", "direction"], annotations: [:]),
+  ToolDefinition(
+    name: "drag",
+    description: "Drag from one place to another in the background, without moving the cursor: a slider's knob, an item onto a target, a selection. Each end is an element number or a point in window coordinates. Check the effect in `state` or with a screenshot.",
+    properties: [
+      ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
+      ("window", ["type": "integer", "minimum": 0, "description": "Window index shown in get_window_state; default the first"] as JSON),
+      ("from_element", ["type": "integer", "minimum": 1, "description": "Element to drag from, at its center"] as JSON),
+      ("from_x", ["type": "number", "minimum": 0] as JSON),
+      ("from_y", ["type": "number", "minimum": 0] as JSON),
+      ("to_element", ["type": "integer", "minimum": 1, "description": "Element to drag to, at its center"] as JSON),
+      ("to_x", ["type": "number", "minimum": 0] as JSON),
+      ("to_y", ["type": "number", "minimum": 0] as JSON)
+    ],
+    required: ["app"], annotations: [:]),
   ToolDefinition(
     name: "click_at",
     description: "Send a click at a point in window coordinates, in the background and without moving the cursor. Use it only when no element can do the job, and check the effect, for example with a screenshot.",

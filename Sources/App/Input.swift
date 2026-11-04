@@ -132,6 +132,29 @@ func postClick(at point: CGPoint, target: PointerTarget, pid: pid_t, count: Int)
   }
 }
 
+private let dragSteps = 12
+
+// A press, a path of drag events and a release, all addressed to the window like a click, so a background
+// window takes it without the cursor moving.
+func postDrag(from start: CGPoint, to end: CGPoint, target: PointerTarget, pid: pid_t) throws {
+  let source = CGEventSource(stateID: .hidSystemState)
+  let gesture = Int64.random(in: 1...Int64(Int32.max))
+  try postMove(to: start, source: source, target: target, pid: pid, gesture: gesture)
+  let path = (0...dragSteps).map { step -> CGPoint in
+    let progress = CGFloat(step) / CGFloat(dragSteps)
+    return CGPoint(x: start.x + (end.x - start.x) * progress, y: start.y + (end.y - start.y) * progress)
+  }
+  let events: [(CGEventType, CGPoint)] = [(.leftMouseDown, start)] + path.dropFirst().map { (.leftMouseDragged, $0) } + [(.leftMouseUp, end)]
+  for (type, point) in events {
+    guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
+      throw HelperError(code: "action_failed", message: "Could not create a mouse event.")
+    }
+    route(event, point: point, target: target, pid: pid, extra: clickFields(state: 1, gesture: gesture))
+    post(event, to: pid)
+    sleep(seconds: pointerEventGap)
+  }
+}
+
 func postScroll(at point: CGPoint, target: PointerTarget, pid: pid_t, lines: Int32) throws {
   let source = CGEventSource(stateID: .hidSystemState)
   try postMove(to: point, source: source, target: target, pid: pid, gesture: Int64.random(in: 1...Int64(Int32.max)))

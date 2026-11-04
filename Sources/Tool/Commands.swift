@@ -160,6 +160,7 @@ private func doctor() -> Int32 {
     : !current ? "another build than this command; run: \(commandHint()) setup" : Product.installedAppPath
   checks.append(("App", installed && current, appDetail))
   var screenRecording: Bool?
+  var appAccess: [JSON] = []
   if installed && current {
     let helper = client()
     do {
@@ -167,6 +168,7 @@ private func doctor() -> Int32 {
       let accessibility = reply["accessibility"] as? Bool == true
       checks.append(("Accessibility", accessibility, accessibility ? "granted" : "missing; run: \(commandHint()) setup"))
       screenRecording = reply["screen_recording"] as? Bool
+      appAccess = reply["app_access"] as? [JSON] ?? []
     } catch {
       checks.append(("App running", false, describe(error)))
     }
@@ -175,6 +177,13 @@ private func doctor() -> Int32 {
   for (name, passed, detail) in checks { printLine("\(passed ? "ok  " : "FAIL") \(name): \(detail)") }
   if let screenRecording {
     printLine("\(screenRecording ? "ok  " : "--  ") Screen Recording: \(screenRecording ? "granted" : "optional, for screenshots; turn it on in the \(Product.appName) window, on the Setup tab")")
+  }
+  // Optional: each only matters for the operations that use it, so a missing one is not a failure.
+  let meaning = ["granted": "granted", "not_asked": "not asked yet", "denied": "off in System Settings", "unknown": "shown once the app runs"]
+  if !appAccess.isEmpty { printLine("App access for the listed apps (allow them in the \(Product.appName) window):") }
+  for entry in appAccess {
+    let state = entry["state"] as? String ?? ""
+    printLine("\(state == "granted" ? "ok  " : "--  ") \(entry["name"] as? String ?? ""): \(meaning[state] ?? state)")
   }
   return checks.allSatisfy(\.1) ? 0 : 1
 }

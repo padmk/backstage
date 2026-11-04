@@ -35,7 +35,7 @@ private struct Setup {
   @Test func listsToolsWithSchemasThatRejectUnknownArguments() throws {
     let setup = try Setup()
     let tools = (try setup.server.request("tools/list")["result"] as! Object)["tools"] as! [Object]
-    #expect(tools.map { $0["name"] as! String } == ["list_apps", "launch_app", "list_operations", "run_operation", "get_window_state", "screenshot", "press", "set_value", "type_text", "press_key", "scroll", "click_at"])
+    #expect(tools.map { $0["name"] as! String } == ["list_apps", "launch_app", "list_operations", "run_operation", "get_window_state", "screenshot", "press", "set_value", "type_text", "press_key", "scroll", "drag", "click_at"])
     for tool in tools { #expect((tool["inputSchema"] as? Object)?["additionalProperties"] as? Bool == false) }
   }
 

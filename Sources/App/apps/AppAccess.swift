@@ -5,8 +5,8 @@ import AppKit
 import CoreServices
 import EventKit
 
-enum GrantState {
-  case granted, notAsked, denied
+enum GrantState: String {
+  case granted, notAsked = "not_asked", denied
   // Automation can be read only while the target app runs.
   case unknown
 }
