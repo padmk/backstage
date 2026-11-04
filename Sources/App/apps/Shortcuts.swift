@@ -1,5 +1,5 @@
 // Shortcuts through the `shortcuts` command, which runs a shortcut without opening the app. A shortcut can
-// do anything its actions allow, which is why Shortcuts is approved one session at a time.
+// do anything its actions allow, which is why the approval window warns that Shortcuts reaches far.
 
 import Foundation
 

@@ -135,7 +135,7 @@ private let append = Operation(
 }
 
 let notesKnowledge = AppKnowledge(
-  bundleId: "com.apple.Notes", name: "Notes", summary: "Find, read, create and add to notes",
+  bundleId: "com.apple.Notes", name: "Notes", scripted: true, summary: "Find, read, create and add to notes",
   access: "Can also read and change your notes through scripting, even while Notes is closed.",
   hints: [
     "The sidebar lists folders by account; the note list and the editor are to its right. A note's first line is its title.",

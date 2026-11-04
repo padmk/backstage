@@ -94,7 +94,7 @@ private let listPlaylists = Operation(name: "list_playlists", summary: "List pla
 }
 
 let musicKnowledge = AppKnowledge(
-  bundleId: "com.apple.Music", name: "Music", summary: "Control playback, play playlists and library tracks, set Music's volume",
+  bundleId: "com.apple.Music", name: "Music", scripted: true, summary: "Control playback, play playlists and library tracks, set Music's volume",
   pitfalls: [
     "Music starts if it is not running, to answer an operation, and may show its window behind the app you are in.",
     "search plays from the library only, not the Apple Music catalog.",

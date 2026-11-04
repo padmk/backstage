@@ -19,7 +19,7 @@ private let neverApproved: Set<String> = [
 ]
 
 // These apps can run commands or change the system, so approving one reaches far beyond it. They get a
-// warning and no permanent approval.
+// warning; how long the approval lasts is the user's choice, as for any app.
 private let farReaching: Set<String> = [
   "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "net.kovidgoyal.kitty",
   "dev.warp.Warp-Stable", "com.github.wez.wezterm", "com.apple.ScriptEditor2", "com.apple.Automator",
@@ -30,7 +30,6 @@ private let farReaching: Set<String> = [
 func isFarReaching(_ bundleId: String) -> Bool { farReaching.contains(bundleId) }
 func isNeverApproved(_ bundleId: String) -> Bool { neverApproved.contains(bundleId) || bundleId == Bundle.main.bundleIdentifier }
 
-private let timedApprovalSeconds: TimeInterval = 3600
 private let declineMemorySeconds: TimeInterval = 60
 // Shorter than what the client still has left after one full approval window.
 private let approvalQueueSeconds: TimeInterval = 25
@@ -50,11 +49,11 @@ struct ApprovalTexts {
 private let texts = ApprovalTexts(
   title: { "\($0) wants to control \($1)" },
   wants: "Can read windows, click and type.",
-  farReaching: "Can run commands or change your system. Session only.",
+  farReaching: "Can run commands or change your system.",
   updatedWhileRunning: { _ in "App updated while running. Access lasts until it quits." },
   restartForPermanent: "Restart the app for longer access.",
   labels: ApprovalLabels(
-    session: "Allow for this session", hour: "Allow for 1 hour", always: "Always", decline: "Deny",
+    once: "Once", session: "This session", hour: "1 hour", day: "1 day", always: "Always", decline: "Deny",
     countdown: "Denies in {time}", unlocked: "Approval buttons are now available",
     moveHere: "Move pointer here to enable approval.", holdStill: "Hold still to enable approval.",
     ready: "Click to choose.", allowFor: "For all agents:", bundleId: "Bundle ID", path: "Path"),
@@ -238,7 +237,7 @@ enum ApprovalGate {
     let isFarReaching = farReaching.contains(app.bundleId)
     let isApproved = {
       session.lock.withLock { session.approved.contains(sessionKey) }
-        || (!isFarReaching && ApprovalStore.contains(bundleId: app.bundleId, signer: appSigner))
+        || ApprovalStore.contains(bundleId: app.bundleId, signer: appSigner)
     }
     if isApproved() { return }
 
@@ -264,7 +263,7 @@ enum ApprovalGate {
     var warning = isFarReaching ? [chosen.farReaching] : []
     if wasUpdatedWhileRunning(app) {
       warning.append(chosen.updatedWhileRunning(app.name))
-      if !isFarReaching { warning.append(chosen.restartForPermanent) }
+      warning.append(chosen.restartForPermanent)
     }
     let request = ApprovalRequest(
       title: chosen.title(readableClientName(clientName) ?? chosen.agent, app.name),
@@ -272,8 +271,7 @@ enum ApprovalGate {
       path: app.path,
       warning: warning.isEmpty ? nil : warning.joined(separator: " "),
       bundleIdentifier: app.bundleId,
-      brandName: Configuration.appName,
-      offersAlways: !isFarReaching && appSigner != nil,
+      offersAlways: appSigner != nil,
       timeoutSeconds: approvalTimeoutSeconds,
       labels: chosen.labels)
 
@@ -282,16 +280,20 @@ enum ApprovalGate {
     writeDecisionLog(client: clientName, bundleId: app.bundleId, decision: decision.rawValue)
 
     switch decision {
+    case .once:
+      // This request only; nothing is remembered, so the next one asks again.
+      return
     case .session:
       session.lock.withLock { _ = session.approved.insert(sessionKey) }
-    case .always, .hour:
+    case .always, .hour, .day:
       // Kept only in the store, so revoking it reaches sessions already running.
+      let lasts: TimeInterval? = decision == .hour ? 3600 : decision == .day ? 86400 : nil
       do {
         guard let appSigner else { throw HelperError(code: "store_failed", message: "The app has no valid signature.") }
-        try ApprovalStore.add(bundleId: app.bundleId, signer: appSigner, until: decision == .hour ? Date().addingTimeInterval(timedApprovalSeconds) : nil)
+        try ApprovalStore.add(bundleId: app.bundleId, signer: appSigner, until: lasts.map { Date().addingTimeInterval($0) })
       } catch {
         // A session approval has no end time, so it cannot stand in for a limited one.
-        if decision == .hour {
+        if lasts != nil {
           throw HelperError(code: "store_failed", message: "The approval for \(app.name) could not be saved.")
         }
         NSLog("\(Configuration.appName): could not save a permanent approval: \(error)")

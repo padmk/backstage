@@ -31,6 +31,14 @@ func runScript(_ body: String, arguments: JSON = [:], target: String, timeout: T
   return value
 }
 
+// For the few commands JavaScript for Automation cannot address reliably. The script's `on run argv` receives the
+// arguments as separate strings, and its result comes back as text.
+func runAppleScript(_ source: String, arguments: [String], target: String, timeout: TimeInterval = defaultScriptSeconds) throws -> String {
+  let finished = try runProcess(osascript, ["-e", source, "--"] + arguments, target: target, timeout: timeout)
+  guard finished.status == 0 else { throw scriptFailure(finished.errors, target: target) }
+  return finished.output.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
 // Runs a child of the helper, which macOS treats as acting for the helper, and kills it when it overruns.
 func runProcess(_ path: String, _ arguments: [String], target: String, timeout: TimeInterval) throws -> (status: Int32, output: String, errors: String) {
   let process = Process()

@@ -6,8 +6,10 @@ import AppKit
 import SwiftUI
 
 struct ApprovalLabels {
+  let once: String
   let session: String
   let hour: String
+  let day: String
   let always: String
   let decline: String
   let countdown: String
@@ -27,14 +29,13 @@ struct ApprovalRequest {
   let path: String?
   let warning: String?
   let bundleIdentifier: String
-  let brandName: String
   let offersAlways: Bool
   let timeoutSeconds: Int
   let labels: ApprovalLabels
 }
 
 enum Decision: String {
-  case decline, session, hour, always
+  case decline, once, session, hour, day, always
 }
 
 private let unlockDelaySeconds = 0.6
@@ -83,22 +84,6 @@ private struct ApprovalView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      HStack(spacing: 8) {
-        Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 28, height: 28).accessibilityHidden(true)
-        Text(request.brandName).font(.system(size: 13, weight: .semibold))
-        Spacer(minLength: 8)
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-          let remaining = max(0, Int(deadline.timeIntervalSince(context.date).rounded(.up)))
-          Text(request.labels.countdown.replacingOccurrences(
-            of: "{time}", with: String(format: "%d:%02d", remaining / 60, remaining % 60)))
-            .font(.system(size: 12))
-            .monospacedDigit()
-            .foregroundStyle(.secondary)
-            .fixedSize()
-            .accessibilityHidden(true)
-        }
-      }
-
       HStack(alignment: .top, spacing: 12) {
         Group {
           if let icon = appIcon(path: request.path, bundleIdentifier: request.bundleIdentifier) {
@@ -121,7 +106,6 @@ private struct ApprovalView: View {
             .fixedSize(horizontal: false, vertical: true)
         }
       }
-      .padding(.top, 16)
 
       Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 4) {
         identityRow(request.labels.bundleId, request.bundleIdentifier)
@@ -141,16 +125,28 @@ private struct ApprovalView: View {
         .padding(.top, 12)
       }
 
-      Label(statusText, systemImage: approvalUnlocked ? "cursorarrow.click" : "lock.fill")
-        .font(.system(size: 12))
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
-        .padding(.top, 14)
+      HStack(spacing: 8) {
+        Label(statusText, systemImage: approvalUnlocked ? "cursorarrow.click" : "lock.fill")
+        Spacer(minLength: 8)
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+          let remaining = max(0, Int(deadline.timeIntervalSince(context.date).rounded(.up)))
+          Text(request.labels.countdown.replacingOccurrences(
+            of: "{time}", with: String(format: "%d:%02d", remaining / 60, remaining % 60)))
+            .monospacedDigit()
+            .fixedSize()
+            .accessibilityHidden(true)
+        }
+      }
+      .font(.system(size: 12))
+      .foregroundStyle(.secondary)
+      .frame(minHeight: 18)
+      .padding(.top, 14)
 
       HStack(spacing: 8) {
         Button { decide(.decline) } label: { Text(request.labels.decline).frame(minWidth: 60) }
         Spacer(minLength: 8)
-        Button { decide(.session) } label: { Text(request.labels.session).frame(minWidth: 168) }
+        Button(request.labels.once) { decide(.once) }.disabled(!approvalUnlocked)
+        Button { decide(.session) } label: { Text(request.labels.session).frame(minWidth: 120) }
           .tint(approvalUnlocked ? .accentColor : .gray)
           .buttonStyle(.borderedProminent)
           .disabled(!approvalUnlocked)
@@ -163,6 +159,7 @@ private struct ApprovalView: View {
           Text(request.labels.allowFor).font(.system(size: 12)).foregroundStyle(.secondary)
           Spacer(minLength: 8)
           Button(request.labels.hour) { decide(.hour) }.disabled(!approvalUnlocked)
+          Button(request.labels.day) { decide(.day) }.disabled(!approvalUnlocked)
           Button(request.labels.always) { decide(.always) }.disabled(!approvalUnlocked)
         }
         .controlSize(.large)

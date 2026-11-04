@@ -37,6 +37,10 @@ let appGrants: [AppGrant] = [
   AppGrant(id: "contacts", name: "Contacts", purpose: "Contacts operations", kind: .contacts),
   AppGrant(id: "notes", name: "Notes", purpose: "Control Notes through scripting", kind: .automation(bundleId: "com.apple.Notes")),
   AppGrant(id: "mail", name: "Mail", purpose: "Control Mail through scripting", kind: .automation(bundleId: "com.apple.mail")),
+  AppGrant(id: "messages", name: "Messages", purpose: "Send messages through scripting", kind: .automation(bundleId: "com.apple.MobileSMS")),
+  AppGrant(id: "finder", name: "Finder", purpose: "Selection, reveal and Trash", kind: .automation(bundleId: "com.apple.finder")),
+  AppGrant(id: "pages", name: "Pages", purpose: "Documents through scripting", kind: .automation(bundleId: installedBundleId(pagesKnowledge) ?? pagesKnowledge.bundleId)),
+  AppGrant(id: "numbers", name: "Numbers", purpose: "Spreadsheets through scripting", kind: .automation(bundleId: installedBundleId(numbersKnowledge) ?? numbersKnowledge.bundleId)),
   AppGrant(id: "music", name: "Music", purpose: "Control Music through scripting", kind: .automation(bundleId: "com.apple.Music")),
   AppGrant(id: "system-events", name: "System Events", purpose: "Appearance in System Settings", kind: .automation(bundleId: "com.apple.systemevents")),
 ]

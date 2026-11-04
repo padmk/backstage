@@ -31,27 +31,33 @@ struct Operation {
 
 struct AppKnowledge {
   let bundleId: String
+  // Other apps that answer the same scripting, such as an older version under another bundle id.
+  var otherBundleIds: [String] = []
   let name: String
+  // Operations send Apple events to the app itself, so it has to run; it is started hidden when it does not.
+  var scripted = false
   let summary: String
   // Shown in the approval window when the operations reach the app's data without its window.
   var access: String? = nil
   var hints: [String] = []
   var pitfalls: [String] = []
   var operations: [Operation] = []
+
+  var bundleIds: [String] { [bundleId] + otherBundleIds }
 }
 
 let appCatalog: [AppKnowledge] = [
-  notesKnowledge, remindersKnowledge, calendarKnowledge, contactsKnowledge, mailKnowledge, settingsKnowledge, shortcutsKnowledge,
-  musicKnowledge, homeKnowledge,
+  notesKnowledge, remindersKnowledge, calendarKnowledge, contactsKnowledge, mailKnowledge, messagesKnowledge, settingsKnowledge,
+  shortcutsKnowledge, musicKnowledge, finderKnowledge, pagesKnowledge, numbersKnowledge, homeKnowledge,
 ]
 
 func knowledge(forBundleId bundleId: String) -> AppKnowledge? {
-  appCatalog.first { $0.bundleId == bundleId }
+  appCatalog.first { $0.bundleIds.contains(bundleId) }
 }
 
 private func knowledge(matching query: String) -> AppKnowledge? {
   let lowered = query.lowercased()
-  return appCatalog.first { $0.bundleId.lowercased() == lowered || $0.name.lowercased() == lowered }
+  return appCatalog.first { $0.bundleIds.contains { $0.lowercased() == lowered } || $0.name.lowercased() == lowered }
 }
 
 private func describe(_ argument: Argument) -> JSON {
@@ -100,6 +106,7 @@ private func validated(_ arguments: Any?, for operation: Operation) throws -> JS
     throw HelperError(code: "invalid_arguments", message: "arguments must be an object.")
   }
   let declared = Dictionary(uniqueKeysWithValues: operation.arguments.map { ($0.name, $0) })
+  // app_id is set by the helper, never taken from a request.
   for key in given.keys where declared[key] == nil {
     throw HelperError(code: "invalid_arguments", message: "\(operation.name) takes no argument \(key). It takes: \(operation.arguments.map(\.name).joined(separator: ", ")).")
   }
@@ -147,28 +154,78 @@ func runOperation(_ params: JSON, session: ApprovalSession, connection: Connecti
   try connection.throwIfCancelled()
 
   let frontBefore = onMain { NSWorkspace.shared.frontmostApplication }
+  // An app started by the operation would show its windows above the user's other apps, so it starts hidden.
+  let started = app.scripted && target.pid == 0 ? try startHidden(app, at: target.path) : nil
+  // Runs after the operation whether it worked or not, so a started app never stays visible.
+  let tidyUp = { () -> Bool in
+    let returned = returnFocus(to: frontBefore, fromBundleId: target.bundleId, wasRunning: target.pid > 0)
+    // Some apps show themselves when they open a document. Nothing of the user's is in an app this started.
+    if let started, onMain({ !started.isHidden }) { _ = onMain { started.hide() } }
+    return returned
+  }
   var result: JSON
   do {
-    result = try operation.run(arguments)
+    // Operations that address the app by id get the one actually chosen.
+    result = try operation.run(arguments.merging(["app_id": target.bundleId]) { $1 })
   } catch let error as HelperError where error.code == "timeout" && operation.effect == .changes {
+    _ = tidyUp()
     throw HelperError(code: "outcome_unknown", message: "\(error.message) The change may have been made. Read the state before trying again.")
+  } catch {
+    _ = tidyUp()
+    throw error
   }
-  if returnFocus(to: frontBefore, fromBundleId: app.bundleId, wasRunning: target.pid > 0) { result["focus_returned"] = true }
+  if tidyUp() { result["focus_returned"] = true }
   result["operation"] = operation.name
   return result
 }
 
 // The running app when there is one, since that is the process the signer is checked on; otherwise the
-// installed bundle, because operations do not need the app to run.
+// installed bundle, because operations do not need the app to run. With several bundle ids, a running one wins,
+// then the first installed in the definition's order.
 private func operationTarget(_ app: AppKnowledge) throws -> AppIdentity {
-  let running = onMain { NSRunningApplication.runningApplications(withBundleIdentifier: app.bundleId).first { !$0.isTerminated } }
-  if let running {
-    return AppIdentity(pid: running.processIdentifier, bundleId: app.bundleId, name: running.localizedName ?? app.name, launchDate: running.launchDate, path: running.bundleURL?.path)
+  let running = onMain {
+    app.bundleIds.lazy.compactMap { id in NSRunningApplication.runningApplications(withBundleIdentifier: id).first { !$0.isTerminated } }.first
   }
-  guard let url = onMain({ NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleId) }) else {
+  if let running, let bundleId = running.bundleIdentifier {
+    return AppIdentity(pid: running.processIdentifier, bundleId: bundleId, name: running.localizedName ?? app.name, launchDate: running.launchDate, path: running.bundleURL?.path)
+  }
+  guard let bundleId = installedBundleId(app), let url = onMain({ NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) }) else {
     throw HelperError(code: "app_not_found", message: "\(app.name) is not installed.")
   }
-  return AppIdentity(pid: 0, bundleId: app.bundleId, name: app.name, launchDate: nil, path: url.path)
+  return AppIdentity(pid: 0, bundleId: bundleId, name: app.name, launchDate: nil, path: url.path)
+}
+
+func installedBundleId(_ app: AppKnowledge) -> String? {
+  onMain { app.bundleIds.first { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil } }
+}
+
+private let startSeconds = 20.0
+
+private func startHidden(_ app: AppKnowledge, at path: String?) throws -> NSRunningApplication {
+  guard let path else { throw HelperError(code: "app_not_found", message: "\(app.name) is not installed.") }
+  let configuration = NSWorkspace.OpenConfiguration()
+  configuration.activates = false
+  configuration.hides = true
+  configuration.addsToRecentItems = false
+  // Without it the app reopens the windows it had when it last quit, which can show alerts no one sees.
+  configuration.arguments = ["-ApplePersistenceIgnoreState", "YES"]
+  let done = DispatchSemaphore(value: 0)
+  var launched: NSRunningApplication?
+  var failure: Error?
+  NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: path), configuration: configuration) { app, error in
+    launched = app
+    failure = error
+    done.signal()
+  }
+  let deadline = Date().addingTimeInterval(startSeconds)
+  guard done.wait(timeout: .now() + startSeconds) == .success else {
+    throw HelperError(code: "timeout", message: "\(app.name) did not start in time.")
+  }
+  if let failure { throw HelperError(code: "action_failed", message: failure.localizedDescription) }
+  guard let launched else { throw HelperError(code: "action_failed", message: "\(app.name) did not start.") }
+  // Apple events sent before the app has finished starting can go unanswered.
+  while !launched.isFinishedLaunching, Date() < deadline { sleep(seconds: 0.05) }
+  return launched
 }
 
 private let launchWatchChecks = 10

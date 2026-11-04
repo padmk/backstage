@@ -20,7 +20,7 @@ private let englishTexts = ControlTexts(
   apps: "Apps Agents May Control", none: "No approved apps. An agent asks the first time it needs one.", add: "Add App…",
   always: "Always", oneHour: "For 1 Hour", oneDay: "For 1 Day", oneWeek: "For 1 Week", session: "This session",
   remove: "Remove", until: "Until", cannotAdd: "This app cannot be approved here.", saveFailed: "The change could not be saved.", recent: "Recent Decisions",
-  nothingRecent: "Nothing yet.", farReaching: "Reaches beyond itself, so it is approved one session at a time.")
+  nothingRecent: "Nothing yet.", farReaching: "Can run commands or change your system.")
 
 private let controlTexts = englishTexts
 
@@ -103,7 +103,7 @@ private final class ControlModel: ObservableObject {
 
   // Only the signer the user approved can be kept longer, never another copy found under the same bundle id.
   func canKeep(_ row: AppRow) -> Bool {
-    !isFarReaching(row.bundleId) && row.signer != nil
+    row.signer != nil
   }
 
   func set(_ row: AppRow, to choice: ApprovalLength) {
@@ -132,7 +132,7 @@ private final class ControlModel: ObservableObject {
   }
 
   func add(_ url: URL) {
-    guard let app = identity(ofAppAt: url), !isNeverApproved(app.bundleId), !isFarReaching(app.bundleId), let signer = signingIdentity(of: app) else {
+    guard let app = identity(ofAppAt: url), !isNeverApproved(app.bundleId), let signer = signingIdentity(of: app) else {
       problem = controlTexts.cannotAdd
       return
     }
