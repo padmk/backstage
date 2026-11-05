@@ -179,12 +179,25 @@ enum ApprovalStore {
   }
 }
 
-func recentDecisions(limit: Int) -> [String] {
+struct DecisionRecord: Identifiable, Equatable {
+  let id: Int
+  let time: Date?
+  let bundleId: String
+  let decision: String
+  let client: String?
+}
+
+// The latest answers first, from the decision log.
+func recentDecisions(limit: Int) -> [DecisionRecord] {
   guard let text = try? String(contentsOfFile: Configuration.home + "/decisions.jsonl", encoding: .utf8) else { return [] }
-  return text.split(separator: "\n").suffix(limit).reversed().compactMap { line in
-    guard let data = line.data(using: .utf8), let entry = try? JSONSerialization.jsonObject(with: data) as? JSON else { return nil }
-    let parts = [entry["time"], entry["app"], entry["decision"], entry["client"]].map { ($0 as? String) ?? "" }
-    return parts.joined(separator: "  ")
+  let lines = text.split(separator: "\n").suffix(limit).reversed()
+  return lines.enumerated().compactMap { index, line in
+    guard let data = line.data(using: .utf8), let entry = try? JSONSerialization.jsonObject(with: data) as? JSON,
+      let bundleId = entry["app"] as? String, let decision = entry["decision"] as? String
+    else { return nil }
+    return DecisionRecord(
+      id: index, time: (entry["time"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) }, bundleId: bundleId,
+      decision: decision, client: entry["client"] as? String)
   }
 }
 

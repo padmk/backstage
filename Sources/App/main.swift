@@ -16,7 +16,10 @@ AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 2)
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
-    if !arguments.contains("--background") { showControlWindow() }
+    MenuBarItem.shared.update()
+    // Clients start the helper with --background, and a launch at login has to stay unseen too.
+    let tab = arguments.firstIndex(of: "--tab").flatMap { arguments.indices.contains($0 + 1) ? ControlTab(rawValue: arguments[$0 + 1]) : nil }
+    if !arguments.contains("--background"), !LaunchAtLogin.launchedAtLogin() { showControlWindow(tab: tab) }
   }
 
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

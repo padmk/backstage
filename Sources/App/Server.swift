@@ -32,6 +32,13 @@ let connections = Connections()
 private var sessions: [String: ApprovalSession] = [:]
 private let sessionsLock = NSLock()
 
+// The agents with a connection open now, by the names their clients give.
+func connectedClients() -> [String] {
+  let attached = sessionsLock.withLock { sessions.values.filter { $0.attachedConnections > 0 } }
+  let names = attached.map { session in session.lock.withLock { session.clientName } }.map { readableClientName($0) ?? "An agent" }
+  return Array(Set(names)).sorted()
+}
+
 // Each approved app, with the signer the user approved, or nil for a process without a valid signature.
 func sessionApprovals() -> [(bundleId: String, signer: String?)] {
   let all = sessionsLock.withLock { Array(sessions.values) }
@@ -291,7 +298,7 @@ func startServer() {
 
   Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
     forgetDetachedSessions()
-    if connections.shouldExit, !isControlWindowOpen {
+    if connections.shouldExit, !isControlWindowOpen, !Preferences.keepsRunning {
       unlink(Configuration.socketPath)
       exit(0)
     }
