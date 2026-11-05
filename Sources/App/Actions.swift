@@ -84,6 +84,28 @@ func returnFocus(to previous: NSRunningApplication?, from pid: pid_t) -> Bool {
   }
 }
 
+// The requests that act on an app, alone or as steps of run_actions.
+let actionMethods: Set<String> = ["press", "set_value", "type_text", "select_text", "press_key", "scroll", "click_at", "drag"]
+
+// Runs one action without reporting its effect, which the caller does once for one action or a sequence.
+func performAction(_ method: String, app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
+  switch method {
+  case "press": return try press(app: app, params: params, session: session)
+  case "set_value": return try setValue(app: app, params: params, session: session)
+  case "type_text": return try typeText(app: app, params: params, session: session)
+  case "select_text": return try selectText(app: app, params: params, session: session)
+  case "press_key":
+    let key = try string(params, "key")
+    prepareInput(app: app, window: nil)
+    try postKey(key, pid: app.pid)
+    return ["delivery": "key_events", "verified": false]
+  case "scroll": return try scroll(app: app, params: params, session: session)
+  case "drag": return try drag(app: app, params: params, session: session)
+  case "click_at": return try clickAt(app: app, params: params)
+  default: throw HelperError(code: "unknown_method", message: "Unknown action \(method).")
+  }
+}
+
 func press(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
   let element = try session.table.element(integer(params, "element"), pid: app.pid)
   let available = actions(of: element)

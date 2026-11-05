@@ -126,6 +126,18 @@ let tools: [ToolDefinition] = [
     ],
     required: ["app", "text"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
   ToolDefinition(
+    name: "select_text",
+    description: "Select text in a field or document by what it says, or put the cursor just before or after it, so type_text then replaces the selection or inserts there instead of rewriting the whole value. Give text exactly as the element's value has it; when it occurs more than once, add prefix or suffix text around it until it occurs once.",
+    properties: [
+      ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
+      ("element", ["type": "integer", "minimum": 1, "description": "Element number from get_window_state"] as JSON),
+      ("text", ["type": "string", "maxLength": 10000] as JSON),
+      ("prefix", ["type": "string", "maxLength": 1000, "description": "Text right before it, to pick one occurrence"] as JSON),
+      ("suffix", ["type": "string", "maxLength": 1000, "description": "Text right after it, to pick one occurrence"] as JSON),
+      ("place", ["type": "string", "enum": ["select", "before", "after"], "description": "Select the text (default), or put the cursor before or after it"] as JSON)
+    ],
+    required: ["app", "element", "text"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
+  ToolDefinition(
     name: "press_key",
     description: "Send a key or combination, such as return or cmd+s, to the app in the background. A native view receives it once it has focus, so click the view with click_at first. Other apps and combinations may behave differently, so check the effect, and prefer pressing the menu item.",
     properties: [
@@ -169,6 +181,14 @@ let tools: [ToolDefinition] = [
       ("foreground", ["type": "boolean", "description": "Last resort when a background click did not land: the window comes forward for the click, then the previous app gets the focus back and the cursor returns. Tell the user you used it."] as JSON)
     ],
     required: ["app", "x", "y"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
+  ToolDefinition(
+    name: "run_actions",
+    description: "Run up to 20 actions in one app in order, then report the combined change once, saving a round trip per step. Each step is {\"tool\": one of press, set_value, type_text, select_text, press_key, scroll, drag, click_at, plus that tool's arguments without app}, such as {\"tool\":\"set_value\",\"element\":4,\"value\":\"Paris\"}. Use element numbers you have already read: elements a step makes appear have no number yet. Steps stop at the first that fails or may have worked (`failed` names it); nothing is retried, so read the state before going on.",
+    properties: [
+      ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
+      ("steps", ["type": "array", "minItems": 1, "maxItems": 20, "items": ["type": "object", "properties": ["tool": ["type": "string", "enum": ["press", "set_value", "type_text", "select_text", "press_key", "scroll", "drag", "click_at"]] as JSON] as JSON, "required": ["tool"]] as JSON] as JSON)
+    ],
+    required: ["app", "steps"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
 ]
 
 let toolsByName = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0) })

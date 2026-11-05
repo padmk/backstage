@@ -77,7 +77,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     break
   }
 
-  guard ["get_window_state", "screenshot", "press", "set_value", "type_text", "press_key", "scroll", "click_at", "drag"].contains(method) else {
+  guard ["get_window_state", "screenshot", "run_actions"].contains(method) || actionMethods.contains(method) else {
     throw HelperError(code: "unknown_method", message: "Unknown method \(method).")
   }
 
@@ -100,37 +100,12 @@ private func performAppRequest(_ method: String, app: AppIdentity, params: JSON,
     let application = try applicationElement(app)
     return try captureWindow(pid: app.pid, window: selectWindow(application, params: params))
 
-  case "press":
+  case "run_actions":
     try requireAccessibility()
-    return try acting(app: app, session: session) { try press(app: app, params: params, session: session) }
-
-  case "set_value":
-    try requireAccessibility()
-    return try acting(app: app, session: session) { try setValue(app: app, params: params, session: session) }
-
-  case "type_text":
-    try requireAccessibility()
-    return try acting(app: app, session: session) { try typeText(app: app, params: params, session: session) }
-
-  case "press_key":
-    try requireAccessibility()
-    let key = try string(params, "key")
-    return try acting(app: app, session: session) {
-      prepareInput(app: app, window: nil)
-      try postKey(key, pid: app.pid)
-      return ["delivery": "key_events", "verified": false]
-    }
-
-  case "scroll":
-    try requireAccessibility()
-    return try acting(app: app, session: session) { try scroll(app: app, params: params, session: session) }
-
-  case "drag":
-    try requireAccessibility()
-    return try acting(app: app, session: session) { try drag(app: app, params: params, session: session) }
+    return try runActions(app: app, params: params, session: session)
 
   default:
     try requireAccessibility()
-    return try acting(app: app, session: session) { try clickAt(app: app, params: params) }
+    return try acting(app: app, session: session) { try performAction(method, app: app, params: params, session: session) }
   }
 }
