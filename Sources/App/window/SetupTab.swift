@@ -1,4 +1,5 @@
-// The Permissions tab: what macOS has granted Backstage, and the grants that the listed apps' ready operations use.
+// The Setup tab: how Backstage runs in the background, what macOS has granted it, and the grants that the listed
+// apps' ready operations use.
 
 import AppKit
 import SwiftUI
@@ -44,10 +45,38 @@ private struct GrantRow: View {
   }
 }
 
-struct PermissionsTab: View {
+struct SetupTab: View {
   @ObservedObject var model: ControlModel
 
+  private var loginDetail: (String, Color) {
+    if let problem = model.loginProblem { return (problem, Palette.coral) }
+    switch model.login {
+    case .needsApproval: return (ControlTexts.loginNeedsApproval, Palette.amber)
+    case .unavailable: return (ControlTexts.loginUnavailable, Palette.secondary)
+    case .on, .off: return (ControlTexts.openAtLoginDetail, Palette.secondary)
+    }
+  }
+
   var body: some View {
+    ListSection(heading: ControlTexts.background, note: ControlTexts.keepsRunning) {
+      ControlRow(icon: .symbol("power"), title: ControlTexts.openAtLogin, detail: loginDetail.0, detailColor: loginDetail.1) {
+        HStack(spacing: 8) {
+          if model.login == .needsApproval {
+            Button(ControlTexts.openLoginItems, action: LaunchAtLogin.openLoginItems).buttonStyle(ChoiceStyle(kind: .plain, compact: true))
+          }
+          Toggle("", isOn: Binding(get: { model.login == .on || model.login == .needsApproval }, set: { model.setLogin($0) }))
+            .labelsHidden().toggleStyle(.switch).tint(Palette.sky)
+            .disabled(model.login == .unavailable)
+        }
+      }
+      RowDivider()
+      ControlRow(icon: .symbol("menubar.rectangle"), title: ControlTexts.showInMenuBar, detail: ControlTexts.showInMenuBarDetail) {
+        Toggle("", isOn: Binding(get: { model.showsMenuBarItem }, set: { model.setMenuBarItem($0) }))
+          .labelsHidden().toggleStyle(.switch).tint(Palette.sky)
+          .disabled(!Preferences.isInstalledCopy)
+      }
+    }
+
     ListSection(heading: ControlTexts.macOSPermissions) {
       ControlRow(icon: .symbol("accessibility"), title: ControlTexts.accessibility, detail: ControlTexts.accessibilityPurpose) {
         if model.accessibility { Allowed() } else { OffInSettings(pane: "Privacy_Accessibility", label: ControlTexts.missing) }
@@ -77,5 +106,9 @@ struct PermissionsTab: View {
         GrantRow(grant: grant, model: model)
       }
     }
+
+    Text(ControlTexts.version(Configuration.appName, Configuration.buildVersion))
+      .font(.system(size: 11)).foregroundStyle(Palette.secondary)
+      .padding(.top, 10)
   }
 }

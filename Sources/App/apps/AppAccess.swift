@@ -97,16 +97,16 @@ func requireAutomation(for operation: String, of appBundleId: String) throws {
   case .notAsked: throw grantMissing(grant.name)
   case .denied: throw grantDenied(grant.name)
   case .unknown:
-    throw HelperError(code: "permission_missing", message: "macOS could not tell whether Backstage may use \(grant.name), so the operation did not run. Ask the user to check it in Backstage, on the Permissions tab, under App access.")
+    throw HelperError(code: "permission_missing", message: "macOS could not tell whether Backstage may use \(grant.name), so the operation did not run. Ask the user to check it in Backstage, on the Setup tab, under App access.")
   }
 }
 
 func grantMissing(_ name: String) -> HelperError {
-  HelperError(code: "permission_missing", message: "macOS has not been asked yet whether Backstage may use \(name). Ask the user to allow it in Backstage, on the Permissions tab, under App access. Backstage does not show that prompt during a task.")
+  HelperError(code: "permission_missing", message: "macOS has not been asked yet whether Backstage may use \(name). Ask the user to allow it in Backstage, on the Setup tab, under App access. Backstage does not show that prompt during a task.")
 }
 
 func grantDenied(_ name: String) -> HelperError {
-  HelperError(code: "access_denied", message: "macOS does not let Backstage use \(name). The user can turn it on in System Settings > Privacy & Security, or Backstage's Permissions tab links there.")
+  HelperError(code: "access_denied", message: "macOS does not let Backstage use \(name). The user can turn it on in System Settings > Privacy & Security, or Backstage's Setup tab links there.")
 }
 
 func grantState(_ grant: AppGrant) -> GrantState {

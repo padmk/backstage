@@ -37,7 +37,7 @@ final class MenuBarItem: NSObject, NSMenuDelegate {
     if !AXIsProcessTrusted() { missing.append(ControlTexts.accessibility) }
     let status = missing.isEmpty ? ControlTexts.ready : ControlTexts.needs(missing.joined(separator: " and "))
     menu.addItem(entry(status, symbol: missing.isEmpty ? "checkmark.circle" : "exclamationmark.triangle",
-                       action: missing.isEmpty ? nil : #selector(openPermissions)))
+                       action: missing.isEmpty ? nil : #selector(openSetup)))
     let clients = connectedClients()
     menu.addItem(entry(clients.isEmpty ? ControlTexts.noAgents : ControlTexts.connected(clients), symbol: "person.2", action: nil))
 
@@ -67,7 +67,7 @@ final class MenuBarItem: NSObject, NSMenuDelegate {
     return item
   }
 
-  @objc private func openPermissions() { showControlWindow(tab: .permissions) }
+  @objc private func openSetup() { showControlWindow(tab: .setup) }
   @objc private func openApps() { showControlWindow(tab: .apps) }
   @objc private func openWindow() { showControlWindow() }
 }

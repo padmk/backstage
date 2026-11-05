@@ -76,7 +76,7 @@ func axFailure(_ result: AXError, _ doing: String) -> HelperError {
   case .invalidUIElement:
     return HelperError(code: "stale_element", message: "The element is gone. Read the window state again.")
   case .apiDisabled:
-    return HelperError(code: "permission_missing", message: "Accessibility is not granted to Backstage. Ask the user to open Backstage and allow it on the Permissions tab.")
+    return HelperError(code: "permission_missing", message: "Accessibility is not granted to Backstage. Ask the user to open Backstage and allow it on the Setup tab.")
   case .cannotComplete:
     return HelperError(code: "outcome_unknown", message: "The app did not answer while \(doing). The action may have worked, for example if it opened a dialog. Read the state before trying again.")
   default:
@@ -86,7 +86,7 @@ func axFailure(_ result: AXError, _ doing: String) -> HelperError {
 
 func requireAccessibility() throws {
   guard AXIsProcessTrusted() else {
-    throw HelperError(code: "permission_missing", message: "Accessibility is not granted to Backstage. Ask the user to open Backstage and allow it on the Permissions tab.")
+    throw HelperError(code: "permission_missing", message: "Accessibility is not granted to Backstage. Ask the user to open Backstage and allow it on the Setup tab.")
   }
 }
 

@@ -17,7 +17,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   case "status":
     return [
       "accessibility": AXIsProcessTrusted(), "screen_recording": CGPreflightScreenCaptureAccess(), "version": Configuration.buildVersion,
-      // The same grants as the Permissions tab: those of the listed apps.
+      // The same grants as the Setup tab: those of the listed apps.
       "app_access": appGrants(forListed: Set(ApprovalStore.list().compactMap { $0["bundle_id"] }), everyApp: Preferences.allowsEveryApp)
         .map { ["name": $0.name, "state": grantState($0).rawValue] as JSON },
     ] as JSON

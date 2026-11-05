@@ -1,4 +1,5 @@
 // The Apps tab: the switch that allows every app, and otherwise the list of apps agents may use through Backstage.
+// While every app is allowed the list does not apply, so it folds away; it is kept for when the switch goes off.
 
 import AppKit
 import SwiftUI
@@ -24,6 +25,19 @@ struct AppsTab: View {
       }
     }
 
+    if model.allowsEveryApp {
+      if !model.rows.isEmpty {
+        Text(ControlTexts.listKept(model.rows.count)).font(.system(size: 11)).foregroundStyle(Palette.secondary)
+      }
+    } else {
+      appList
+    }
+    if let problem = model.problem {
+      Text(problem).font(.system(size: 12)).foregroundStyle(Palette.coral)
+    }
+  }
+
+  private var appList: some View {
     ListSection(heading: ControlTexts.appsHeading) {
       Button(ControlTexts.add, action: addApp).buttonStyle(ChoiceStyle(kind: .primary, compact: true))
     } content: {
@@ -49,10 +63,6 @@ struct AppsTab: View {
           }
         }
       }
-    }
-    .opacity(model.allowsEveryApp ? 0.5 : 1)
-    if let problem = model.problem {
-      Text(problem).font(.system(size: 12)).foregroundStyle(Palette.coral)
     }
   }
 }

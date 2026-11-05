@@ -1,7 +1,7 @@
 // Every string of the Backstage window and its menu bar item, in one place.
 
 enum ControlTexts {
-  static let appsTab = "Apps", permissionsTab = "Permissions", activityTab = "Activity", generalTab = "General"
+  static let appsTab = "Apps", activityTab = "Activity", setupTab = "Setup"
 
   static let appsHeading = "Apps agents may use"
   static let access = "Access"
@@ -12,6 +12,9 @@ enum ControlTexts {
   static let add = "Add App…"
   static let noApps = "No apps yet", noAppsDetail = "Add the apps agents may use with Add App…\nAn app that is not here is refused, without asking."
   static let remove = "Remove"
+  static func listKept(_ count: Int) -> String {
+    "Your list of \(count) \(count == 1 ? "app" : "apps") is kept and applies again when you turn this off."
+  }
   static let farReaching = "Gives agents a shell or control of your system"
   static let cannotAdd = "This app cannot be approved here.", saveFailed = "The change could not be saved."
 
