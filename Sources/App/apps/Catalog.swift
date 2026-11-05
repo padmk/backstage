@@ -229,38 +229,11 @@ func installedBundleId(_ app: AppKnowledge) -> String? {
   onMain { app.bundleIds.first { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil } }
 }
 
-private let startSeconds = 20.0
-
 private func startHidden(_ app: AppKnowledge, at path: String?) throws -> NSRunningApplication {
   guard let path else { throw HelperError(code: "app_not_found", message: "\(app.name) is not installed.") }
   return try startAppHidden(at: path, name: app.name)
 }
 
-func startAppHidden(at path: String, name: String) throws -> NSRunningApplication {
-  let configuration = NSWorkspace.OpenConfiguration()
-  configuration.activates = false
-  configuration.hides = true
-  configuration.addsToRecentItems = false
-  // Without it the app reopens the windows it had when it last quit, which can show alerts no one sees.
-  configuration.arguments = ["-ApplePersistenceIgnoreState", "YES"]
-  let done = DispatchSemaphore(value: 0)
-  var launched: NSRunningApplication?
-  var failure: Error?
-  NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: path), configuration: configuration) { app, error in
-    launched = app
-    failure = error
-    done.signal()
-  }
-  let deadline = Date().addingTimeInterval(startSeconds)
-  guard done.wait(timeout: .now() + startSeconds) == .success else {
-    throw HelperError(code: "timeout", message: "\(name) did not start in time.")
-  }
-  if let failure { throw HelperError(code: "action_failed", message: failure.localizedDescription) }
-  guard let launched else { throw HelperError(code: "action_failed", message: "\(name) did not start.") }
-  // Apple events sent before the app has finished starting can go unanswered.
-  while !launched.isFinishedLaunching, Date() < deadline { sleep(seconds: 0.05) }
-  return launched
-}
 
 private let launchWatchChecks = 10
 private let launchWatchInterval = 0.1
