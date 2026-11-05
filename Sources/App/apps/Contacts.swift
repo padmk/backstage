@@ -16,22 +16,16 @@ private let detailKeys: [CNKeyDescriptor] = summaryKeys + [
   CNContactDatesKey, CNContactNicknameKey,
 ].map { $0 as CNKeyDescriptor }
 
+// Only the user's choice in Backstage asks (requestContactsAccess); an operation that finds no answer yet fails
+// with what to do.
 private func withContacts<T>(_ work: () throws -> T) throws -> T {
   try lock.withLock {
+    try currentConnection()?.throwIfCancelled()
     switch CNContactStore.authorizationStatus(for: .contacts) {
-    case .authorized:
-      break
-    case .notDetermined:
-      let answered = DispatchSemaphore(value: 0)
-      var granted = false
-      store.requestAccess(for: .contacts) { result, _ in
-        granted = result
-        answered.signal()
-      }
-      guard answered.wait(timeout: .now() + .seconds(accessRequestSeconds)) == .success, granted else { throw contactsDenied() }
-    default:
-      // Limited access shows only the contacts the user picked, so it is refused rather than giving partial answers.
-      throw contactsDenied()
+    case .authorized: break
+    case .notDetermined: throw grantMissing("Contacts")
+    // Limited access shows only the contacts the user picked, so it is refused rather than giving partial answers.
+    default: throw contactsDenied()
     }
     return try work()
   }
@@ -159,6 +153,10 @@ func contactsAccessState() -> GrantState {
 }
 
 // Shows macOS's prompt when it has not asked yet.
+// The wait for the user's answer holds no lock, so operations do not queue behind the prompt.
 func requestContactsAccess() {
-  _ = try? withContacts {}
+  guard CNContactStore.authorizationStatus(for: .contacts) == .notDetermined else { return }
+  let answered = DispatchSemaphore(value: 0)
+  CNContactStore().requestAccess(for: .contacts) { _, _ in answered.signal() }
+  _ = answered.wait(timeout: .now() + .seconds(accessRequestSeconds))
 }

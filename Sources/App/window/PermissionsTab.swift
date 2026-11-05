@@ -1,4 +1,4 @@
-// The Permissions tab: what macOS has granted Backstage, and the grants that ready operations use.
+// The Permissions tab: what macOS has granted Backstage, and the grants that the listed apps' ready operations use.
 
 import AppKit
 import SwiftUI
@@ -54,8 +54,7 @@ struct PermissionsTab: View {
       }
       RowDivider()
       ControlRow(icon: .symbol("record.circle"), title: ControlTexts.screenRecording,
-                 detail: model.screenRecording ? ControlTexts.screenRecordingPurpose : ControlTexts.grantThenRestart,
-                 detailColor: model.screenRecording ? Palette.secondary : Palette.amber) {
+                 detail: model.screenRecording ? ControlTexts.screenRecordingPurpose : ControlTexts.screenRecordingOptional) {
         if model.screenRecording {
           Allowed()
         } else {
@@ -69,13 +68,11 @@ struct PermissionsTab: View {
     }
 
     ListSection(heading: ControlTexts.appAccess, note: ControlTexts.appAccessHint) {
-      Button(ControlTexts.allowAll) {
-        model.request(appGrants.filter { model.grants[$0.id] != .granted && model.grants[$0.id] != .denied })
+      let shown = model.relevantGrants
+      if shown.isEmpty {
+        EmptyState(symbol: "checkmark.seal", title: ControlTexts.noGrants, detail: ControlTexts.noGrantsDetail)
       }
-      .buttonStyle(ChoiceStyle(kind: .primary, compact: true))
-      .disabled(!appGrants.contains { model.grants[$0.id] == .notAsked || model.grants[$0.id] == .unknown })
-    } content: {
-      ForEach(Array(appGrants.enumerated()), id: \.element.id) { index, grant in
+      ForEach(Array(shown.enumerated()), id: \.element.id) { index, grant in
         if index > 0 { RowDivider() }
         GrantRow(grant: grant, model: model)
       }

@@ -276,9 +276,18 @@ private func controlMenu() -> NSMenu {
   return bar
 }
 
+// Ignores every mouse and key event the helper itself posted, so an agent cannot change the list or the
+// settings by clicking or typing into this window, whatever is in front.
+private final class OwnInputIgnoringWindow: NSWindow {
+  override func sendEvent(_ event: NSEvent) {
+    if event.cgEvent?.getIntegerValueField(.eventSourceUnixProcessID) == Int64(getpid()) { return }
+    super.sendEvent(event)
+  }
+}
+
 // The window's frame: a title bar that is only a band for the traffic lights and the tabs, over the gradient.
 func makeControlWindow(content: NSView) -> NSWindow {
-  let window = NSWindow(
+  let window = OwnInputIgnoringWindow(
     contentRect: NSRect(x: 0, y: 0, width: controlWindowWidth, height: controlWindowHeight),
     styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
     backing: .buffered, defer: false)
@@ -296,11 +305,11 @@ func makeControlWindow(content: NSView) -> NSWindow {
   return window
 }
 
-// The tab is the one asked for, or the last one chosen; Permissions whenever one of them is missing.
+// The tab is the one asked for, or the last one chosen; Permissions while Accessibility is missing.
 func showControlWindow(tab: ControlTab? = nil) {
   NSApp.setActivationPolicy(.regular)
   NSApp.mainMenu = controlMenu()
-  let missing = !AXIsProcessTrusted() || !CGPreflightScreenCaptureAccess()
+  let missing = !AXIsProcessTrusted()
   let chosen = tab ?? (missing ? .permissions : Preferences.lastTab.flatMap(ControlTab.init(rawValue:)) ?? .apps)
   if let window = controlWindow, let selection = controlSelection {
     selection.tab = chosen

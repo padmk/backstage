@@ -91,7 +91,7 @@ let tools: [ToolDefinition] = [
     required: ["app"], annotations: [:]),
   ToolDefinition(
     name: "screenshot",
-    description: "Capture a window as a PNG, one image pixel per window point, so its coordinates work with click_at.",
+    description: "Capture a window as a PNG, one image pixel per window point, so its coordinates work with click_at. Needs Screen Recording, which is optional; without it, work from get_window_state.",
     properties: [
       ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
       ("window", ["type": "integer", "minimum": 0, "description": "Window index shown in get_window_state; default the first"] as JSON)

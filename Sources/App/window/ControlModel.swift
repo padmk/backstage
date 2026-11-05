@@ -40,7 +40,10 @@ final class ControlModel: ObservableObject {
 
   deinit { timer?.invalidate() }
 
-  var permissionsMissing: Bool { !accessibility || !screenRecording }
+  // Screen Recording is optional: only screenshots need it.
+  var permissionsMissing: Bool { !accessibility }
+
+  var relevantGrants: [AppGrant] { appGrants(forListed: Set(rows.map(\.bundleId)), everyApp: allowsEveryApp) }
 
   func refresh() {
     let trusted = AXIsProcessTrusted()
@@ -79,7 +82,7 @@ final class ControlModel: ObservableObject {
   func remove(_ row: AppRow) {
     do {
       if try ApprovalStore.revoke(bundleId: row.bundleId) {
-        writeDecisionLog(client: "settings", bundleId: row.bundleId, decision: "removed")
+        writeDecisionLog(client: settingsClient, bundleId: row.bundleId, decision: "removed")
       }
       problem = nil
     } catch {
@@ -94,8 +97,10 @@ final class ControlModel: ObservableObject {
       return
     }
     do {
-      try addToList(AppIdentity(pid: 0, bundleId: bundleId, name: url.deletingPathExtension().lastPathComponent, launchDate: nil, path: url.path), by: "settings")
+      try addToList(AppIdentity(pid: 0, bundleId: bundleId, name: url.deletingPathExtension().lastPathComponent, launchDate: nil, path: url.path), by: settingsClient)
       problem = nil
+      // The user is here now, so macOS asks now for what the app's operations need, not in the middle of a task.
+      request(appGrants.filter { $0.listedApps.contains(bundleId) && [.notAsked, .unknown].contains(grantState($0)) })
     } catch {
       problem = (error as? HelperError)?.message ?? ControlTexts.saveFailed
     }
@@ -104,7 +109,7 @@ final class ControlModel: ObservableObject {
 
   func setEveryApp(_ on: Bool) {
     Preferences.allowsEveryApp = on
-    writeDecisionLog(client: "settings", bundleId: "*", decision: on ? "every_app_on" : "every_app_off")
+    writeDecisionLog(client: settingsClient, bundleId: "*", decision: on ? "every_app_on" : "every_app_off")
     refresh()
   }
 

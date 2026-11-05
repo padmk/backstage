@@ -51,7 +51,22 @@ func runProcess(_ path: String, _ arguments: [String], target: String, timeout: 
   process.standardInput = FileHandle.nullDevice
   let finished = DispatchSemaphore(value: 0)
   process.terminationHandler = { _ in finished.signal() }
+  // A request cancelled before this point starts nothing.
+  let connection = currentConnection()
+  try connection?.throwIfCancelled()
   try process.run()
+  // A cancelled request ends its child, so a long script or shortcut does not hold the connection. Only a child
+  // that the cancel actually stopped counts as interrupted; one that finished first keeps its result.
+  let stopped = NSLock()
+  var interrupted = false
+  let stopWatching = connection?.onCancel {
+    stopped.withLock {
+      guard process.isRunning else { return }
+      interrupted = true
+      process.terminate()
+    }
+  }
+  defer { stopWatching?() }
 
   // Read while it runs, because a large result would fill the pipe and stall the child.
   var outputData = Data()
@@ -71,6 +86,9 @@ func runProcess(_ path: String, _ arguments: [String], target: String, timeout: 
     throw HelperError(code: "timeout", message: "\(target) did not answer within \(Int(timeout)) seconds.")
   }
   _ = readers.wait(timeout: .now() + 2)
+  if stopped.withLock({ interrupted }), process.terminationReason == .uncaughtSignal {
+    throw HelperError(code: "interrupted", message: "The request was cancelled while \(target) was working, so it was stopped.")
+  }
   return (process.terminationStatus, String(data: outputData, encoding: .utf8) ?? "", String(data: errorData, encoding: .utf8) ?? "")
 }
 

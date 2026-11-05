@@ -10,12 +10,23 @@ private let prelude = #"""
   // content as soon as it changes.
   function documentNamed(query) {
     const byId = App.documents.byId(query);
-    try { byId.name(); return byId; } catch (error) {}
+    let found = true;
+    try { byId.name(); } catch (error) { found = false; }
+    if (found) return reachable(byId);
     const matches = App.documents.whose({ name: query });
     const count = matches.length;
     if (count === 0) fail('not_found', 'No open document is named ' + query + '. Use list_documents.');
     if (count > 1) fail('ambiguous', 'Several open documents are named ' + query + '. Give its id.');
-    return App.documents.byId(matches[0].id());
+    return reachable(App.documents.byId(matches[0].id()));
+  }
+  // A document already open from elsewhere, such as /tmp, is outside what operations may touch.
+  function reachable(document) {
+    let path = '';
+    try { path = document.file().toString(); } catch (error) {}
+    if (path !== '' && !(path.startsWith(args.home_dir + '/') || path.startsWith('/Volumes/'))) {
+      fail('not_allowed', 'This document is not in your home folder or on an external volume, so operations cannot reach it.');
+    }
+    return document;
   }
   function describe(document) {
     let path = '';
@@ -26,7 +37,7 @@ private let prelude = #"""
 
 // The app is the one runOperation chose, passed as app_id; the definition's own id is the fallback.
 private func run(_ body: String, app: String, _ arguments: JSON, name: String, timeout: TimeInterval = 60) throws -> JSON {
-  try dictionary(runScript(prelude + body, arguments: arguments.merging(["app_id": app]) { current, _ in current }, target: name, timeout: timeout), from: name)
+  try dictionary(runScript(prelude + body, arguments: arguments.merging(["app_id": app]) { current, _ in current }.merging(["home_dir": resolvedHome]) { _, home in home }, target: name, timeout: timeout), from: name)
 }
 
 private let documentArgument = Argument(name: "document", kind: .string, required: true, description: "Document id or name from list_documents")
@@ -38,7 +49,7 @@ private func documentOperations(app: String, name: String) -> [Operation] {
     try run("return { documents: App.documents().map(describe) };", app: app, arguments, name: name)
   }
   let open = Operation(name: "open", summary: "Open a file as a document, behind the app you are in", effect: .changes, arguments: [pathArgument]) { arguments in
-    let url = try userPath(arguments)
+    let url = try userPath(arguments, followingLink: true)
     var result = try run("return describe(App.open(Path(args.path)));", app: app, ["path": url.path, "app_id": arguments["app_id"] ?? app], name: name)
     // A file in another format, such as CSV or plain text, opens as a new document with no file of its own.
     let path = result["path"] as? String ?? ""

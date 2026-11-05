@@ -204,11 +204,21 @@ private func write(_ reply: JSON, to connection: Connection) {
   }
 }
 
+private let connectionKey = "connection"
+
+// The connection whose request runs on this thread, so deep waits such as a script child can end when the
+// request is cancelled without every caller passing it down.
+func currentConnection() -> Connection? { Thread.current.threadDictionary[connectionKey] as? Connection }
+
 private func perform(_ request: JSON, generation: Int, connection: Connection) {
   let id = request["id"] ?? NSNull()
   let key = request["id"].map { "\($0)" }
   connection.begin(generation: generation, id: key)
-  defer { connection.finish(id: key) }
+  Thread.current.threadDictionary[connectionKey] = connection
+  defer {
+    Thread.current.threadDictionary.removeObject(forKey: connectionKey)
+    connection.finish(id: key)
+  }
   do {
     try connection.throwIfCancelled()
     if let deadline = request["deadline"] as? Double, Date().timeIntervalSince1970 * 1000 > deadline {

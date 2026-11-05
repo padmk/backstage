@@ -544,13 +544,16 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   case "status":
     return [
       "accessibility": AXIsProcessTrusted(), "screen_recording": CGPreflightScreenCaptureAccess(), "version": Configuration.buildVersion,
-      "app_access": appGrants.map { ["name": $0.name, "state": grantState($0).rawValue] as JSON },
+      // The same grants as the Permissions tab: those of the listed apps.
+      "app_access": appGrants(forListed: Set(ApprovalStore.list().compactMap { $0["bundle_id"] }), everyApp: Preferences.allowsEveryApp)
+        .map { ["name": $0.name, "state": grantState($0).rawValue] as JSON },
     ] as JSON
 
   case "request_permissions":
     let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
     let accessibility = AXIsProcessTrustedWithOptions(options)
-    let screen = CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess()
+    // Screen Recording is optional, so it is asked for only when the caller says so.
+    let screen = CGPreflightScreenCaptureAccess() || (params["screen_recording"] as? Bool == true && CGRequestScreenCaptureAccess())
     return ["accessibility": accessibility, "screen_recording": screen] as JSON
 
   case "quit":
@@ -566,13 +569,13 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   case "approvals_revoke":
     let bundleId = try string(params, "bundle_id")
     let revoked = try ApprovalStore.revoke(bundleId: bundleId)
-    if revoked { writeDecisionLog(client: "settings", bundleId: bundleId, decision: "removed") }
+    if revoked { writeDecisionLog(client: commandLineClient, bundleId: bundleId, decision: "removed") }
     return ["revoked": revoked] as JSON
 
   case "approvals_add":
     let query = try string(params, "app")
     let app = try (try? resolve(query)) ?? installedIdentity(try installedApp(query))
-    try addToList(app, by: "settings")
+    try addToList(app, by: commandLineClient)
     return ["added": app.bundleId, "name": app.name] as JSON
 
   case "list_apps":

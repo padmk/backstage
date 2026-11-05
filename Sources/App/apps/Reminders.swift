@@ -103,11 +103,20 @@ private let add = Operation(
     item.notes = optionalString(arguments, "notes")
     item.priority = priorities[optionalString(arguments, "priority") ?? "none"] ?? 0
     try store.save(item, commit: true)
-    let saved = try reminder(item.calendarItemIdentifier, in: confirmingStore())
+    let saved = try savedReminder(item.calendarItemIdentifier)
     var result = describe(saved)
     result["verified"] = saved.title == item.title && dueText(saved.dueDateComponents) == dueText(item.dueDateComponents)
     return result
   }
+}
+
+// After a save succeeded, a reminder that cannot be read back may still have been saved, so the agent is told to
+// look before trying again rather than that it does not exist.
+private func savedReminder(_ id: String) throws -> EKReminder {
+  guard let saved = try? reminder(id, in: confirmingStore()) else {
+    throw HelperError(code: "outcome_unknown", message: "Reminders saved the change but reminder \(id) cannot be read back. List the reminders before trying again.")
+  }
+  return saved
 }
 
 private let complete = Operation(
@@ -123,7 +132,7 @@ private let complete = Operation(
     let wanted = arguments["completed"] as? Bool ?? true
     item.isCompleted = wanted
     try store.save(item, commit: true)
-    let saved = try reminder(item.calendarItemIdentifier, in: confirmingStore())
+    let saved = try savedReminder(item.calendarItemIdentifier)
     var result = describe(saved)
     result["verified"] = saved.isCompleted == wanted
     return result

@@ -25,7 +25,8 @@ private func chipText(_ decision: String) -> String {
 }
 
 private func who(_ client: String?) -> String {
-  if client == "settings" { return ControlTexts.you }
+  if client == settingsClient { return ControlTexts.you }
+  if client == commandLineClient { return ControlTexts.commandLine }
   return readableClientName(client) ?? ControlTexts.anAgent
 }
 

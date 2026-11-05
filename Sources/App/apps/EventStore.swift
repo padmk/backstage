@@ -11,6 +11,8 @@ private var checkingStore = EKEventStore()
 // One operation at a time, because the store is shared and saving is not safe to interleave.
 func withEventStore<T>(_ type: EKEntityType, _ work: (EKEventStore) throws -> T) throws -> T {
   try lock.withLock {
+    // The wait for the lock can outlast a cancel; nothing has changed yet.
+    try currentConnection()?.throwIfCancelled()
     try requireAccess(to: type)
     return try work(store)
   }
@@ -23,28 +25,14 @@ func confirmingStore() -> EKEventStore {
   return checkingStore
 }
 
+// Only the user's choice in Backstage asks (requestEventAccess); an operation that finds no answer yet fails
+// with what to do.
 private func requireAccess(to type: EKEntityType) throws {
   let pane = type == .reminder ? "Reminders" : "Calendars"
   switch EKEventStore.authorizationStatus(for: type) {
-  case .fullAccess:
-    return
-  case .notDetermined:
-    let answered = DispatchSemaphore(value: 0)
-    var granted = false
-    let completion: EKEventStoreRequestAccessCompletionHandler = { result, _ in
-      granted = result
-      answered.signal()
-    }
-    if type == .reminder { store.requestFullAccessToReminders(completion: completion) } else { store.requestFullAccessToEvents(completion: completion) }
-    guard answered.wait(timeout: .now() + .seconds(accessRequestSeconds)) == .success else {
-      throw HelperError(code: "access_denied", message: "macOS asked whether Backstage may use \(pane) and got no answer. Try again and answer the prompt.")
-    }
-    guard granted else { throw accessDenied(pane) }
-    // A store made before the grant does not see the accounts.
-    store = EKEventStore()
-    checkingStore = EKEventStore()
-  default:
-    throw accessDenied(pane)
+  case .fullAccess: return
+  case .notDetermined: throw grantMissing(pane)
+  default: throw accessDenied(pane)
   }
 }
 
@@ -135,7 +123,18 @@ func eventAccessState(_ type: EKEntityType) -> GrantState {
   }
 }
 
-// Shows macOS's prompt when it has not asked yet.
+// Shows macOS's prompt when it has not asked yet. The wait for the user's answer holds no lock, so operations
+// do not queue behind the prompt; the stores are replaced afterwards, since one made before the grant does
+// not see the accounts.
 func requestEventAccess(_ type: EKEntityType) {
-  _ = try? lock.withLock { try requireAccess(to: type) }
+  guard EKEventStore.authorizationStatus(for: type) == .notDetermined else { return }
+  let answered = DispatchSemaphore(value: 0)
+  let asking = EKEventStore()
+  let completion: EKEventStoreRequestAccessCompletionHandler = { _, _ in answered.signal() }
+  if type == .reminder { asking.requestFullAccessToReminders(completion: completion) } else { asking.requestFullAccessToEvents(completion: completion) }
+  _ = answered.wait(timeout: .now() + .seconds(accessRequestSeconds))
+  lock.withLock {
+    store = EKEventStore()
+    checkingStore = EKEventStore()
+  }
 }

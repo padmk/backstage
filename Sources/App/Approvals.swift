@@ -18,6 +18,8 @@ struct AppIdentity {
 private let neverApproved: Set<String> = [
   "com.apple.SecurityAgent", "com.apple.loginwindow", "com.apple.LocalAuthentication.UIAgent",
   "com.apple.Passwords", "com.apple.keychainaccess",
+  // The windows in which macOS asks for a permission.
+  "com.apple.tcc.AuthorizationPromptService", "com.apple.UserNotificationCenter",
 ]
 
 // These apps can run commands or change the system, so allowing one gives agents far more than the app; the list
@@ -30,7 +32,12 @@ private let farReaching: Set<String> = [
 ]
 
 func isFarReaching(_ bundleId: String) -> Bool { farReaching.contains(bundleId) }
-func isNeverApproved(_ bundleId: String) -> Bool { neverApproved.contains(bundleId) || bundleId == Bundle.main.bundleIdentifier }
+// Whole families too: Passwords has helpers such as its menu bar extra under its own prefix.
+private let neverApprovedPrefixes = ["com.apple.Passwords.", "com.apple.keychainaccess."]
+
+func isNeverApproved(_ bundleId: String) -> Bool {
+  neverApproved.contains(bundleId) || neverApprovedPrefixes.contains { bundleId.hasPrefix($0) } || bundleId == Bundle.main.bundleIdentifier
+}
 
 private let maxClientNameLength = 40
 
@@ -80,10 +87,20 @@ private func validStaticCode(of app: AppIdentity) -> SecStaticCode? {
   return staticCode
 }
 
-// Approvals name who signed the app, so another app claiming the same bundle id is asked for. A signature
+// Code that Apple signed as part of macOS. Apple's own apps have no team id, and their code hash changes with
+// every system update, so they are named by this anchor instead.
+private let appleAnchor: SecRequirement? = {
+  var requirement: SecRequirement?
+  return SecRequirementCreateWithString("anchor apple" as CFString, [], &requirement) == errSecSuccess ? requirement : nil
+}()
+
+// List entries name who signed the app, so another app claiming the same bundle id is not covered. A signature
 // that does not verify counts as none. The running process is what gets checked once there is one.
 func signingIdentity(of app: AppIdentity) -> String? {
   guard let staticCode = validStaticCode(of: app) else { return nil }
+  if let appleAnchor, SecStaticCodeCheckValidity(staticCode, SecCSFlags(rawValue: kSecCSDoNotValidateResources), appleAnchor) == errSecSuccess {
+    return "apple"
+  }
   var information: CFDictionary?
   guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
     let details = information as? [String: Any]
@@ -132,7 +149,9 @@ enum ApprovalStore {
   static func contains(bundleId: String, signer: @autoclosure () -> String?) -> Bool {
     let entries = lock.withLock { read().filter { $0["bundle_id"] == bundleId } }
     guard !entries.isEmpty, let signer = signer() else { return false }
-    return entries.contains { $0["signer"] == signer }
+    // Entries made before Apple's apps were named by the anchor hold a code hash that a system update changes;
+    // the bundle id together with Apple's signature identifies the app the user chose.
+    return entries.contains { $0["signer"] == signer || (signer == "apple" && $0["signer"]?.hasPrefix("cdhash:") == true) }
   }
 
   static func add(bundleId: String, signer: String) throws {
@@ -181,6 +200,10 @@ func recentDecisions(limit: Int) -> [DecisionRecord] {
 
 // Connections log from their own threads; one lock keeps each record whole and in place.
 private let decisionLogLock = NSLock()
+
+// Who changed the list, as the Activity tab shows it: the window, or a request to the socket such as the
+// command line, which an agent with a shell can also send.
+let settingsClient = "settings", commandLineClient = "command_line"
 
 func writeDecisionLog(client: String?, bundleId: String, decision: String) {
   let entry: JSON = [

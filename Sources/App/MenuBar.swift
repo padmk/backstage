@@ -35,7 +35,6 @@ final class MenuBarItem: NSObject, NSMenuDelegate {
     menu.removeAllItems()
     var missing: [String] = []
     if !AXIsProcessTrusted() { missing.append(ControlTexts.accessibility) }
-    if !CGPreflightScreenCaptureAccess() { missing.append(ControlTexts.screenRecording) }
     let status = missing.isEmpty ? ControlTexts.ready : ControlTexts.needs(missing.joined(separator: " and "))
     menu.addItem(entry(status, symbol: missing.isEmpty ? "checkmark.circle" : "exclamationmark.triangle",
                        action: missing.isEmpty ? nil : #selector(openPermissions)))

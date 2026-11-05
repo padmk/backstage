@@ -165,11 +165,23 @@ func runOperation(_ params: JSON, session: ApprovalSession, connection: Connecti
   }
   var result: JSON
   do {
+    // Nothing has acted yet: a failure here leaves no change.
+    try requireAutomation(for: operation.name, of: target.bundleId)
+    try connection.throwIfCancelled()
+  } catch {
+    _ = tidyUp()
+    throw error
+  }
+  do {
     // Operations that address the app by id get the one actually chosen.
     result = try operation.run(arguments.merging(["app_id": target.bundleId]) { $1 })
-  } catch let error as HelperError where error.code == "timeout" && operation.effect == .changes {
+  } catch let error as HelperError where ["timeout", "interrupted"].contains(error.code) && operation.effect == .changes {
+    // The child was running, so the change may have been made; a cancel before any work stays `cancelled`.
     _ = tidyUp()
     throw HelperError(code: "outcome_unknown", message: "\(error.message) The change may have been made. Read the state before trying again.")
+  } catch let error as HelperError where error.code == "interrupted" {
+    _ = tidyUp()
+    throw HelperError(code: "cancelled", message: error.message)
   } catch {
     _ = tidyUp()
     throw error
@@ -203,6 +215,10 @@ private let startSeconds = 20.0
 
 private func startHidden(_ app: AppKnowledge, at path: String?) throws -> NSRunningApplication {
   guard let path else { throw HelperError(code: "app_not_found", message: "\(app.name) is not installed.") }
+  return try startAppHidden(at: path, name: app.name)
+}
+
+func startAppHidden(at path: String, name: String) throws -> NSRunningApplication {
   let configuration = NSWorkspace.OpenConfiguration()
   configuration.activates = false
   configuration.hides = true
@@ -219,10 +235,10 @@ private func startHidden(_ app: AppKnowledge, at path: String?) throws -> NSRunn
   }
   let deadline = Date().addingTimeInterval(startSeconds)
   guard done.wait(timeout: .now() + startSeconds) == .success else {
-    throw HelperError(code: "timeout", message: "\(app.name) did not start in time.")
+    throw HelperError(code: "timeout", message: "\(name) did not start in time.")
   }
   if let failure { throw HelperError(code: "action_failed", message: failure.localizedDescription) }
-  guard let launched else { throw HelperError(code: "action_failed", message: "\(app.name) did not start.") }
+  guard let launched else { throw HelperError(code: "action_failed", message: "\(name) did not start.") }
   // Apple events sent before the app has finished starting can go unanswered.
   while !launched.isFinishedLaunching, Date() < deadline { sleep(seconds: 0.05) }
   return launched

@@ -1,5 +1,6 @@
-// The macOS grants that operations need, so the user can give them all at once instead of meeting each prompt
-// in the middle of a task. They are macOS's, not Backstage's: each app still needs a Backstage approval.
+// The macOS grants that ready operations need. macOS asks for one when the user puts its app on the list, while
+// they are at the keyboard; an operation never shows the prompt itself, so no task stops on a dialog no one sees.
+// They are macOS's, not Backstage's: an app still needs to be on the list.
 
 import AppKit
 import CoreServices
@@ -20,6 +21,9 @@ struct AppGrant: Identifiable {
   let name: String
   let purpose: String
   let kind: Kind
+  // The apps on the list whose operations use it, and which of their operations; nil means all of them.
+  let listedApps: [String]
+  var operations: Set<String>? = nil
 
   // The app whose icon shows next to the grant.
   var appBundleId: String {
@@ -41,18 +45,69 @@ struct AppGrant: Identifiable {
 }
 
 let appGrants: [AppGrant] = [
-  AppGrant(id: "calendars", name: "Calendars", purpose: "Read and add events", kind: .events(.event)),
-  AppGrant(id: "reminders", name: "Reminders", purpose: "Read, add and complete reminders", kind: .events(.reminder)),
-  AppGrant(id: "contacts", name: "Contacts", purpose: "Find, read and add contacts", kind: .contacts),
-  AppGrant(id: "notes", name: "Notes", purpose: "Find, read and create notes", kind: .automation(bundleId: "com.apple.Notes")),
-  AppGrant(id: "mail", name: "Mail", purpose: "Read mail and save drafts", kind: .automation(bundleId: "com.apple.mail")),
-  AppGrant(id: "messages", name: "Messages", purpose: "Send messages", kind: .automation(bundleId: "com.apple.MobileSMS")),
-  AppGrant(id: "finder", name: "Finder", purpose: "Selection, tags and Trash", kind: .automation(bundleId: "com.apple.finder")),
-  AppGrant(id: "pages", name: "Pages", purpose: "Open, read and export documents", kind: .automation(bundleId: installedBundleId(pagesKnowledge) ?? pagesKnowledge.bundleId)),
-  AppGrant(id: "numbers", name: "Numbers", purpose: "Read and change spreadsheets", kind: .automation(bundleId: installedBundleId(numbersKnowledge) ?? numbersKnowledge.bundleId)),
-  AppGrant(id: "music", name: "Music", purpose: "Control playback", kind: .automation(bundleId: "com.apple.Music")),
-  AppGrant(id: "system-events", name: "System Events", purpose: "Switch dark and light appearance", kind: .automation(bundleId: "com.apple.systemevents")),
+  AppGrant(id: "calendars", name: "Calendars", purpose: "Read and add events", kind: .events(.event), listedApps: ["com.apple.iCal"]),
+  AppGrant(id: "reminders", name: "Reminders", purpose: "Read, add and complete reminders", kind: .events(.reminder), listedApps: ["com.apple.reminders"]),
+  AppGrant(id: "contacts", name: "Contacts", purpose: "Find, read and add contacts", kind: .contacts, listedApps: ["com.apple.AddressBook"]),
+  AppGrant(id: "notes", name: "Notes", purpose: "Find, read and create notes", kind: .automation(bundleId: "com.apple.Notes"), listedApps: ["com.apple.Notes"]),
+  AppGrant(id: "mail", name: "Mail", purpose: "Read mail and save drafts", kind: .automation(bundleId: "com.apple.mail"), listedApps: ["com.apple.mail"]),
+  AppGrant(id: "messages", name: "Messages", purpose: "List chats and send messages", kind: .automation(bundleId: "com.apple.MobileSMS"), listedApps: ["com.apple.MobileSMS"],
+           operations: ["list_chats", "send"]),
+  // Tags and the Trash of a symbolic link go through the file system, not Finder.
+  AppGrant(id: "finder", name: "Finder", purpose: "Selection, reveal and Trash", kind: .automation(bundleId: "com.apple.finder"), listedApps: ["com.apple.finder"],
+           operations: ["selection", "front_folder", "reveal", "trash"]),
+] + scriptedGrants("pages", purpose: "Open, read and export documents", of: pagesKnowledge)
+  + scriptedGrants("numbers", purpose: "Read and change spreadsheets", of: numbersKnowledge) + [
+  AppGrant(id: "music", name: "Music", purpose: "Control playback", kind: .automation(bundleId: "com.apple.Music"), listedApps: ["com.apple.Music"]),
+  // Only the appearance operations of System Settings script System Events; the volume uses no other app.
+  AppGrant(id: "system-events", name: "System Events", purpose: "Switch dark and light appearance", kind: .automation(bundleId: "com.apple.systemevents"),
+           listedApps: ["com.apple.systempreferences"], operations: ["get_appearance", "set_appearance"]),
 ]
+
+// One grant for each version the app definition knows, since macOS grants Automation per bundle id and each can
+// be on the list. Whether a version is installed is checked when the grants are shown, not here.
+private func scriptedGrants(_ id: String, purpose: String, of app: AppKnowledge) -> [AppGrant] {
+  let several = app.bundleIds.count > 1
+  return app.bundleIds.map { bundleId in
+    AppGrant(id: several ? "\(id)-\(bundleId)" : id, name: several ? "\(app.name) (\(bundleId))" : app.name,
+             purpose: purpose, kind: .automation(bundleId: bundleId), listedApps: [bundleId])
+  }
+}
+
+// The grants that matter for the apps on the list: those of every installed app while every app is allowed.
+func appGrants(forListed bundleIds: Set<String>, everyApp: Bool) -> [AppGrant] {
+  everyApp
+    ? appGrants.filter { grant in grant.listedApps.contains { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil } }
+    : appGrants.filter { !bundleIds.isDisjoint(with: $0.listedApps) }
+}
+
+// Before an operation runs: a missing Automation grant fails at once with what to do, instead of a prompt
+// mid-task. macOS can tell only for a running app, so a target that is not running, such as System Events for
+// the appearance operations, starts hidden first; when macOS still cannot tell, the operation does not run.
+func requireAutomation(for operation: String, of appBundleId: String) throws {
+  guard let grant = appGrants.first(where: { $0.listedApps.contains(appBundleId) && ($0.operations?.contains(operation) ?? true) }),
+    case .automation(let target) = grant.kind
+  else { return }
+  var state = automationState(target, ask: false)
+  if state == .unknown, let url = onMain({ NSWorkspace.shared.urlForApplication(withBundleIdentifier: target) }) {
+    _ = try startAppHidden(at: url.path, name: grant.name)
+    state = automationState(target, ask: false)
+  }
+  switch state {
+  case .granted: return
+  case .notAsked: throw grantMissing(grant.name)
+  case .denied: throw grantDenied(grant.name)
+  case .unknown:
+    throw HelperError(code: "permission_missing", message: "macOS could not tell whether Backstage may use \(grant.name), so the operation did not run. Ask the user to check it in Backstage, on the Permissions tab, under App access.")
+  }
+}
+
+func grantMissing(_ name: String) -> HelperError {
+  HelperError(code: "permission_missing", message: "macOS has not been asked yet whether Backstage may use \(name). Ask the user to allow it in Backstage, on the Permissions tab, under App access. Backstage does not show that prompt during a task.")
+}
+
+func grantDenied(_ name: String) -> HelperError {
+  HelperError(code: "access_denied", message: "macOS does not let Backstage use \(name). The user can turn it on in System Settings > Privacy & Security, or Backstage's Permissions tab links there.")
+}
 
 func grantState(_ grant: AppGrant) -> GrantState {
   switch grant.kind {
@@ -68,15 +123,16 @@ func requestGrant(_ grant: AppGrant) {
   case .contacts: requestContactsAccess()
   case .events(let type): requestEventAccess(type)
   case .automation(let bundleId):
-    // macOS asks only about a running app; an Apple event starts it in the background when it is not.
-    if automationState(bundleId, ask: false) == .unknown {
-      _ = try? runScript("Application(args.id).name(); return true;", arguments: ["id": bundleId], target: bundleId)
+    // macOS asks only about a running app, so one that is not running starts hidden, behind the user's work.
+    if automationState(bundleId, ask: false) == .unknown,
+      let url = onMain({ NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) }) {
+      _ = try? startAppHidden(at: url.path, name: grant.name)
     }
     _ = automationState(bundleId, ask: true)
   }
 }
 
-private func automationState(_ bundleId: String, ask: Bool) -> GrantState {
+func automationState(_ bundleId: String, ask: Bool) -> GrantState {
   var target = AEAddressDesc()
   let identifier = Array(bundleId.utf8)
   guard AECreateDesc(typeApplicationBundleID, identifier, identifier.count, &target) == noErr else { return .unknown }
