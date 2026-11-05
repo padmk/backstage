@@ -116,7 +116,19 @@ final class ControlModel: ObservableObject {
     refresh()
   }
 
+  // Turning it on reaches past a protection macOS applies on purpose, so the user confirms that once each time.
   func setWindowsWhileLocked(_ on: Bool) {
+    if on {
+      let alert = NSAlert()
+      alert.messageText = ControlTexts.windowsWhileLockedConfirmTitle
+      alert.informativeText = ControlTexts.windowsWhileLockedConfirmDetail
+      alert.addButton(withTitle: ControlTexts.windowsWhileLockedConfirm)
+      alert.addButton(withTitle: ControlTexts.cancel)
+      guard alert.runModal() == .alertFirstButtonReturn else {
+        refresh()
+        return
+      }
+    }
     Preferences.worksInWindowsWhileLocked = on
     writeDecisionLog(client: settingsClient, bundleId: "*", decision: on ? "locked_windows_on" : "locked_windows_off")
     refresh()
