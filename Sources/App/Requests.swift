@@ -57,13 +57,13 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     if let query = params["app"] as? String {
       let app = try (try? resolve(query)) ?? installedIdentity(try installedApp(query))
       return ["app": ["name": app.name, "bundle_id": app.bundleId, "running": app.pid != 0, "access": ApprovalGate.access(app).rawValue],
-              "every_app": Preferences.allowsEveryApp, "screen_locked": isScreenLocked()] as JSON
+              "every_app": Preferences.allowsEveryApp, "screen_locked": isScreenLocked(), "windows_while_locked": Preferences.worksInWindowsWhileLocked] as JSON
     }
     return ["apps": visibleApps().map { running in
       var entry = describe(running)
       entry["access"] = ApprovalGate.access(identity(of: running)).rawValue
       return entry
-    }, "every_app": Preferences.allowsEveryApp, "screen_locked": isScreenLocked()] as JSON
+    }, "every_app": Preferences.allowsEveryApp, "screen_locked": isScreenLocked(), "windows_while_locked": Preferences.worksInWindowsWhileLocked] as JSON
 
   case "launch_app":
     return try launch(string(params, "app"), session: session, connection: connection)
@@ -94,6 +94,10 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     try requireScreenUnlocked(method, params: params, app: app, session: session)
     if method == "run_actions" || actionMethods.contains(method) { try requireUserNotWorking(in: app) }
     try connection.throwIfCancelled()
+    if isScreenLocked(), worksOnLockedWindows(method, params: params) {
+      if method != "screenshot" { try requireAccessibility() }
+      return try lockedWindowRequest(method, app: app, params: params)
+    }
     return try performAppRequest(method, app: app, params: params, session: session)
   }
 }

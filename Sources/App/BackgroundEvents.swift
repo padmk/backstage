@@ -4,9 +4,9 @@
 import AppKit
 import ApplicationServices
 
-private let skyLight = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_NOW)
+let skyLight = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_NOW)
 
-private func lookUp<Function>(_ name: String, as type: Function.Type, in library: UnsafeMutableRawPointer?) -> Function? {
+func lookUp<Function>(_ name: String, as type: Function.Type, in library: UnsafeMutableRawPointer?) -> Function? {
   dlsym(library, name).map { unsafeBitCast($0, to: type) }
 }
 

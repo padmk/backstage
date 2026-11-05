@@ -29,6 +29,7 @@ final class ControlModel: ObservableObject {
   @Published var loginProblem: String?
   @Published var showsMenuBarItem = false
   @Published var allowsEveryApp = false
+  @Published var worksInWindowsWhileLocked = false
   private var timer: Timer?
 
   // A live model refreshes every second; a fixed one, for rendering a state, does not read anything.
@@ -62,6 +63,8 @@ final class ControlModel: ObservableObject {
     if menuBar != showsMenuBarItem { showsMenuBarItem = menuBar }
     let everyApp = Preferences.allowsEveryApp
     if everyApp != allowsEveryApp { allowsEveryApp = everyApp }
+    let lockedWindows = Preferences.worksInWindowsWhileLocked
+    if lockedWindows != worksInWindowsWhileLocked { worksInWindowsWhileLocked = lockedWindows }
   }
 
   // macOS asks one prompt at a time and waits for the answer, so the requests run in turn, off the main thread.
@@ -110,6 +113,12 @@ final class ControlModel: ObservableObject {
   func setEveryApp(_ on: Bool) {
     Preferences.allowsEveryApp = on
     writeDecisionLog(client: settingsClient, bundleId: "*", decision: on ? "every_app_on" : "every_app_off")
+    refresh()
+  }
+
+  func setWindowsWhileLocked(_ on: Bool) {
+    Preferences.worksInWindowsWhileLocked = on
+    writeDecisionLog(client: settingsClient, bundleId: "*", decision: on ? "locked_windows_on" : "locked_windows_off")
     refresh()
   }
 

@@ -49,7 +49,7 @@ let maxSteps = 20
 let tools: [ToolDefinition] = [
   ToolDefinition(
     name: "list_apps",
-    description: "List running apps with `access` for each: `allowed`, `not_approved` (not on the user's list) or `never_available`. With app: that app, running or installed, without starting it. Check this before using an app by any route. Being listed here does not allow an app. `screen_locked: true` means windows are out of reach until the user unlocks the Mac; ready operations and the menu bar still work.",
+    description: "List running apps with `access` for each: `allowed`, `not_approved` (not on the user's list) or `never_available`. With app: that app, running or installed, without starting it. Check this before using an app by any route. Being listed here does not allow an app. `screen_locked: true` means windows cannot be read until the user unlocks the Mac; ready operations and the menu bar still work, and with `windows_while_locked` (the user's setting) so do screenshot, click_at with x and y, and press_key and type_text without an element, unverified.",
     properties: [
       ("app", ["type": "string", "description": "App name or bundle id"] as JSON)
     ],

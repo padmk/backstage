@@ -75,6 +75,13 @@ struct SetupTab: View {
           .labelsHidden().toggleStyle(.switch).tint(Palette.sky)
           .disabled(!Preferences.isInstalledCopy)
       }
+      RowDivider()
+      ControlRow(icon: .symbol("lock.display"), title: ControlTexts.windowsWhileLocked,
+                 detail: model.worksInWindowsWhileLocked ? ControlTexts.windowsWhileLockedOn : ControlTexts.windowsWhileLockedOff,
+                 detailColor: model.worksInWindowsWhileLocked ? Palette.amber : Palette.secondary) {
+        Toggle("", isOn: Binding(get: { model.worksInWindowsWhileLocked }, set: { model.setWindowsWhileLocked($0) }))
+          .labelsHidden().toggleStyle(.switch).tint(Palette.sky)
+      }
     }
 
     ListSection(heading: ControlTexts.macOSPermissions) {

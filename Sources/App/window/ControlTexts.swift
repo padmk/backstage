@@ -9,6 +9,9 @@ enum ControlTexts {
   static let everyApp = "Allow every app"
   static let everyAppOff = "Off: only the apps on the list below."
   static let everyAppOn = "On: agents may use any app except Passwords, Keychain Access and Backstage."
+  static let windowsWhileLocked = "Windows while locked"
+  static let windowsWhileLockedOff = "Off: while the screen is locked, agents use ready operations and menus only."
+  static let windowsWhileLockedOn = "On: while the screen is locked, agents see screenshots of the windows and click and type by position, unverified, through private macOS calls. The Mac stays locked."
   static let add = "Add App…"
   static let noApps = "No apps yet", noAppsDetail = "Add the apps agents may use with Add App…\nAn app that is not here is refused, without asking."
   static let remove = "Remove"
@@ -41,7 +44,7 @@ enum ControlTexts {
   static let loginUnavailable = "Available when Backstage is in Applications."
   static func loginFailed(_ reason: String) -> String { "Could not change this: \(reason)." }
   static let showInMenuBar = "Show in menu bar", showInMenuBarDetail = "Status, agents and apps, one click away."
-  static let keepsRunning = "While either is on, Backstage keeps running instead of stopping when idle."
+  static let keepsRunning = "While Open at login or Show in menu bar is on, Backstage keeps running instead of stopping when idle."
   static func version(_ name: String, _ number: String) -> String { "\(name) \(number)" }
 
   static let ready = "Ready"

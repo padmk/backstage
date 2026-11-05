@@ -30,8 +30,13 @@ func selectWindow(_ application: AXUIElement, params: JSON) throws -> AXUIElemen
 }
 
 private func header(app: AppIdentity, application: AXUIElement, selected: AXUIElement?) -> String {
-  let all = windows(of: application)
   var parts = ["app=\"\(app.name)\""]
+  // While the screen is locked only the window server knows the windows; they are numbered as screenshot takes them.
+  if isScreenLocked() {
+    let titles = lockedWindows(pid: app.pid).enumerated().map { "\($0.offset):\"\(clamped($0.element.title))\"" }
+    return (parts + ["windows=[\(titles.joined(separator: " "))]", "screen=locked"]).joined(separator: " ")
+  }
+  let all = windows(of: application)
   let titles = all.enumerated().map { index, window -> String in
     let isSelected = selected.map { CFEqual($0, window) } ?? false
     return "\(index)\(isSelected ? "*" : ""):\"\(clamped(stringAttribute(window, kAXTitleAttribute) ?? ""))\""
@@ -201,7 +206,7 @@ private func watchValue(of element: AXUIElement, from before: AnyObject?, until 
   return outcome
 }
 
-private func requireTextForKeys(_ text: String) throws {
+func requireTextForKeys(_ text: String) throws {
   // Return may submit a form and Tab moves the focus, so these never go out as a side effect of text.
   if text.contains(where: { $0.isNewline || $0 == "\t" }) {
     throw HelperError(code: "invalid_request", message: "This route sends keys, so line breaks and tabs are refused. Use press_key for them.")

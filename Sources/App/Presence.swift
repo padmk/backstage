@@ -25,10 +25,14 @@ func isScreenLocked() -> Bool {
 }
 
 func requireScreenUnlocked(_ method: String, params: JSON, app: AppIdentity, session: ApprovalSession) throws {
-  guard isScreenLocked(), !worksWhileLocked(method, params: params, app: app, session: session) else { return }
+  guard isScreenLocked(), !worksWhileLocked(method, params: params, app: app, session: session),
+    !worksOnLockedWindows(method, params: params) else { return }
+  let windows = Preferences.worksInWindowsWhileLocked
+    ? " The user also allows screenshot, click_at with x and y, and press_key and type_text without an element; they work from screenshots and are never verified."
+    : ""
   throw HelperError(
     code: "screen_locked",
-    message: "The Mac's screen is locked, so app windows cannot be read or operated until the user unlocks it. Still available: ready operations (list_operations), and the app's menu bar: get_window_state with menu_bar: true, then press on its menu items. Do not try to unlock it; wait or tell the user.")
+    message: "The Mac's screen is locked, so app windows cannot be read until the user unlocks it. Still available: ready operations (list_operations), and the app's menu bar: get_window_state with menu_bar: true, then press on its menu items.\(windows) Do not try to unlock it; wait or tell the user.")
 }
 
 private let menuRoles: Set<String> = ["AXMenuBar", "AXMenuBarItem", "AXMenu", "AXMenuItem"]

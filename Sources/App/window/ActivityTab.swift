@@ -5,8 +5,8 @@ import SwiftUI
 // Entries written before the app list existed keep a readable label.
 private func chipColor(_ decision: String) -> Color {
   switch decision {
-  case "decline", "removed", "every_app_on": Palette.coral
-  case "added", "every_app_off", "hour", "day", "week", "always": Palette.sky
+  case "decline", "removed", "every_app_on", "locked_windows_on": Palette.coral
+  case "added", "every_app_off", "locked_windows_off", "hour", "day", "week", "always": Palette.sky
   default: Palette.secondary
   }
 }
@@ -18,6 +18,8 @@ private func chipText(_ decision: String) -> String {
   case "removed": "Removed"
   case "every_app_on": "Every app on"
   case "every_app_off": "Every app off"
+  case "locked_windows_on": "On"
+  case "locked_windows_off": "Off"
   case "decline": "Denied"
   case "once", "session", "hour", "day", "week", "always": "Approved"
   default: decision
@@ -40,8 +42,10 @@ struct ActivityTab: View {
       }
       ForEach(Array(model.recent.enumerated()), id: \.element.id) { index, record in
         if index > 0 { RowDivider() }
-        ControlRow(icon: record.bundleId == "*" ? .symbol("square.grid.2x2") : .app(record.bundleId),
-                   title: record.bundleId == "*" ? ControlTexts.everyApp : AppRow(bundleId: record.bundleId).name,
+        let isLockedWindows = record.decision.hasPrefix("locked_windows")
+        ControlRow(icon: isLockedWindows ? .symbol("lock.display") : record.bundleId == "*" ? .symbol("square.grid.2x2") : .app(record.bundleId),
+                   title: isLockedWindows ? ControlTexts.windowsWhileLocked
+                     : record.bundleId == "*" ? ControlTexts.everyApp : AppRow(bundleId: record.bundleId).name,
                    detail: who(record.client)) {
           HStack(spacing: 8) {
             Text(chipText(record.decision))

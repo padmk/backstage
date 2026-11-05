@@ -6,6 +6,7 @@ enum Preferences {
   private static let menuBarKey = "showsMenuBarItem"
   private static let everyAppKey = "allowsEveryApp"
   private static let tabKey = "controlTab"
+  private static let lockedWindowsKey = "worksInWindowsWhileLocked"
 
   // Only the copy in Applications keeps running, shows a menu bar item or starts at login, so test and
   // development copies elsewhere never do.
@@ -20,6 +21,13 @@ enum Preferences {
   static var allowsEveryApp: Bool {
     get { UserDefaults.standard.bool(forKey: everyAppKey) }
     set { UserDefaults.standard.set(newValue, forKey: everyAppKey) }
+  }
+
+  // Screenshots and input by coordinates while the screen is locked, through private window server calls and
+  // without verification. Off by default.
+  static var worksInWindowsWhileLocked: Bool {
+    get { UserDefaults.standard.bool(forKey: lockedWindowsKey) }
+    set { UserDefaults.standard.set(newValue, forKey: lockedWindowsKey) }
   }
 
   static var lastTab: String? {
