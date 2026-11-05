@@ -79,10 +79,11 @@ let tools: [ToolDefinition] = [
     required: ["app", "operation"], annotations: ["readOnlyHint": false, "destructiveHint": true, "openWorldHint": false] as JSON),
   ToolDefinition(
     name: "get_window_state",
-    description: "Read a window as lines of numbered elements with their state and actions. The first line lists the app's windows. Numbers stay valid across reads in this session.",
+    description: "Read a window as lines of numbered elements with their state and actions. The first line lists the app's windows. Numbers stay valid across reads in this session. Reading the same place again returns only what changed since your last read or action there; pass full: true for all of it.",
     properties: [
       ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
       ("window", ["type": "integer", "minimum": 0, "description": "Window index shown in get_window_state; default the first"] as JSON),
+      ("full", ["type": "boolean", "description": "Return every element even when an earlier read of this place exists"] as JSON),
       ("menu_bar", ["type": "boolean", "description": "Read the menu bar instead of a window"] as JSON),
       ("menu_extras", ["type": "boolean", "description": "Read the app's items on the right of the menu bar, such as status icons, instead of a window"] as JSON),
       ("root", ["type": "integer", "minimum": 1, "description": "Read only this element's subtree"] as JSON),
@@ -99,7 +100,7 @@ let tools: [ToolDefinition] = [
     required: ["app"], annotations: ["readOnlyHint": true, "destructiveHint": false, "openWorldHint": false] as JSON),
   ToolDefinition(
     name: "press",
-    description: "Press an element without taking focus, or run one of the actions it lists. The reply's `state` reports what changed in the area last read, or `unknown` when it cannot tell; `verified: false` means delivery could not be confirmed.",
+    description: "Press an element without taking focus, or run one of the actions it lists. The reply's `state` reports what changed in the area last read once the app settles (`settled: false` if it was still busy), or `unknown` when it cannot tell; `verified: false` means delivery could not be confirmed.",
     properties: [
       ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
       ("element", ["type": "integer", "minimum": 1, "description": "Element number from get_window_state"] as JSON),

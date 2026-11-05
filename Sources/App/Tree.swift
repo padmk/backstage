@@ -41,9 +41,10 @@ private func line(for element: AXUIElement, role: String, number: Int, depth: In
   return text
 }
 
-func renderTree(roots: [AXUIElement], pid: pid_t, table: ElementTable, maxElements: Int, shownToAgent: Bool) -> RenderedTree {
+func renderTree(roots: [AXUIElement], pid: pid_t, table: ElementTable, maxElements: Int, shownToAgent: Bool,
+                seconds: TimeInterval = treeDeadlineSeconds) -> RenderedTree {
   var tree = RenderedTree(lines: [], partialReason: nil)
-  let deadline = Date().addingTimeInterval(treeDeadlineSeconds)
+  let deadline = Date().addingTimeInterval(seconds)
 
   func visit(_ element: AXUIElement, depth: Int) {
     guard tree.partialReason == nil else { return }
@@ -96,11 +97,28 @@ func hasModal(_ window: AXUIElement) -> Bool {
   return kids.contains { stringAttribute($0, kAXRoleAttribute) == "AXSheet" }
 }
 
-// Compares the last read of an app with its state after an action, waiting briefly for the change.
+// The last read of an app in a session: what was asked, what it showed, and the element it started from, so a
+// later read of the same place can report only what changed.
 struct LastRead {
   var request: JSON
+  var root: AXUIElement?
   var lines: [String]
   var isPartial: Bool
+
+  private static let scopeKeys = ["window", "root", "menu_bar", "menu_extras", "max_elements"]
+
+  // The same place: the same arguments and the same starting element, since window numbers follow window order.
+  func covers(_ other: JSON, root otherRoot: AXUIElement?) -> Bool {
+    let sameArguments = Self.scopeKeys.allSatisfy { key in
+      switch (request[key], other[key]) {
+      case (nil, nil): return true
+      case let (first?, second?): return "\(first)" == "\(second)"
+      default: return false
+      }
+    }
+    guard sameArguments, let root, let otherRoot else { return false }
+    return CFEqual(root, otherRoot)
+  }
 }
 
 func changeReport(before: [String], after: [String]) -> JSON {

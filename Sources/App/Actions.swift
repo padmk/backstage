@@ -4,7 +4,6 @@
 import AppKit
 import ApplicationServices
 
-private let settleSeconds = 1.0
 private let pressActions = ["AXPress", "AXConfirm", "AXPick", "AXOpen"]
 private let singleLineRoles: Set<String> = [kAXTextFieldRole, kAXComboBoxRole, "AXSearchField"]
 private let secureSubrole = "AXSecureTextField"
@@ -42,7 +41,15 @@ private func header(app: AppIdentity, application: AXUIElement, selected: AXUIEl
   return parts.joined(separator: " ")
 }
 
-func readTree(app: AppIdentity, params: JSON, session: ApprovalSession, shownToAgent: Bool) throws -> (header: String, tree: RenderedTree) {
+struct WindowRead {
+  let header: String
+  let tree: RenderedTree
+  // The element the read started from, which tells whether a later read is of the same place.
+  let root: AXUIElement?
+}
+
+func readTree(app: AppIdentity, params: JSON, session: ApprovalSession, shownToAgent: Bool,
+              seconds: TimeInterval = treeDeadlineSeconds) throws -> WindowRead {
   let application = try applicationElement(app)
   let maxElements = min(max(params["max_elements"] as? Int ?? defaultMaxElements, 1), 5000)
   var roots: [AXUIElement]
@@ -61,58 +68,15 @@ func readTree(app: AppIdentity, params: JSON, session: ApprovalSession, shownToA
     selected = try selectWindow(application, params: params)
     roots = [selected!] + openMenus(of: application)
   }
-  return (header(app: app, application: application, selected: selected),
-          renderTree(roots: roots, pid: app.pid, table: session.table, maxElements: maxElements, shownToAgent: shownToAgent))
-}
-
-// Runs an action, then reports what changed in the app's last read, so the agent sees the effect and no
-// action claims a success it did not observe.
-func acting(app: AppIdentity, session: ApprovalSession, _ action: () throws -> JSON) throws -> JSON {
-  let frontBefore = onMain { NSWorkspace.shared.frontmostApplication }
-  var result: JSON
-  do {
-    result = try action()
-  } catch {
-    _ = returnFocus(to: frontBefore, from: app.pid)
-    throw error
-  }
-  defer { _ = returnFocus(to: frontBefore, from: app.pid) }
-  if returnFocus(to: frontBefore, from: app.pid) { result["focus_returned"] = true }
-  guard let last = session.lock.withLock({ session.lastReads[app.pid] }) else {
-    result["state"] = ["unknown": true, "reason": "Nothing was read before this action, so changes cannot be reported."] as JSON
-    return result
-  }
-  if last.isPartial {
-    result["state"] = ["unknown": true, "reason": "The last read was partial, so changes cannot be reported. Read a smaller area with root."] as JSON
-    return result
-  }
-  let deadline = Date().addingTimeInterval(settleSeconds)
-  var after = last.lines
-  repeat {
-    sleep(seconds: 0.1)
-    let read: RenderedTree
-    do {
-      read = try readTree(app: app, params: last.request, session: session, shownToAgent: false).tree
-    } catch {
-      let reason = (error as? HelperError)?.message ?? error.localizedDescription
-      result["state"] = ["unknown": true, "reason": "The earlier read cannot be repeated: \(reason)"] as JSON
-      return result
-    }
-    if let partial = read.partialReason {
-      result["state"] = ["unknown": true, "reason": "The app answered only in part: \(partial)"] as JSON
-      return result
-    }
-    after = read.lines
-    if after != last.lines { break }
-  } while Date() < deadline
-  result["state"] = changeReport(before: last.lines, after: after)
-  session.lock.withLock { session.lastReads[app.pid] = LastRead(request: last.request, lines: after, isPartial: false) }
-  return result
+  return WindowRead(header: header(app: app, application: application, selected: selected),
+                    tree: renderTree(roots: roots, pid: app.pid, table: session.table, maxElements: maxElements,
+                                     shownToAgent: shownToAgent, seconds: seconds),
+                    root: roots.first)
 }
 
 // An app can bring itself forward in response to an action, for example when it shows or closes a dialog.
 // The user was working in another app, so that app gets the focus back. Returns whether it had to.
-private func returnFocus(to previous: NSRunningApplication?, from pid: pid_t) -> Bool {
+func returnFocus(to previous: NSRunningApplication?, from pid: pid_t) -> Bool {
   guard let previous, previous.processIdentifier != pid, !previous.isTerminated else { return false }
   return onMain {
     guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return false }

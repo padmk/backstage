@@ -5,9 +5,6 @@ import AppKit
 import HelperLink
 import ApplicationServices
 
-// The last reads a session keeps for change reports, across the apps it works in.
-private let maxRememberedReads = 32
-
 func handle(method: String, params: JSON, connection: Connection) throws -> Any {
   let session = connection.session
   switch method {
@@ -88,18 +85,16 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   try ApprovalGate.require(app, session: session)
   try requireSameProcess(app)
   try connection.throwIfCancelled()
+  return try AppLocks.with(app.pid, connection: connection) {
+    try connection.throwIfCancelled()
+    return try performAppRequest(method, app: app, params: params, session: session)
+  }
+}
 
+private func performAppRequest(_ method: String, app: AppIdentity, params: JSON, session: ApprovalSession) throws -> Any {
   switch method {
   case "get_window_state":
-    let read = try readTree(app: app, params: params, session: session, shownToAgent: true)
-    session.lock.withLock {
-      if session.lastReads.count >= maxRememberedReads { session.lastReads.removeAll() }
-      session.lastReads[app.pid] = LastRead(request: params, lines: read.tree.lines, isPartial: read.tree.partialReason != nil)
-    }
-    let knowledge = knowledgeLines(forBundleId: app.bundleId)
-    var text = ([read.header] + knowledge + read.tree.lines).joined(separator: "\n")
-    if let reason = read.tree.partialReason { text += "\n[Partial: \(reason)]" }
-    return ["tree": text] as JSON
+    return try windowState(app: app, params: params, session: session)
 
   case "screenshot":
     let application = try applicationElement(app)
