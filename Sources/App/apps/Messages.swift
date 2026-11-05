@@ -61,6 +61,8 @@ private let send = Operation(
   }
   // A short text such as "OK" also matches other chats' messages, so it is not checked against the list.
   let checkable = firstLine(text).count >= minCheckableLength
+  // While the screen is locked the chat list cannot be read, so the message goes out unchecked.
+  let locked = isScreenLocked()
   let before = checkable ? chatLabels(containing: text) : nil
   _ = try runAppleScript(sendScript, arguments: [destination, text], target: target)
   // Scripting cannot read messages, but each chat in the window's list is labelled with its latest message, so
@@ -78,7 +80,9 @@ private let send = Operation(
   }
   // Scripting reports no delivery, and an undelivered message shows in the list too.
   var result: JSON = ["to": destination, "sent": true, "verified": shown, "delivered": "unknown"]
-  result["check"] = shown
+  result["check"] = locked
+    ? "The screen is locked, so the chat list cannot confirm the message. Do not send it again; read the conversation with get_window_state on Messages after the user unlocks the Mac."
+    : shown
     ? "verified means a new entry in the chat list shows the message; it does not prove which chat it went to or that it was delivered. Read the conversation with get_window_state on Messages to see its recipient and delivery state."
     : "The chat list did not confirm the message. Read the conversation with get_window_state on Messages before sending again."
   return result
@@ -94,7 +98,7 @@ private let maxLabelSearch = 3000
 
 // The labels of chats in Messages' window that contain the text's first line, or nil when no window can be read.
 private func chatLabels(containing text: String) -> Set<String>? {
-  guard AXIsProcessTrusted(),
+  guard AXIsProcessTrusted(), !isScreenLocked(),
     let app = onMain({ NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.MobileSMS").first { !$0.isTerminated } })
   else { return nil }
   let window = windows(of: AXUIElementCreateApplication(app.processIdentifier)).first

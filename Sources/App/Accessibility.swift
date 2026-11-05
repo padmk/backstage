@@ -90,8 +90,9 @@ func requireAccessibility() throws {
   }
 }
 
+// While the screen is locked the app answers with itself in place of each window, which is no window.
 func windows(of application: AXUIElement) -> [AXUIElement] {
-  (attribute(application, kAXWindowsAttribute) as? [AXUIElement]) ?? []
+  ((attribute(application, kAXWindowsAttribute) as? [AXUIElement]) ?? []).filter { !CFEqual($0, application) }
 }
 
 // Electron builds its accessibility tree only when asked to, and asynchronously.

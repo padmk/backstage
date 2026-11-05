@@ -17,6 +17,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   case "status":
     return [
       "accessibility": AXIsProcessTrusted(), "screen_recording": CGPreflightScreenCaptureAccess(), "version": Configuration.buildVersion,
+      "screen_locked": isScreenLocked(),
       // The same grants as the Setup tab: those of the listed apps.
       "app_access": appGrants(forListed: Set(ApprovalStore.list().compactMap { $0["bundle_id"] }), everyApp: Preferences.allowsEveryApp)
         .map { ["name": $0.name, "state": grantState($0).rawValue] as JSON },
@@ -56,13 +57,13 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     if let query = params["app"] as? String {
       let app = try (try? resolve(query)) ?? installedIdentity(try installedApp(query))
       return ["app": ["name": app.name, "bundle_id": app.bundleId, "running": app.pid != 0, "access": ApprovalGate.access(app).rawValue],
-              "every_app": Preferences.allowsEveryApp] as JSON
+              "every_app": Preferences.allowsEveryApp, "screen_locked": isScreenLocked()] as JSON
     }
     return ["apps": visibleApps().map { running in
       var entry = describe(running)
       entry["access"] = ApprovalGate.access(identity(of: running)).rawValue
       return entry
-    }, "every_app": Preferences.allowsEveryApp] as JSON
+    }, "every_app": Preferences.allowsEveryApp, "screen_locked": isScreenLocked()] as JSON
 
   case "launch_app":
     return try launch(string(params, "app"), session: session, connection: connection)
@@ -84,11 +85,13 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   let app = try resolve(string(params, "app"))
   try ApprovalGate.require(app, session: session)
   try requireSameProcess(app)
+  try requireScreenUnlocked(method, params: params, app: app, session: session)
   try connection.throwIfCancelled()
   return try AppLocks.with(app.bundleId, connection: connection) {
     // Checked again after the wait: the user may have removed the app, or it may have quit, meanwhile.
     try ApprovalGate.require(app, session: session)
     try requireSameProcess(app)
+    try requireScreenUnlocked(method, params: params, app: app, session: session)
     if method == "run_actions" || actionMethods.contains(method) { try requireUserNotWorking(in: app) }
     try connection.throwIfCancelled()
     return try performAppRequest(method, app: app, params: params, session: session)

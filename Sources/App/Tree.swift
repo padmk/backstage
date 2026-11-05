@@ -61,9 +61,13 @@ func renderTree(roots: [AXUIElement], pid: pid_t, table: ElementTable, maxElemen
                 seconds: TimeInterval = treeDeadlineSeconds) -> RenderedTree {
   var tree = RenderedTree(lines: [], partialReason: nil)
   let deadline = Date().addingTimeInterval(seconds)
+  // An element that lists itself or an ancestor among its children, as apps do while the screen is locked, is
+  // shown once.
+  var visited = Set<AXUIElement>()
 
   func visit(_ element: AXUIElement, depth: Int) {
     guard tree.partialReason == nil else { return }
+    guard visited.insert(element).inserted else { return }
     guard tree.lines.count < maxElements else {
       tree.partialReason = "limit of \(maxElements) elements; read a subtree with root"
       return
