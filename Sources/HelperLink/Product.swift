@@ -19,18 +19,24 @@ public enum Product {
   public static let commandRelativePath = "Contents/Helpers/\(commandName)"
 }
 
-// The one directory the app and the command keep their files in: the app list, the activity log, the socket and the
-// signing keychain. A test home takes its place.
+// The XDG base directories at their default places. The XDG_* variables are not read: the app also starts from
+// launchd, at login or from the Finder, without the shell's environment, and has to find the same files. A test
+// home holds all three.
 public struct Directories: Sendable {
   public let config: String
   public let data: String
   public let state: String
 
   public init(home: String = NSHomeDirectory(), testHome: String? = nil) {
-    let directory = testHome ?? home + "/Library/Application Support/" + Product.appName
-    config = directory
-    data = directory
-    state = directory
+    if let testHome {
+      config = testHome
+      data = testHome
+      state = testHome
+    } else {
+      config = home + "/.config/" + Product.commandName
+      data = home + "/.local/share/" + Product.commandName
+      state = home + "/.local/state/" + Product.commandName
+    }
   }
 
   public var socketPath: String { state + "/helper.sock" }

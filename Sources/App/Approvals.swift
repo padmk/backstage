@@ -115,7 +115,7 @@ func signingIdentity(of app: AppIdentity) -> String? {
 // MARK: Permanent approvals
 
 enum ApprovalStore {
-  private static var path: String { Configuration.home + "/approvals.json" }
+  private static var path: String { Configuration.configHome + "/approvals.json" }
   private static let lock = NSLock()
 
   // Expired approvals count as absent, and leave the file on the next write.
@@ -186,7 +186,7 @@ struct DecisionRecord: Identifiable, Equatable {
 
 // The latest answers first, from the decision log.
 func recentDecisions(limit: Int) -> [DecisionRecord] {
-  guard let text = try? String(contentsOfFile: Configuration.home + "/decisions.jsonl", encoding: .utf8) else { return [] }
+  guard let text = try? String(contentsOfFile: Configuration.stateHome + "/decisions.jsonl", encoding: .utf8) else { return [] }
   let lines = text.split(separator: "\n").suffix(limit).reversed()
   return lines.enumerated().compactMap { index, line in
     guard let data = line.data(using: .utf8), let entry = try? JSONSerialization.jsonObject(with: data) as? JSON,
@@ -229,7 +229,7 @@ func writeDecisionLog(client: String?, bundleId: String, decision: String) {
   ]
   guard var data = try? JSONSerialization.data(withJSONObject: entry) else { return }
   data.append(0x0a)
-  let path = Configuration.home + "/decisions.jsonl"
+  let path = Configuration.stateHome + "/decisions.jsonl"
   decisionLogLock.lock()
   defer { decisionLogLock.unlock() }
   if !FileManager.default.fileExists(atPath: path) {

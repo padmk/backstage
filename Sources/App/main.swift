@@ -8,7 +8,13 @@ import ApplicationServices
 
 let arguments = CommandLine.arguments
 if let index = arguments.firstIndex(of: "--home"), arguments.indices.contains(index + 1) {
-  Configuration.home = arguments[index + 1]
+  Configuration.configHome = arguments[index + 1]
+  Configuration.stateHome = arguments[index + 1]
+}
+for directory in [Configuration.configHome, Configuration.stateHome] {
+  try? FileManager.default.createDirectory(atPath: (directory as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+  try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+  chmod(directory, 0o700)
 }
 
 // The system-wide timeout applies to every element, so one hung app cannot hold a request for long.

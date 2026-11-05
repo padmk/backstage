@@ -14,6 +14,13 @@ private struct Setup {
   }
 }
 
+private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
+  [
+    "io.modelcontextprotocol/protocolVersion": protocolVersion,
+    "io.modelcontextprotocol/clientCapabilities": [:] as Object,
+    "io.modelcontextprotocol/clientInfo": ["name": "modern-client", "version": "1"],
+  ]
+}
 
 @Suite struct ServerTests {
   @Test func answersInitializeWithTheClientsProtocolVersionAndItsOwnName() throws {
@@ -30,7 +37,24 @@ private struct Setup {
     #expect(result["protocolVersion"] as? String == "2025-11-25")
   }
 
+  @Test func answersDiscoverWithoutInitializeAndRefusesARevisionItDoesNotServeThatWay() throws {
+    let setup = try Setup()
+    let result = try setup.server.request("server/discover", ["_meta": statelessMeta()])["result"] as! Object
+    #expect(result["resultType"] as? String == "complete")
+    #expect((result["supportedVersions"] as? [String])?.contains("2026-07-28") == true)
+    #expect((result["capabilities"] as? Object)?["tools"] != nil)
+    #expect(((result["_meta"] as? Object)?["io.modelcontextprotocol/serverInfo"] as? Object)?["name"] as? String == "backstage")
+    let error = try setup.server.request("server/discover", ["_meta": statelessMeta("1999-01-01")])["error"] as! Object
+    #expect(error["code"] as? Int == -32022)
+    #expect((error["data"] as? Object)?["requested"] as? String == "1999-01-01")
+  }
 
+  @Test func runsAToolForARequestThatCarriesItsRevisionNamingTheClientFromIt() throws {
+    let setup = try Setup()
+    let result = try setup.server.request("tools/call", ["name": "list_apps", "arguments": [:] as Object, "_meta": statelessMeta()])["result"] as! Object
+    #expect(result["resultType"] as? String == "complete")
+    #expect((setup.helper.first("hello")?["params"] as? Object)?["client_name"] as? String == "modern-client")
+  }
 
   @Test func listsToolsWithSchemasThatRejectUnknownArguments() throws {
     let setup = try Setup()

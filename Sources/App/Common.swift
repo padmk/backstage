@@ -35,9 +35,14 @@ func sleep(seconds: Double) {
 }
 
 enum Configuration {
-  static var home = NSHomeDirectory() + "/Library/Application Support/Backstage"
-  static var socketPath: String { home + "/helper.sock" }
   static var appName: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "helper" }
+  // The XDG base directories at their default places, as the command has them. The app starts from
+  // launchd too, without the shell's environment, so the XDG_* variables are not read. --home puts both in one.
+  // The app list.
+  static var configHome = NSHomeDirectory() + "/.config/" + appName.lowercased()
+  // The activity log and the socket.
+  static var stateHome = NSHomeDirectory() + "/.local/state/" + appName.lowercased()
+  static var socketPath: String { stateHome + "/helper.sock" }
   static var buildVersion: String {
     Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
   }
