@@ -1,37 +1,7 @@
-// The Apps tab: each app agents may control, for how long, and a way to change or remove it.
+// The Apps tab: the switch that allows every app, and otherwise the list of apps agents may use through Backstage.
 
 import AppKit
 import SwiftUI
-
-private struct DurationMenu: View {
-  @ObservedObject var model: ControlModel
-  let row: AppRow
-
-  var body: some View {
-    Menu {
-      if model.canKeep(row) {
-        Button(ControlTexts.always) { model.set(row, to: .always) }
-        Button(ControlTexts.oneHour) { model.set(row, to: .hour) }
-        Button(ControlTexts.oneDay) { model.set(row, to: .day) }
-        Button(ControlTexts.oneWeek) { model.set(row, to: .week) }
-        Divider()
-      }
-      Button(ControlTexts.remove, role: .destructive) { model.remove(row) }
-    } label: {
-      // One Text, because the menu style would put an image first.
-      Text("\(row.durationText) \(Image(systemName: "chevron.up.chevron.down"))")
-        .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(Palette.text)
-    }
-    .menuStyle(.borderlessButton)
-    .menuIndicator(.hidden)
-    .fixedSize()
-    .padding(.horizontal, 10)
-    .frame(height: 26)
-    // Stored approvals reach every agent, in the color the approval window gives that group.
-    .background(RoundedRectangle(cornerRadius: 8).fill(row.isStored ? Palette.sky.opacity(0.24) : Color.white.opacity(0.14)))
-  }
-}
 
 struct AppsTab: View {
   @ObservedObject var model: ControlModel
@@ -45,6 +15,15 @@ struct AppsTab: View {
   }
 
   var body: some View {
+    ListSection(heading: ControlTexts.access, note: ControlTexts.honesty) {
+      ControlRow(icon: .symbol("square.grid.2x2"), title: ControlTexts.everyApp,
+                 detail: model.allowsEveryApp ? ControlTexts.everyAppOn : ControlTexts.everyAppOff,
+                 detailColor: model.allowsEveryApp ? Palette.amber : Palette.secondary) {
+        Toggle("", isOn: Binding(get: { model.allowsEveryApp }, set: { model.setEveryApp($0) }))
+          .labelsHidden().toggleStyle(.switch).tint(Palette.sky)
+      }
+    }
+
     ListSection(heading: ControlTexts.appsHeading) {
       Button(ControlTexts.add, action: addApp).buttonStyle(ChoiceStyle(kind: .primary, compact: true))
     } content: {
@@ -55,7 +34,12 @@ struct AppsTab: View {
         if index > 0 { RowDivider() }
         VStack(alignment: .leading, spacing: 0) {
           ControlRow(icon: .app(row.bundleId), title: row.name, detail: row.bundleId, monospacedDetail: true) {
-            DurationMenu(model: model, row: row)
+            Button(ControlTexts.remove) { model.remove(row) }.buttonStyle(ChoiceStyle(kind: .plain, compact: true))
+          }
+          if let reach = knowledge(forBundleId: row.bundleId)?.access {
+            Text(reach).font(.system(size: 11)).foregroundStyle(Palette.secondary)
+              .padding(.leading, rowIconSide + rowIconGap)
+              .padding(.bottom, isFarReaching(row.bundleId) ? 2 : 8)
           }
           if isFarReaching(row.bundleId) {
             Label(ControlTexts.farReaching, systemImage: "exclamationmark.triangle.fill")
@@ -66,6 +50,7 @@ struct AppsTab: View {
         }
       }
     }
+    .opacity(model.allowsEveryApp ? 0.5 : 1)
     if let problem = model.problem {
       Text(problem).font(.system(size: 12)).foregroundStyle(Palette.coral)
     }

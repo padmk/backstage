@@ -1,62 +1,20 @@
-// What the Backstage window shows, read from the approval store, the decision log, macOS and the settings,
+// What the Backstage window shows, read from the app list, the decision log, macOS and the settings,
 // and the changes people make there.
 
 import AppKit
 import SwiftUI
 
 struct AppRow: Identifiable, Equatable {
-  enum Duration: Equatable {
-    case always, until(Date), session
-  }
   let bundleId: String
-  let signer: String?
-  let duration: Duration
   var id: String { bundleId }
   var url: URL? { NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) }
   var name: String { url.map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") } ?? bundleId }
-
-  var durationText: String {
-    switch duration {
-    case .always: ControlTexts.always
-    case .session: ControlTexts.session
-    case .until(let date): ControlTexts.until(shortExpiry(date))
-    }
-  }
-
-  var isStored: Bool { duration != .session }
 }
 
-// A time today, a weekday and time within the week, otherwise the date, in the user's locale.
-private func shortExpiry(_ date: Date) -> String {
-  let calendar = Calendar.current
-  if calendar.isDateInToday(date) { return date.formatted(.dateTime.hour().minute()) }
-  if date.timeIntervalSinceNow < 6 * 86400 { return date.formatted(.dateTime.weekday(.abbreviated).hour().minute()) }
-  return date.formatted(.dateTime.day().month(.abbreviated))
-}
-
-enum ApprovalLength: String {
-  case always, hour, day, week
-
-  var seconds: TimeInterval? {
-    switch self {
-    case .always: nil
-    case .hour: 3600
-    case .day: 86400
-    case .week: 604800
-    }
-  }
-}
-
-// The approved apps, stored and for running sessions, by name; shared by the window and the menu bar item.
+// The apps on the list, by name; shared by the window and the menu bar item.
 func approvedApps() -> [AppRow] {
-  let stored = ApprovalStore.list().compactMap { entry -> AppRow? in
-    guard let bundleId = entry["bundle_id"] else { return nil }
-    let until = entry["expires_at"].flatMap { ISO8601DateFormatter().date(from: $0) }
-    return AppRow(bundleId: bundleId, signer: entry["signer"], duration: until.map { .until($0) } ?? .always)
-  }
-  let inSession = sessionApprovals().filter { approval in !stored.contains { $0.bundleId == approval.bundleId } }
-    .map { AppRow(bundleId: $0.bundleId, signer: $0.signer, duration: .session) }
-  return (stored + inSession).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+  ApprovalStore.list().compactMap { $0["bundle_id"].map(AppRow.init) }
+    .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 }
 
 final class ControlModel: ObservableObject {
@@ -70,6 +28,7 @@ final class ControlModel: ObservableObject {
   @Published var login = LoginState.unavailable
   @Published var loginProblem: String?
   @Published var showsMenuBarItem = false
+  @Published var allowsEveryApp = false
   private var timer: Timer?
 
   // A live model refreshes every second; a fixed one, for rendering a state, does not read anything.
@@ -98,6 +57,8 @@ final class ControlModel: ObservableObject {
     if loginState != login { login = loginState }
     let menuBar = Preferences.showsMenuBarItem
     if menuBar != showsMenuBarItem { showsMenuBarItem = menuBar }
+    let everyApp = Preferences.allowsEveryApp
+    if everyApp != allowsEveryApp { allowsEveryApp = everyApp }
   }
 
   // macOS asks one prompt at a time and waits for the answer, so the requests run in turn, off the main thread.
@@ -115,27 +76,11 @@ final class ControlModel: ObservableObject {
     }
   }
 
-  // Only the signer the user approved can be kept longer, never another copy found under the same bundle id.
-  func canKeep(_ row: AppRow) -> Bool { row.signer != nil }
-
-  func set(_ row: AppRow, to choice: ApprovalLength) {
-    guard let signer = row.signer else { return }
-    do {
-      try ApprovalStore.add(bundleId: row.bundleId, signer: signer, until: choice.seconds.map { Date().addingTimeInterval($0) })
-      revokeSessionApprovals(bundleId: row.bundleId)
-      writeDecisionLog(client: "settings", bundleId: row.bundleId, decision: choice.rawValue)
-      problem = nil
-    } catch {
-      problem = ControlTexts.saveFailed
-    }
-    refresh()
-  }
-
   func remove(_ row: AppRow) {
     do {
-      _ = try ApprovalStore.revoke(bundleId: row.bundleId)
-      revokeSessionApprovals(bundleId: row.bundleId)
-      writeDecisionLog(client: "settings", bundleId: row.bundleId, decision: "removed")
+      if try ApprovalStore.revoke(bundleId: row.bundleId) {
+        writeDecisionLog(client: "settings", bundleId: row.bundleId, decision: "removed")
+      }
       problem = nil
     } catch {
       problem = ControlTexts.saveFailed
@@ -148,18 +93,18 @@ final class ControlModel: ObservableObject {
       problem = ControlTexts.cannotAdd
       return
     }
-    let app = AppIdentity(pid: 0, bundleId: bundleId, name: url.deletingPathExtension().lastPathComponent, launchDate: nil, path: url.path)
-    guard !isNeverApproved(app.bundleId), let signer = signingIdentity(of: app) else {
-      problem = ControlTexts.cannotAdd
-      return
-    }
     do {
-      try ApprovalStore.add(bundleId: app.bundleId, signer: signer, until: nil)
-      writeDecisionLog(client: "settings", bundleId: app.bundleId, decision: ApprovalLength.always.rawValue)
+      try addToList(AppIdentity(pid: 0, bundleId: bundleId, name: url.deletingPathExtension().lastPathComponent, launchDate: nil, path: url.path), by: "settings")
       problem = nil
     } catch {
-      problem = ControlTexts.saveFailed
+      problem = (error as? HelperError)?.message ?? ControlTexts.saveFailed
     }
+    refresh()
+  }
+
+  func setEveryApp(_ on: Bool) {
+    Preferences.allowsEveryApp = on
+    writeDecisionLog(client: "settings", bundleId: "*", decision: on ? "every_app_on" : "every_app_off")
     refresh()
   }
 

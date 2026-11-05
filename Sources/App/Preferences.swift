@@ -4,6 +4,7 @@ import Foundation
 
 enum Preferences {
   private static let menuBarKey = "showsMenuBarItem"
+  private static let everyAppKey = "allowsEveryApp"
   private static let tabKey = "controlTab"
 
   // Only the copy in Applications keeps running, shows a menu bar item or starts at login, so test and
@@ -13,6 +14,12 @@ enum Preferences {
   static var showsMenuBarItem: Bool {
     get { UserDefaults.standard.bool(forKey: menuBarKey) }
     set { UserDefaults.standard.set(newValue, forKey: menuBarKey) }
+  }
+
+  // Every app except those never available, without the list. Off by default.
+  static var allowsEveryApp: Bool {
+    get { UserDefaults.standard.bool(forKey: everyAppKey) }
+    set { UserDefaults.standard.set(newValue, forKey: everyAppKey) }
   }
 
   static var lastTab: String? {

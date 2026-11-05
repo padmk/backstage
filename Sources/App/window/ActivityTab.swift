@@ -2,24 +2,24 @@
 
 import SwiftUI
 
+// Entries written before the app list existed keep a readable label.
 private func chipColor(_ decision: String) -> Color {
   switch decision {
-  case "decline", "removed": Palette.coral
-  case "hour", "day", "week", "always": Palette.sky
+  case "decline", "removed", "every_app_on": Palette.coral
+  case "added", "every_app_off", "hour", "day", "week", "always": Palette.sky
   default: Palette.secondary
   }
 }
 
 private func chipText(_ decision: String) -> String {
   switch decision {
-  case "decline": "Deny"
-  case "once": "Once"
-  case "session": ControlTexts.session
-  case "hour": ControlTexts.oneHour
-  case "day": ControlTexts.oneDay
-  case "week": ControlTexts.oneWeek
-  case "always": ControlTexts.always
-  case "removed": ControlTexts.remove
+  case "used": "Used"
+  case "added": "Added"
+  case "removed": "Removed"
+  case "every_app_on": "Every app on"
+  case "every_app_off": "Every app off"
+  case "decline": "Denied"
+  case "once", "session", "hour", "day", "week", "always": "Approved"
   default: decision
   }
 }
@@ -33,13 +33,14 @@ struct ActivityTab: View {
   @ObservedObject var model: ControlModel
 
   var body: some View {
-    ListSection(heading: ControlTexts.recentDecisions) {
+    ListSection(heading: ControlTexts.recentDecisions, note: ControlTexts.activityNote) {
       if model.recent.isEmpty {
         EmptyState(symbol: "clock", title: ControlTexts.noDecisions, detail: ControlTexts.noDecisionsDetail)
       }
       ForEach(Array(model.recent.enumerated()), id: \.element.id) { index, record in
         if index > 0 { RowDivider() }
-        ControlRow(icon: .app(record.bundleId), title: AppRow(bundleId: record.bundleId, signer: nil, duration: .session).name,
+        ControlRow(icon: record.bundleId == "*" ? .symbol("square.grid.2x2") : .app(record.bundleId),
+                   title: record.bundleId == "*" ? ControlTexts.everyApp : AppRow(bundleId: record.bundleId).name,
                    detail: who(record.client)) {
           HStack(spacing: 8) {
             Text(chipText(record.decision))

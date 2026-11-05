@@ -172,7 +172,7 @@ func postScroll(at point: CGPoint, target: PointerTarget, pid: pid_t, lines: Int
 // The last resort for a window that ignores background input: the app comes forward, the click goes through
 // the real cursor, and the cursor goes back to where it was. The caller gives the focus back.
 // A click posted to the whole system lands on whatever window is on top at that point, which may belong to
-// another app or be the approval window itself. It is refused unless the top window there is the app's own.
+// another app or a Backstage window. It is refused unless the top window there is the app's own.
 private func requireOwnWindowOnTop(at point: CGPoint, pid: pid_t) throws {
   let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
   let top = windows.first { info in

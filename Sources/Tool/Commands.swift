@@ -201,6 +201,15 @@ private func approvals(_ arguments: [String]) throws -> Int32 {
     let listed = (try helper.request("approvals_list") as? JSON)?["approvals"] as? [JSON] ?? []
     printLine(listed.isEmpty ? "No apps on the list." : listed.map { "\($0["bundle_id"] as? String ?? "") (\($0["signer"] as? String ?? ""))" }.joined(separator: "\n"))
     return 0
+  case ("add", let app?):
+    do {
+      let added = try helper.request("approvals_add", ["app": app]) as? JSON ?? [:]
+      printLine("Added \(added["name"] as? String ?? app) (\(added["added"] as? String ?? "")).")
+      return 0
+    } catch let failure as HelperFailure where failure.code != nil {
+      printLine("\(failure.code!): \(failure.message)")
+      return 1
+    }
   case ("revoke", let bundleId?):
     let revoked = (try helper.request("approvals_revoke", ["bundle_id": bundleId]) as? JSON)?["revoked"] as? Bool == true
     printLine(revoked ? "Removed \(bundleId)." : "\(bundleId) is not on the list.")
@@ -219,6 +228,7 @@ private func usage() -> Int32 {
     \(name) setup [--no-register]     Install the app, ask for Accessibility, register with Claude Code
     \(name) doctor                    Check this Mac
     \(name) approvals [list]          List the apps agents may use
+    \(name) approvals add <app>       Add an app by name or bundle id
     \(name) approvals revoke <bundle-id> Remove an app from the list
     \(name) mcp                       Serve MCP over stdio (MCP clients run this)
     \(name) version

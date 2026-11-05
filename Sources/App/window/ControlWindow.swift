@@ -1,4 +1,4 @@
-// The window people open themselves, in the look of the approval window: the apps agents may control, the macOS
+// The window people open themselves: the apps agents may use, the macOS
 // permissions, recent decisions and the settings, one tab each. Opening the app shows it.
 
 import AppKit

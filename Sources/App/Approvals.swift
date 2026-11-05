@@ -1,6 +1,8 @@
-// The approval gate. It lives in the helper because the helper holds the macOS permissions: a process
-// that reaches the socket directly meets the same gate as an agent using the MCP tools. approvals.json has
-// file permissions only, so a process of this user that can write files can add a permanent approval.
+// The app list. Agents may use an app through Backstage only when the user put it on the list in the Backstage
+// window, or turned on Allow every app; nothing asks during a task. It lives in the helper, which holds the macOS
+// permissions, so a process that reaches the socket directly meets the same check as an agent using the MCP
+// tools. It guards against mistakes and agents limited to Backstage, not against an agent with a shell, which can
+// control the Mac without Backstage or edit approvals.json, a file with file permissions only.
 
 import AppKit
 import Security
@@ -18,8 +20,8 @@ private let neverApproved: Set<String> = [
   "com.apple.Passwords", "com.apple.keychainaccess",
 ]
 
-// These apps can run commands or change the system, so approving one reaches far beyond it. They get a
-// warning; how long the approval lasts is the user's choice, as for any app.
+// These apps can run commands or change the system, so allowing one gives agents far more than the app; the list
+// says so next to them.
 private let farReaching: Set<String> = [
   "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "net.kovidgoyal.kitty",
   "dev.warp.Warp-Stable", "com.github.wez.wezterm", "com.apple.ScriptEditor2", "com.apple.Automator",
@@ -30,38 +32,9 @@ private let farReaching: Set<String> = [
 func isFarReaching(_ bundleId: String) -> Bool { farReaching.contains(bundleId) }
 func isNeverApproved(_ bundleId: String) -> Bool { neverApproved.contains(bundleId) || bundleId == Bundle.main.bundleIdentifier }
 
-private let declineMemorySeconds: TimeInterval = 60
-// Shorter than what the client still has left after one full approval window.
-private let approvalQueueSeconds: TimeInterval = 25
-let approvalTimeoutSeconds = 170
-
-struct ApprovalTexts {
-  // Who asks for what: the agent's name, then the app's.
-  let title: (String, String) -> String
-  let wants: String
-  let farReaching: String
-  let updatedWhileRunning: (String) -> String
-  let unsigned: String
-  let labels: ApprovalLabels
-  let agent: String
-}
-
-private let texts = ApprovalTexts(
-  title: { "\($0) wants to control \($1)" },
-  wants: "Read app windows, click and type",
-  farReaching: "Can run commands or change your system",
-  updatedWhileRunning: { _ in "Updated while running. Access ends when this app quits. Restart it for longer access." },
-  unsigned: "No valid signature. Access cannot be saved.",
-  labels: ApprovalLabels(
-    once: "Once", session: "This session", hour: "1 hour", day: "1 day", always: "Always", decline: "Deny",
-    countdown: "Automatically denies in {time}", accessHeading: "Access requested", appHeading: "App identity", thisAgent: "This agent",
-    wantsToControl: "wants to control", allAgents: "All agents", bundleId: "Bundle ID", path: "Path"),
-  agent: "An agent")
-
 private let maxClientNameLength = 40
 
-// The client names itself, so the name is kept to one short line: it cannot fill the approval window or push its
-// buttons off the screen.
+// The client names itself, so the name is kept to one short line in the Activity list and the menu.
 func readableClientName(_ name: String?) -> String? {
   let printable = (name ?? "").unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && !CharacterSet.newlines.contains($0) }
   let words = String(String.UnicodeScalarView(printable)).split(whereSeparator: { "-_ ".contains($0) })
@@ -70,15 +43,12 @@ func readableClientName(_ name: String?) -> String? {
   return readable.count > maxClientNameLength ? String(readable.prefix(maxClientNameLength - 1)) + "…" : readable
 }
 
-// errSecCSStaticCodeChanged: the running code no longer matches the file on disk.
-private let codeChangedOnDisk: OSStatus = -67034
-
-private func wasUpdatedWhileRunning(_ app: AppIdentity) -> Bool {
-  guard app.pid > 0 else { return false }
-  var code: SecCode?
-  let attributes = [kSecGuestAttributePid: NSNumber(value: app.pid)] as CFDictionary
-  guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess, let code else { return false }
-  return SecCodeCheckValidity(code, [], nil) == codeChangedOnDisk
+// An app's name as one short line without control characters, for messages agents read.
+func readableAppName(_ name: String) -> String? {
+  let printable = String(String.UnicodeScalarView(name.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && !CharacterSet.newlines.contains($0) }))
+    .trimmingCharacters(in: .whitespaces)
+  guard !printable.isEmpty else { return nil }
+  return printable.count > maxClientNameLength ? String(printable.prefix(maxClientNameLength - 1)) + "…" : printable
 }
 
 // A universal app's default slice can differ from the one this Mac runs, and Apple's apps have no team id,
@@ -158,17 +128,17 @@ enum ApprovalStore {
     }
   }
 
-  static func contains(bundleId: String, signer: String?) -> Bool {
-    guard let signer else { return false }
-    return lock.withLock { read().contains { $0["bundle_id"] == bundleId && $0["signer"] == signer } }
+  // The signer is read only for an app on the list, because checking a signature costs more than reading the file.
+  static func contains(bundleId: String, signer: @autoclosure () -> String?) -> Bool {
+    let entries = lock.withLock { read().filter { $0["bundle_id"] == bundleId } }
+    guard !entries.isEmpty, let signer = signer() else { return false }
+    return entries.contains { $0["signer"] == signer }
   }
 
-  static func add(bundleId: String, signer: String, until: Date?) throws {
+  static func add(bundleId: String, signer: String) throws {
     try lock.withLock {
       let others = read().filter { $0["bundle_id"] != bundleId }
-      var entry = ["bundle_id": bundleId, "signer": signer]
-      if let until { entry["expires_at"] = ISO8601DateFormatter().string(from: until) }
-      try write(others + [entry])
+      try write(others + [["bundle_id": bundleId, "signer": signer]])
     }
   }
 
@@ -209,6 +179,9 @@ func recentDecisions(limit: Int) -> [DecisionRecord] {
   }
 }
 
+// Connections log from their own threads; one lock keeps each record whole and in place.
+private let decisionLogLock = NSLock()
+
 func writeDecisionLog(client: String?, bundleId: String, decision: String) {
   let entry: JSON = [
     "time": ISO8601DateFormatter().string(from: Date()), "client": client ?? NSNull(), "app": bundleId, "decision": decision,
@@ -216,6 +189,8 @@ func writeDecisionLog(client: String?, bundleId: String, decision: String) {
   guard var data = try? JSONSerialization.data(withJSONObject: entry) else { return }
   data.append(0x0a)
   let path = Configuration.home + "/decisions.jsonl"
+  decisionLogLock.lock()
+  defer { decisionLogLock.unlock() }
   if !FileManager.default.fileExists(atPath: path) {
     FileManager.default.createFile(atPath: path, contents: nil, attributes: [.posixPermissions: 0o600])
   }
@@ -227,11 +202,11 @@ func writeDecisionLog(client: String?, bundleId: String, decision: String) {
 
 // MARK: Session state
 
-// Outlives a connection, so a reconnecting server keeps what the user decided for its session.
+// Outlives a connection, so a reconnecting server keeps its element numbers and reads.
 final class ApprovalSession {
   let lock = NSLock()
-  var approved = Set<String>()
-  var declinedAt: [String: Date] = [:]
+  // Apps this session has used, so Activity records each app once per session rather than every action.
+  var usedApps = Set<String>()
   let table = ElementTable()
   var lastReads: [pid_t: LastRead] = [:]
   var clientName: String?
@@ -240,92 +215,50 @@ final class ApprovalSession {
   var detachedAt = Date()
 }
 
-// Shows one window at a time across all sessions.
+// The one way an app goes on the list: never one that is never available, and only with a valid signature, which
+// the list entry names so another app claiming the same bundle id is not covered.
+func addToList(_ app: AppIdentity, by client: String) throws {
+  if app.bundleId.isEmpty || isNeverApproved(app.bundleId) || app.pid == getpid() {
+    throw HelperError(code: "not_allowed", message: "\(app.name) is never available to agents.")
+  }
+  guard let signer = signingIdentity(of: app) else {
+    throw HelperError(code: "not_allowed", message: "\(app.name) has no valid signature, so it cannot go on the list. Allow every app covers it.")
+  }
+  try ApprovalStore.add(bundleId: app.bundleId, signer: signer)
+  writeDecisionLog(client: client, bundleId: app.bundleId, decision: "added")
+}
+
+// Whether agents may use an app right now. list_apps reports it, so an agent can check before any other route.
+enum AppAccess: String {
+  case allowed
+  case notApproved = "not_approved"
+  case neverAvailable = "never_available"
+}
+
 enum ApprovalGate {
-  private static let oneAtATime = NSLock()
+  static func access(_ app: AppIdentity) -> AppAccess {
+    if app.bundleId.isEmpty || isNeverApproved(app.bundleId) || app.pid == getpid() { return .neverAvailable }
+    return Preferences.allowsEveryApp || ApprovalStore.contains(bundleId: app.bundleId, signer: signingIdentity(of: app))
+      ? .allowed : .notApproved
+  }
 
-  static func require(_ app: AppIdentity, session: ApprovalSession, connection: Connection) throws {
-    if app.bundleId.isEmpty {
-      throw HelperError(code: "not_allowed", message: "\(app.name) has no bundle identifier, so it cannot be approved.")
+  // The messages speak to the agent at the moment it might look for another way, so they name the app exactly
+  // (the bundle id, since a display name is the app's own text) and say what to do instead.
+  static func require(_ app: AppIdentity, session: ApprovalSession) throws {
+    let id = app.bundleId.isEmpty ? "no bundle id" : app.bundleId
+    let name = readableAppName(app.name) ?? id
+    switch access(app) {
+    case .neverAvailable:
+      throw HelperError(
+        code: "not_allowed", message: "\(name) (\(id)) is never available to agents, by any route. Do not try another way.")
+    case .notApproved:
+      throw HelperError(
+        code: "not_approved",
+        message: "\(name) (\(id)) is not on the user's list of apps agents may use. Do not use it another way (scripting, Shortcuts, computer use, another app, its data in ~/Library) and do not change the list; a chat request does not change access. Tell the user to add \(name) on the Apps tab in Backstage, or turn on Allow every app there, and continue with work that does not need it.")
+    case .allowed:
+      break
     }
-    if neverApproved.contains(app.bundleId) || app.bundleId == Bundle.main.bundleIdentifier || app.pid == getpid() {
-      throw HelperError(code: "not_allowed", message: "\(app.name) is never available to agents.")
-    }
-    let appSigner = signingIdentity(of: app)
-    // Without a signature the approval holds only for this process.
-    let sessionKey = "\(app.bundleId)|\(appSigner ?? "pid:\(app.pid):\(app.launchDate?.timeIntervalSince1970 ?? 0)")"
-    let isFarReaching = farReaching.contains(app.bundleId)
-    let isApproved = {
-      session.lock.withLock { session.approved.contains(sessionKey) }
-        || ApprovalStore.contains(bundleId: app.bundleId, signer: appSigner)
-    }
-    if isApproved() { return }
-
-    if let declined = session.lock.withLock({ session.declinedAt[app.bundleId] }),
-      Date().timeIntervalSince(declined) < declineMemorySeconds {
-      throw HelperError(code: "declined", message: "The user declined \(app.name) moments ago. Do not ask again unless they tell you to.")
-    }
-
-    let queuedUntil = Date().addingTimeInterval(approvalQueueSeconds)
-    while !oneAtATime.lock(before: Date().addingTimeInterval(0.2)) {
-      try connection.throwIfCancelled()
-      if Date() > queuedUntil {
-        throw HelperError(code: "approval_busy", message: "Another approval window is waiting for the user. Try again shortly.")
-      }
-    }
-    defer { oneAtATime.unlock() }
-    try connection.throwIfCancelled()
-    // Another request may have been answered while this one waited.
-    if isApproved() { return }
-
-    let clientName = session.lock.withLock { session.clientName }
-    let chosen = texts
-    var warnings = isFarReaching ? [chosen.farReaching] : []
-    if wasUpdatedWhileRunning(app) {
-      warnings.append(chosen.updatedWhileRunning(app.name))
-    } else if appSigner == nil {
-      warnings.append(chosen.unsigned)
-    }
-    let request = ApprovalRequest(
-      title: chosen.title(readableClientName(clientName) ?? chosen.agent, app.name),
-      requester: readableClientName(clientName) ?? chosen.agent,
-      requesterIcon: requesterIcon(peer: peerProcess(of: connection.descriptor)),
-      appName: app.name,
-      access: [chosen.wants, knowledge(forBundleId: app.bundleId)?.access].compactMap { $0 },
-      path: app.path,
-      warnings: warnings,
-      bundleIdentifier: app.bundleId,
-      offersAlways: appSigner != nil,
-      timeoutSeconds: approvalTimeoutSeconds,
-      labels: chosen.labels)
-
-    let decision = askUser(request, connection: connection)
-    try connection.throwIfCancelled()
-    writeDecisionLog(client: clientName, bundleId: app.bundleId, decision: decision.rawValue)
-
-    switch decision {
-    case .once:
-      // This request only; nothing is remembered, so the next one asks again.
-      return
-    case .session:
-      session.lock.withLock { _ = session.approved.insert(sessionKey) }
-    case .always, .hour, .day:
-      // Kept only in the store, so revoking it reaches sessions already running.
-      let lasts: TimeInterval? = decision == .hour ? 3600 : decision == .day ? 86400 : nil
-      do {
-        guard let appSigner else { throw HelperError(code: "store_failed", message: "The app has no valid signature.") }
-        try ApprovalStore.add(bundleId: app.bundleId, signer: appSigner, until: lasts.map { Date().addingTimeInterval($0) })
-      } catch {
-        // A session approval has no end time, so it cannot stand in for a limited one.
-        if lasts != nil {
-          throw HelperError(code: "store_failed", message: "The approval for \(app.name) could not be saved.")
-        }
-        NSLog("\(Configuration.appName): could not save a permanent approval: \(error)")
-        session.lock.withLock { _ = session.approved.insert(sessionKey) }
-      }
-    case .decline:
-      session.lock.withLock { session.declinedAt[app.bundleId] = Date() }
-      throw HelperError(code: "declined", message: "The user declined \(app.name), or did not answer in time.")
-    }
+    let (firstUse, client) = session.lock.withLock { (session.usedApps.insert(app.bundleId).inserted, session.clientName) }
+    if firstUse { writeDecisionLog(client: client, bundleId: app.bundleId, decision: "used") }
   }
 }

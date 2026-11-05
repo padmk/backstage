@@ -37,7 +37,7 @@ struct AppKnowledge {
   // Operations send Apple events to the app itself, so it has to run; it is started hidden when it does not.
   var scripted = false
   let summary: String
-  // Shown in the approval window when the operations reach the app's data without its window.
+  // Shown under the app on the list when its operations reach the app's data without its window.
   var access: String? = nil
   var hints: [String] = []
   var pitfalls: [String] = []
@@ -150,7 +150,7 @@ func runOperation(_ params: JSON, session: ApprovalSession, connection: Connecti
   }
   let arguments = try validated(params["arguments"], for: operation)
   let target = try operationTarget(app)
-  try ApprovalGate.require(target, session: session, connection: connection)
+  try ApprovalGate.require(target, session: session)
   try connection.throwIfCancelled()
 
   let frontBefore = onMain { NSWorkspace.shared.frontmostApplication }

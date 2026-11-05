@@ -1,5 +1,5 @@
 // The Unix socket server: one reader and one worker queue per connection, so a request can be cancelled
-// while another is running, and a closed connection closes its approval window.
+// while another is running, and a closed connection ends its requests.
 
 import AppKit
 
@@ -37,34 +37,6 @@ func connectedClients() -> [String] {
   let attached = sessionsLock.withLock { sessions.values.filter { $0.attachedConnections > 0 } }
   let names = attached.map { session in session.lock.withLock { session.clientName } }.map { readableClientName($0) ?? "An agent" }
   return Array(Set(names)).sorted()
-}
-
-// Each approved app, with the signer the user approved, or nil for a process without a valid signature.
-func sessionApprovals() -> [(bundleId: String, signer: String?)] {
-  let all = sessionsLock.withLock { Array(sessions.values) }
-  let keys = Set(all.flatMap { session in session.lock.withLock { Array(session.approved) } })
-  var found: [String: String?] = [:]
-  for key in keys {
-    let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
-    guard parts.count == 2 else { continue }
-    found[parts[0]] = parts[1].hasPrefix("pid:") ? String?.none : parts[1]
-  }
-  return found.map { (bundleId: $0.key, signer: $0.value) }
-}
-
-// Returns whether any session held an approval for the app.
-@discardableResult
-func revokeSessionApprovals(bundleId: String) -> Bool {
-  let all = sessionsLock.withLock { Array(sessions.values) }
-  var found = false
-  for session in all {
-    session.lock.withLock {
-      let matching = session.approved.filter { $0.hasPrefix(bundleId + "|") }
-      if !matching.isEmpty { found = true }
-      session.approved.subtract(matching)
-    }
-  }
-  return found
 }
 
 private func attachSession(id: String) -> ApprovalSession {
@@ -190,7 +162,7 @@ final class Connection {
     fireCancelHandlers()
   }
 
-  // One request: if it runs now, its approval window and waits end; if it is queued, it will not run. A request
+  // One request: if it runs now, its waits end; if it is queued, it will not run. A request
   // that has already finished is not marked, so its id cannot cancel a later one. Requests run one at a time, so
   // the handlers registered belong to the running one, and they are taken in the same step as that check.
   func cancel(requestId: String) {

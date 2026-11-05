@@ -51,7 +51,6 @@ final class MenuBarItem: NSObject, NSMenuDelegate {
         icon.size = NSSize(width: menuIconSize, height: menuIconSize)
         app.image = icon
       }
-      app.badge = NSMenuItemBadge(string: row.durationText)
       menu.addItem(app)
     }
     if apps.isEmpty { menu.addItem(entry(ControlTexts.noApps, symbol: nil, action: nil)) }

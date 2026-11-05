@@ -49,21 +49,21 @@ let maxSteps = 20
 let tools: [ToolDefinition] = [
   ToolDefinition(
     name: "list_apps",
-    description: "List running apps. Needs no approval.",
+    description: "List running apps with `access` for each: `allowed`, `not_approved` (not on the user's list) or `never_available`. With app: that app, running or installed, without starting it. Check this before using an app by any route. Being listed here does not allow an app.",
     properties: [
-      
+      ("app", ["type": "string", "description": "App name or bundle id"] as JSON)
     ],
     required: [], annotations: [:]),
   ToolDefinition(
     name: "launch_app",
-    description: "Start an app in the background. If it takes the focus while starting, the app you were in gets it back and the new app stays behind it. An app that is already running is left as it is.",
+    description: "Start an app in the background. Needs the app on the list. If it takes the focus while starting, the app you were in gets it back and the new app stays behind it. An app that is already running is left as it is.",
     properties: [
       ("app", ["type": "string", "description": "App name or bundle id, not a path"] as JSON)
     ],
     required: ["app"], annotations: [:]),
   ToolDefinition(
     name: "list_operations",
-    description: "List the ready operations, hints and pitfalls Backstage knows for well-known apps. Without app: the apps that have them. With app: its operations and their arguments. Prefer an operation to working through the window: it is faster, runs in the background and checks its own result. Needs no approval.",
+    description: "List the ready operations, hints and pitfalls Backstage knows for well-known apps. Without app: the apps that have them. With app: its operations and their arguments. Prefer an operation to working through the window: it is faster, runs in the background and checks its own result. Listing works for any app; running an operation needs the app on the list.",
     properties: [
       ("app", ["type": "string", "description": "App name or bundle id"] as JSON)
     ],

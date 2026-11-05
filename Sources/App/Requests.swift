@@ -81,6 +81,13 @@ private func installedApp(_ query: String) throws -> URL {
   return url
 }
 
+private func installedIdentity(_ url: URL) throws -> AppIdentity {
+  guard let bundleId = Bundle(url: url)?.bundleIdentifier else {
+    throw HelperError(code: "app_not_found", message: "\(url.lastPathComponent) has no bundle identifier.")
+  }
+  return AppIdentity(pid: 0, bundleId: bundleId, name: url.deletingPathExtension().lastPathComponent, launchDate: nil, path: url.path)
+}
+
 private func launch(_ query: String, session: ApprovalSession, connection: Connection) throws -> JSON {
   let url = try installedApp(query)
   guard let bundle = Bundle(url: url), let bundleId = bundle.bundleIdentifier else {
@@ -89,7 +96,7 @@ private func launch(_ query: String, session: ApprovalSession, connection: Conne
   let name = (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
     ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? url.deletingPathExtension().lastPathComponent
   try ApprovalGate.require(
-    AppIdentity(pid: 0, bundleId: bundleId, name: name, launchDate: nil, path: url.path), session: session, connection: connection)
+    AppIdentity(pid: 0, bundleId: bundleId, name: name, launchDate: nil, path: url.path), session: session)
 
   // Opening a running app sends it a reopen event, which can show a window and take the focus, so it is left as it is.
   if let running = onMain({ NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first { !$0.isTerminated } }) {
@@ -558,12 +565,28 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
 
   case "approvals_revoke":
     let bundleId = try string(params, "bundle_id")
-    let stored = try ApprovalStore.revoke(bundleId: bundleId)
-    let inSession = revokeSessionApprovals(bundleId: bundleId)
-    return ["revoked": stored || inSession] as JSON
+    let revoked = try ApprovalStore.revoke(bundleId: bundleId)
+    if revoked { writeDecisionLog(client: "settings", bundleId: bundleId, decision: "removed") }
+    return ["revoked": revoked] as JSON
+
+  case "approvals_add":
+    let query = try string(params, "app")
+    let app = try (try? resolve(query)) ?? installedIdentity(try installedApp(query))
+    try addToList(app, by: "settings")
+    return ["added": app.bundleId, "name": app.name] as JSON
 
   case "list_apps":
-    return ["apps": visibleApps().map(describe)] as JSON
+    // With app: that one app, running or only installed, without starting it.
+    if let query = params["app"] as? String {
+      let app = try (try? resolve(query)) ?? installedIdentity(try installedApp(query))
+      return ["app": ["name": app.name, "bundle_id": app.bundleId, "running": app.pid != 0, "access": ApprovalGate.access(app).rawValue],
+              "every_app": Preferences.allowsEveryApp] as JSON
+    }
+    return ["apps": visibleApps().map { running in
+      var entry = describe(running)
+      entry["access"] = ApprovalGate.access(identity(of: running)).rawValue
+      return entry
+    }, "every_app": Preferences.allowsEveryApp] as JSON
 
   case "launch_app":
     return try launch(string(params, "app"), session: session, connection: connection)
@@ -583,7 +606,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   }
 
   let app = try resolve(string(params, "app"))
-  try ApprovalGate.require(app, session: session, connection: connection)
+  try ApprovalGate.require(app, session: session)
   try requireSameProcess(app)
   try connection.throwIfCancelled()
 
