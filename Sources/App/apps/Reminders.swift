@@ -14,7 +14,7 @@ private func priorityName(_ value: Int) -> String {
 }
 
 private func dueText(_ components: DateComponents?) -> String? {
-  guard let components, let date = Calendar.current.date(from: components) else { return nil }
+  guard let components, let date = isoCalendar.date(from: components) else { return nil }
   return components.hour == nil ? dayText(date) : timeText(date)
 }
 
@@ -68,7 +68,7 @@ private let list = Operation(
     let predicate = arguments["include_completed"] as? Bool == true
       ? store.predicateForReminders(in: calendars)
       : store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: calendars)
-    let due = { (item: EKReminder) in item.dueDateComponents.flatMap { Calendar.current.date(from: $0) } ?? .distantFuture }
+    let due = { (item: EKReminder) in item.dueDateComponents.flatMap { isoCalendar.date(from: $0) } ?? .distantFuture }
     let found = try fetch(predicate, in: store).sorted { due($0) < due($1) }
     return ["total": found.count, "reminders": found.prefix(limit(arguments)).map(describe)]
   }
@@ -97,7 +97,7 @@ private let add = Operation(
     try requireWritable(item.calendar, kind: "list")
     if let due = try optionalString(arguments, "due").map({ try moment($0, key: "due") }) {
       let fields: Set<Calendar.Component> = due.isDay ? [.year, .month, .day] : [.year, .month, .day, .hour, .minute, .second, .timeZone]
-      item.dueDateComponents = Calendar.current.dateComponents(fields, from: due.date)
+      item.dueDateComponents = isoCalendar.dateComponents(fields, from: due.date)
       if !due.isDay { item.addAlarm(EKAlarm(absoluteDate: due.date)) }
     }
     item.notes = optionalString(arguments, "notes")

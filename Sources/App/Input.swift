@@ -78,6 +78,9 @@ func postText(_ text: String, pid: pid_t) throws {
         throw HelperError(code: "action_failed", message: "Could not create a key event.")
       }
       event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+      // Otherwise the event carries the keys the user is holding, and a letter typed while they hold Cmd
+      // reaches the app as a shortcut.
+      event.flags = []
       event.postToPid(pid)
     }
   }

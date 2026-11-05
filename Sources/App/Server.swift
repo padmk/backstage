@@ -93,18 +93,28 @@ private func forgetDetachedSessions() {
 
 final class Connection {
   let descriptor: Int32
+  // The reader and the worker both answer on this socket, so one reply is written whole before the next starts.
+  let writeLock = NSLock()
   private let lock = NSLock()
   private var generation = 0
   private var isClosed = false
   private var cancelHandlers: [UUID: () -> Void] = [:]
-  private var currentSession = ApprovalSession()
+  // Requests from the moment they are queued until they finish, those of them cancelled, and the one running now.
+  private var outstandingIds = Set<String>()
+  private var cancelledIds = Set<String>()
+  private var runningId: String?
+  private var currentSession: ApprovalSession
   private var adoptedSession: ApprovalSession?
   private var requestGeneration = 0
 
   var session: ApprovalSession { lock.withLock { currentSession } }
 
+  // Registered from the start, so approvals given to a client that never says hello are listed and revocable too.
   init(descriptor: Int32) {
     self.descriptor = descriptor
+    let own = attachSession(id: "connection-\(UUID().uuidString)")
+    currentSession = own
+    adoptedSession = own
   }
 
   func adopt(sessionId: String) {
@@ -120,7 +130,7 @@ final class Connection {
   }
 
   var isCancelled: Bool {
-    lock.withLock { isClosed || requestGeneration != generation }
+    lock.withLock { isClosed || requestGeneration != generation || runningId.map(cancelledIds.contains) == true }
   }
 
   func throwIfCancelled() throws {
@@ -129,8 +139,26 @@ final class Connection {
     }
   }
 
-  func begin(generation captured: Int) {
-    lock.withLock { requestGeneration = captured }
+  func begin(generation captured: Int, id: String?) {
+    lock.withLock {
+      requestGeneration = captured
+      runningId = id
+    }
+  }
+
+  func enqueue(id: String?) {
+    guard let id else { return }
+    lock.withLock { _ = outstandingIds.insert(id) }
+  }
+
+  func finish(id: String?) {
+    lock.withLock {
+      if let id {
+        cancelledIds.remove(id)
+        outstandingIds.remove(id)
+      }
+      runningId = nil
+    }
   }
 
   var currentGeneration: Int { lock.withLock { generation } }
@@ -138,7 +166,7 @@ final class Connection {
   func onCancel(_ handler: @escaping () -> Void) -> () -> Void {
     let id = UUID()
     let cancelledAlready = lock.withLock { () -> Bool in
-      if isClosed || requestGeneration != generation { return true }
+      if isClosed || requestGeneration != generation || runningId.map(cancelledIds.contains) == true { return true }
       cancelHandlers[id] = handler
       return false
     }
@@ -162,6 +190,21 @@ final class Connection {
     fireCancelHandlers()
   }
 
+  // One request: if it runs now, its approval window and waits end; if it is queued, it will not run. A request
+  // that has already finished is not marked, so its id cannot cancel a later one. Requests run one at a time, so
+  // the handlers registered belong to the running one, and they are taken in the same step as that check.
+  func cancel(requestId: String) {
+    let handlers = lock.withLock { () -> [() -> Void] in
+      guard outstandingIds.contains(requestId) else { return [] }
+      cancelledIds.insert(requestId)
+      guard runningId == requestId else { return [] }
+      let all = Array(cancelHandlers.values)
+      cancelHandlers.removeAll()
+      return all
+    }
+    handlers.forEach { $0() }
+  }
+
   func close() {
     let adopted = lock.withLock { () -> ApprovalSession? in
       isClosed = true
@@ -173,9 +216,12 @@ final class Connection {
   }
 }
 
-private func write(_ reply: JSON, to descriptor: Int32) {
+private func write(_ reply: JSON, to connection: Connection) {
   guard var data = try? JSONSerialization.data(withJSONObject: reply) else { return }
   data.append(0x0a)
+  let descriptor = connection.descriptor
+  connection.writeLock.lock()
+  defer { connection.writeLock.unlock() }
   data.withUnsafeBytes { buffer in
     var offset = 0
     while offset < buffer.count {
@@ -188,7 +234,9 @@ private func write(_ reply: JSON, to descriptor: Int32) {
 
 private func perform(_ request: JSON, generation: Int, connection: Connection) {
   let id = request["id"] ?? NSNull()
-  connection.begin(generation: generation)
+  let key = request["id"].map { "\($0)" }
+  connection.begin(generation: generation, id: key)
+  defer { connection.finish(id: key) }
   do {
     try connection.throwIfCancelled()
     if let deadline = request["deadline"] as? Double, Date().timeIntervalSince1970 * 1000 > deadline {
@@ -198,11 +246,11 @@ private func perform(_ request: JSON, generation: Int, connection: Connection) {
     let method = request["method"] as? String ?? ""
     if method == "hello", let sessionId = params["session_id"] as? String { connection.adopt(sessionId: sessionId) }
     let result = try handle(method: method, params: params, connection: connection)
-    write(["id": id, "result": result], to: connection.descriptor)
+    write(["id": id, "result": result], to: connection)
   } catch let error as HelperError {
-    write(["id": id, "error": ["code": error.code, "message": error.message]], to: connection.descriptor)
+    write(["id": id, "error": ["code": error.code, "message": error.message]], to: connection)
   } catch {
-    write(["id": id, "error": ["code": "failed", "message": error.localizedDescription]], to: connection.descriptor)
+    write(["id": id, "error": ["code": "failed", "message": error.localizedDescription]], to: connection)
   }
 }
 
@@ -219,15 +267,20 @@ private func serve(_ descriptor: Int32) {
       let line = Data(pending[pending.startIndex..<newline])
       pending = Data(pending[(newline + 1)...])
       guard let request = try? JSONSerialization.jsonObject(with: line) as? JSON else {
-        write(["id": NSNull(), "error": ["code": "invalid_request", "message": "Not a JSON object."]], to: descriptor)
+        write(["id": NSNull(), "error": ["code": "invalid_request", "message": "Not a JSON object."]], to: connection)
         continue
       }
       // Handled here rather than queued, because the worker may be busy with what is being cancelled.
       if request["method"] as? String == "cancel" {
-        connection.cancelRequests()
+        if let target = (request["params"] as? JSON)?["id"] {
+          connection.cancel(requestId: "\(target)")
+        } else {
+          connection.cancelRequests()
+        }
         continue
       }
       let generation = connection.currentGeneration
+      connection.enqueue(id: request["id"].map { "\($0)" })
       worker.async { perform(request, generation: generation, connection: connection) }
     }
   }

@@ -58,10 +58,16 @@ private let texts = ApprovalTexts(
     wantsToControl: "wants to control", allAgents: "All agents", bundleId: "Bundle ID", path: "Path"),
   agent: "An agent")
 
+private let maxClientNameLength = 40
+
+// The client names itself, so the name is kept to one short line: it cannot fill the approval window or push its
+// buttons off the screen.
 func readableClientName(_ name: String?) -> String? {
-  let words = (name ?? "").split(whereSeparator: { "-_ ".contains($0) })
+  let printable = (name ?? "").unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && !CharacterSet.newlines.contains($0) }
+  let words = String(String.UnicodeScalarView(printable)).split(whereSeparator: { "-_ ".contains($0) })
   guard !words.isEmpty else { return nil }
-  return words.map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+  let readable = words.map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+  return readable.count > maxClientNameLength ? String(readable.prefix(maxClientNameLength - 1)) + "…" : readable
 }
 
 // errSecCSStaticCodeChanged: the running code no longer matches the file on disk.
@@ -126,11 +132,13 @@ enum ApprovalStore {
   private static let lock = NSLock()
 
   // Expired approvals count as absent, and leave the file on the next write.
+  // Each entry on its own, so one malformed entry does not hide, and on the next write drop, all the others.
   private static func read() -> [[String: String]] {
     guard let data = FileManager.default.contents(atPath: path),
       let object = try? JSONSerialization.jsonObject(with: data) as? JSON,
-      let approvals = object["approvals"] as? [[String: String]]
+      let entries = object["approvals"] as? [Any]
     else { return [] }
+    let approvals = entries.compactMap { $0 as? [String: String] }
     let now = Date()
     return approvals.filter { entry in
       guard let text = entry["expires_at"] else { return true }

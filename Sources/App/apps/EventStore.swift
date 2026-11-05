@@ -73,6 +73,13 @@ func describe(_ calendar: EKCalendar, isDefault: Bool) -> JSON {
 
 // MARK: Times
 
+// ISO dates are Gregorian whatever calendar the user prefers, in this Mac's time zone.
+var isoCalendar: Calendar {
+  var calendar = Calendar(identifier: .gregorian)
+  calendar.timeZone = .current
+  return calendar
+}
+
 struct Moment {
   let date: Date
   // A date with no time of day, such as 2026-11-05.
@@ -89,7 +96,15 @@ private func formatter(_ format: String) -> DateFormatter {
 
 // ISO 8601: a date, or a date and time with or without an offset; without one it is local time.
 func moment(_ text: String, key: String) throws -> Moment {
-  if let day = formatter("yyyy-MM-dd").date(from: text), text.count == 10 { return Moment(date: day, isDay: true) }
+  // From the date's parts, because where the clock changes at midnight, that midnight does not exist and a
+  // formatter refuses the day; the calendar gives its first moment instead.
+  if text.range(of: #"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"#, options: .regularExpression) != nil {
+    let parts = text.split(separator: "-").compactMap { Int($0) }
+    if parts.count == 3 {
+      let components = DateComponents(year: parts[0], month: parts[1], day: parts[2])
+      if components.isValidDate(in: isoCalendar), let day = isoCalendar.date(from: components) { return Moment(date: day, isDay: true) }
+    }
+  }
   for options: ISO8601DateFormatter.Options in [[.withInternetDateTime], [.withInternetDateTime, .withFractionalSeconds]] {
     let iso = ISO8601DateFormatter()
     iso.formatOptions = options

@@ -40,7 +40,7 @@ private let listEvents = Operation(
 ) { arguments in
   let start = try moment(string(arguments, "start"), key: "start").date
   let endMoment = try moment(string(arguments, "end"), key: "end")
-  let end = endMoment.isDay ? Calendar.current.date(byAdding: .day, value: 1, to: endMoment.date)! : endMoment.date
+  let end = endMoment.isDay ? isoCalendar.date(byAdding: .day, value: 1, to: endMoment.date)! : endMoment.date
   guard end > start else { throw HelperError(code: "invalid_arguments", message: "end must be after start.") }
   guard end.timeIntervalSince(start) <= maxRangeDays * 86400 else {
     throw HelperError(code: "invalid_arguments", message: "The range may span at most 366 days.")
@@ -79,7 +79,7 @@ private let createEvent = Operation(
     event.title = try string(arguments, "title")
     event.isAllDay = allDay
     event.startDate = start.date
-    event.endDate = allDay ? Calendar.current.date(byAdding: .day, value: 1, to: end.date)!.addingTimeInterval(-1) : end.date
+    event.endDate = allDay ? isoCalendar.date(byAdding: .day, value: 1, to: end.date)!.addingTimeInterval(-1) : end.date
     event.location = optionalString(arguments, "location")
     event.notes = optionalString(arguments, "notes")
     if let query = optionalString(arguments, "calendar") {

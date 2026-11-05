@@ -50,7 +50,9 @@ private let send = Operation(
   guard !destination.isEmpty, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
     throw HelperError(code: "invalid_arguments", message: "to and text must not be empty.")
   }
-  let before = chatLabels(containing: text)
+  // A short text such as "OK" also matches other chats' messages, so it is not checked against the list.
+  let checkable = firstLine(text).count >= minCheckableLength
+  let before = checkable ? chatLabels(containing: text) : nil
   _ = try runAppleScript(sendScript, arguments: [destination, text], target: target)
   // Scripting cannot read messages, but each chat in the window's list is labelled with its latest message, so
   // a new label holding the text shows the message was sent.
@@ -58,18 +60,27 @@ private let send = Operation(
   var shown = false
   let deadline = Date().addingTimeInterval(sentCheckSeconds)
   while let before, let after = chatLabels(containing: text), Date() < deadline {
-    if !after.subtracting(before).isEmpty {
+    // Exactly one new label, since a message arriving in another chat at the same time could match too.
+    if after.subtracting(before).count == 1 {
       shown = true
       break
     }
     sleep(seconds: 0.2)
   }
-  var result: JSON = ["to": destination, "sent": true, "verified": shown]
-  if !shown { result["check"] = "The chat list did not show the message. Read the conversation with get_window_state on Messages before sending again." }
+  // Scripting reports no delivery, and an undelivered message shows in the list too.
+  var result: JSON = ["to": destination, "sent": true, "verified": shown, "delivered": "unknown"]
+  result["check"] = shown
+    ? "verified means the chat list shows the message, not that it was delivered. Read the conversation with get_window_state on Messages to see its delivery state."
+    : "The chat list did not confirm the message. Read the conversation with get_window_state on Messages before sending again."
   return result
 }
 
 private let sentCheckSeconds = 3.0
+private let minCheckableLength = 8
+
+private func firstLine(_ text: String) -> String {
+  text.split(whereSeparator: \.isNewline).first.map(String.init) ?? text
+}
 private let maxLabelSearch = 3000
 
 // The labels of chats in Messages' window that contain the text's first line, or nil when no window can be read.
@@ -79,7 +90,7 @@ private func chatLabels(containing text: String) -> Set<String>? {
   else { return nil }
   let window = windows(of: AXUIElementCreateApplication(app.processIdentifier)).first
   guard let window else { return nil }
-  let wanted = String((text.split(whereSeparator: \.isNewline).first.map(String.init) ?? text).prefix(40))
+  let wanted = String(firstLine(text).prefix(40))
   var found = Set<String>()
   var queue = [window]
   var visited = 0
@@ -104,5 +115,6 @@ let messagesKnowledge = AppKnowledge(
     "A sent message cannot be taken back. Confirm the recipient and the text with the user before send.",
     "Scripting cannot read messages; read a conversation through the window instead.",
     "send to a handle uses iMessage; a number without iMessage fails. Use a chat id from list_chats for SMS chats.",
+    "send's verified means the message shows in the chat list, not that it was delivered; texts shorter than 8 characters are not checked.",
   ],
   operations: [listChats, send])
