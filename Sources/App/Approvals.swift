@@ -205,6 +205,24 @@ private let decisionLogLock = NSLock()
 // command line, which an agent with a shell can also send.
 let settingsClient = "settings", commandLineClient = "command_line"
 
+// The log keeps its newest records only: past this size, about two thousand of them, it is cut back to the newest
+// thousand in one rewrite, so a write rarely costs more than an append.
+private let decisionLogLimit = 200_000
+private let keptDecisions = 1000
+
+private func trimDecisionLog(at path: String) {
+  guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+  let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+  let kept = lines.suffix(keptDecisions).joined(separator: "\n") + "\n"
+  let staging = path + ".trim"
+  guard FileManager.default.createFile(atPath: staging, contents: Data(kept.utf8), attributes: [.posixPermissions: 0o600]),
+        rename(staging, path) == 0
+  else {
+    unlink(staging)
+    return
+  }
+}
+
 func writeDecisionLog(client: String?, bundleId: String, decision: String) {
   let entry: JSON = [
     "time": ISO8601DateFormatter().string(from: Date()), "client": client ?? NSNull(), "app": bundleId, "decision": decision,
@@ -219,8 +237,9 @@ func writeDecisionLog(client: String?, bundleId: String, decision: String) {
   }
   guard let handle = FileHandle(forWritingAtPath: path) else { return }
   defer { try? handle.close() }
-  _ = try? handle.seekToEnd()
+  let size = (try? handle.seekToEnd()) ?? 0
   try? handle.write(contentsOf: data)
+  if size > decisionLogLimit { trimDecisionLog(at: path) }
 }
 
 // MARK: Session state
