@@ -98,7 +98,7 @@ private let readText = Operation(name: "read_text", summary: "Read a document's 
 
 let pagesKnowledge = AppKnowledge(
   bundleId: pagesId, otherBundleIds: [earlierPagesId], name: "Pages", scripted: true, summary: "Open, read, export as PDF and close documents",
-  access: "Can also open, read, export and close your Pages documents through scripting.",
+  access: "Open, read, export and close your Pages documents",
   pitfalls: [
     "Pages starts if it is not running, to answer an operation.",
     "close with save: false discards unsaved changes.",
@@ -170,7 +170,7 @@ private let setCell = Operation(
 
 let numbersKnowledge = AppKnowledge(
   bundleId: numbersId, otherBundleIds: [earlierNumbersId], name: "Numbers", scripted: true, summary: "Open, read tables, set cells, export as PDF and close documents",
-  access: "Can also open, read, change, export and close your Numbers documents through scripting.",
+  access: "Open, read, change, export and close your Numbers documents",
   pitfalls: [
     "Numbers starts if it is not running, to answer an operation.",
     "A new or imported document is named from its content and saved to iCloud Drive once it changes, so its name changes; refer to it by id.",

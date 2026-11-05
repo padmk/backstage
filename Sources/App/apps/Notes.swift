@@ -116,33 +116,16 @@ private let create = Operation(
     """#), arguments: arguments, target: target), from: target)
 }
 
-private let append = Operation(
-  name: "append", summary: "Add plain text to the end of a note, keeping its formatting", effect: .changes,
-  arguments: [
-    Argument(name: "id", kind: .string, required: true, description: "Note id from search"),
-    Argument(name: "text", kind: .string, required: true, description: "Plain text; line breaks become paragraphs"),
-  ]
-) { arguments in
-  try dictionary(runScript(script(#"""
-    const note = noteWithId(args.id);
-    const before = note.plaintext();
-    note.body = note.body() + paragraphs(args.text);
-    const result = summary(note);
-    // Every paragraph ends in a line break, including empty ones at the end, which stay before the new text.
-    result.verified = plain(note.plaintext()) === plain((before === '' || before.endsWith('\n') ? before : before + '\n') + args.text);
-    return result;
-    """#), arguments: arguments, target: target), from: target)
-}
-
 let notesKnowledge = AppKnowledge(
-  bundleId: "com.apple.Notes", name: "Notes", scripted: true, summary: "Find, read, create and add to notes",
-  access: "Can also read and change your notes through scripting, even while Notes is closed.",
+  bundleId: "com.apple.Notes", name: "Notes", scripted: true, summary: "Find, read and create notes",
+  access: "Read and change your notes, even while Notes is closed",
   hints: [
     "The sidebar lists folders by account; the note list and the editor are to its right. A note's first line is its title.",
   ],
   pitfalls: [
     "Runs of spaces and tabs in text become one space, because the body is HTML.",
     "Locked notes cannot be read or changed by any route until the user unlocks them.",
+    "There is no operation that adds to an existing note: Notes gives its body back without attachments, checklist state or some formatting, so rewriting it loses them. Add to a note through the window, or create a new one.",
     "Notes starts if it is not running, to answer an operation; the app you were in gets the focus back if Notes takes it.",
   ],
-  operations: [listFolders, search, read, create, append])
+  operations: [listFolders, search, read, create])

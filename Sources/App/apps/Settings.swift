@@ -126,7 +126,7 @@ private let openPane = Operation(
 
 let settingsKnowledge = AppKnowledge(
   bundleId: "com.apple.systempreferences", name: "System Settings", summary: "Read and set appearance and output volume, and open panes in the background",
-  access: "Can also change system settings through System Events.",
+  access: "Change system settings through System Events",
   hints: [
     "The sidebar lists panes; each pane is a scroll area of grouped rows whose switches and pop-up buttons can be pressed.",
   ],

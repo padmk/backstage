@@ -132,6 +132,6 @@ private let complete = Operation(
 
 let remindersKnowledge = AppKnowledge(
   bundleId: "com.apple.reminders", name: "Reminders", summary: "List, add and complete reminders",
-  access: "Can also read and change your reminders in every account, even while Reminders is closed.",
+  access: "Read and change your reminders in every account, even while Reminders is closed",
   pitfalls: ["Operations work on the data directly, so the Reminders window may show a change a moment later."],
   operations: [listLists, list, add, complete])

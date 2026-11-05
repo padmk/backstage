@@ -72,7 +72,7 @@ private let run = Operation(
 
 let shortcutsKnowledge = AppKnowledge(
   bundleId: "com.apple.shortcuts", name: "Shortcuts", summary: "List and run shortcuts, which also reach Home scenes and other apps without scripting",
-  access: "Can also run your shortcuts, which may do anything their actions do.",
+  access: "Run your shortcuts, which may do anything their actions do",
   pitfalls: [
     "A shortcut does whatever its actions do, and Backstage cannot check its effect; read the state it was meant to change.",
     "A shortcut that asks a question or shows a result opens a dialog, which can come to the front.",

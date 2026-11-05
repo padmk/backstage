@@ -77,7 +77,7 @@ private let trash = Operation(
 
 let finderKnowledge = AppKnowledge(
   bundleId: "com.apple.finder", name: "Finder", scripted: true, summary: "Read the selection and front folder, reveal files, set tags, move to the Trash",
-  access: "Can also reach your files through Finder.",
+  access: "Reach your files through Finder",
   pitfalls: [
     "For reading, copying or moving files, use a shell; these operations cover what only Finder knows.",
     "Only files in the home folder or on external volumes are reachable.",

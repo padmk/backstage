@@ -153,7 +153,7 @@ private let createDraft = Operation(
 
 let mailKnowledge = AppKnowledge(
   bundleId: "com.apple.mail", name: "Mail", scripted: true, summary: "Find and read mail, mark it read, and save drafts",
-  access: "Can also read your mail and save drafts through scripting, even while Mail is closed.",
+  access: "Read your mail and save drafts, even while Mail is closed",
   hints: ["The sidebar lists mailboxes by account; the message list and the message are to its right."],
   pitfalls: [
     "Nothing here sends mail. create_draft saves to Drafts; the user sends it.",

@@ -168,6 +168,23 @@ func postScroll(at point: CGPoint, target: PointerTarget, pid: pid_t, lines: Int
 
 // The last resort for a window that ignores background input: the app comes forward, the click goes through
 // the real cursor, and the cursor goes back to where it was. The caller gives the focus back.
+// A click posted to the whole system lands on whatever window is on top at that point, which may belong to
+// another app or be the approval window itself. It is refused unless the top window there is the app's own.
+private func requireOwnWindowOnTop(at point: CGPoint, pid: pid_t) throws {
+  let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+  let top = windows.first { info in
+    guard let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+      let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+      (info[kCGWindowAlpha as String] as? Double ?? 1) > 0
+    else { return false }
+    return rect.contains(point)
+  }
+  guard let top, (top[kCGWindowOwnerPID as String] as? Int).map({ pid_t($0) }) == pid else {
+    let owner = top?[kCGWindowOwnerName as String] as? String ?? "another window"
+    throw HelperError(code: "point_covered", message: "\(owner) is on top at that point, so nothing was clicked.")
+  }
+}
+
 func postForegroundClick(at point: CGPoint, window: AXUIElement, pid: pid_t, count: Int) throws {
   guard let app = NSRunningApplication(processIdentifier: pid) else {
     throw HelperError(code: "app_not_found", message: "The app is no longer running.")
@@ -192,10 +209,13 @@ func postForegroundClick(at point: CGPoint, window: AXUIElement, pid: pid_t, cou
     throw HelperError(code: "action_failed", message: "Could not create a mouse event.")
   }
   moved.flags = []
+  try requireOwnWindowOnTop(at: point, pid: pid)
   moved.post(tap: .cghidEventTap)
   sleep(seconds: pointerEventGap)
   for click in 1...min(max(1, count), 3) {
     for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+      // Checked right before each press, so a window that appeared meanwhile, such as an approval, is not hit.
+      if type == .leftMouseDown { try requireOwnWindowOnTop(at: point, pid: pid) }
       guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
         throw HelperError(code: "action_failed", message: "Could not create a mouse event.")
       }

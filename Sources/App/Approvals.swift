@@ -41,22 +41,21 @@ struct ApprovalTexts {
   let wants: String
   let farReaching: String
   let updatedWhileRunning: (String) -> String
-  let restartForPermanent: String
+  let unsigned: String
   let labels: ApprovalLabels
   let agent: String
 }
 
 private let texts = ApprovalTexts(
   title: { "\($0) wants to control \($1)" },
-  wants: "Can read windows, click and type.",
-  farReaching: "Can run commands or change your system.",
-  updatedWhileRunning: { _ in "App updated while running. Access lasts until it quits." },
-  restartForPermanent: "Restart the app for longer access.",
+  wants: "Read app windows, click and type",
+  farReaching: "Can run commands or change your system",
+  updatedWhileRunning: { _ in "Updated while running. Access ends when this app quits. Restart it for longer access." },
+  unsigned: "No valid signature. Access cannot be saved.",
   labels: ApprovalLabels(
     once: "Once", session: "This session", hour: "1 hour", day: "1 day", always: "Always", decline: "Deny",
-    countdown: "Denies in {time}", unlocked: "Approval buttons are now available",
-    moveHere: "Move pointer here to enable approval.", holdStill: "Hold still to enable approval.",
-    ready: "Click to choose.", allowFor: "For all agents:", bundleId: "Bundle ID", path: "Path"),
+    countdown: "Automatically denies in {time}", accessHeading: "Access requested", appHeading: "App identity", thisAgent: "This agent",
+    wantsToControl: "wants to control", allAgents: "All agents", bundleId: "Bundle ID", path: "Path"),
   agent: "An agent")
 
 func readableClientName(_ name: String?) -> String? {
@@ -260,16 +259,20 @@ enum ApprovalGate {
 
     let clientName = session.lock.withLock { session.clientName }
     let chosen = texts
-    var warning = isFarReaching ? [chosen.farReaching] : []
+    var warnings = isFarReaching ? [chosen.farReaching] : []
     if wasUpdatedWhileRunning(app) {
-      warning.append(chosen.updatedWhileRunning(app.name))
-      warning.append(chosen.restartForPermanent)
+      warnings.append(chosen.updatedWhileRunning(app.name))
+    } else if appSigner == nil {
+      warnings.append(chosen.unsigned)
     }
     let request = ApprovalRequest(
       title: chosen.title(readableClientName(clientName) ?? chosen.agent, app.name),
-      message: [chosen.wants, knowledge(forBundleId: app.bundleId)?.access].compactMap { $0 }.joined(separator: " "),
+      requester: readableClientName(clientName) ?? chosen.agent,
+      requesterIcon: requesterIcon(peer: peerProcess(of: connection.descriptor)),
+      appName: app.name,
+      access: [chosen.wants, knowledge(forBundleId: app.bundleId)?.access].compactMap { $0 },
       path: app.path,
-      warning: warning.isEmpty ? nil : warning.joined(separator: " "),
+      warnings: warnings,
       bundleIdentifier: app.bundleId,
       offersAlways: appSigner != nil,
       timeoutSeconds: approvalTimeoutSeconds,

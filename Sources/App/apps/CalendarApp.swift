@@ -103,7 +103,7 @@ private let createEvent = Operation(
 
 let calendarKnowledge = AppKnowledge(
   bundleId: "com.apple.iCal", name: "Calendar", summary: "List calendars and events, and create events",
-  access: "Can also read and change your calendars in every account, even while Calendar is closed.",
+  access: "Read and change your calendars in every account, even while Calendar is closed",
   pitfalls: [
     "Times without an offset are local time on this Mac.",
     "A recurring event appears once per occurrence in list_events, with the same id.",

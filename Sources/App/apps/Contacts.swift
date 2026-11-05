@@ -144,7 +144,7 @@ private let add = Operation(
 
 let contactsKnowledge = AppKnowledge(
   bundleId: "com.apple.AddressBook", name: "Contacts", summary: "Find, read and add contacts",
-  access: "Can also read and add contacts in every account, even while Contacts is closed.",
+  access: "Read and add contacts in every account, even while Contacts is closed",
   pitfalls: ["A person linked across accounts appears once, with the details of every linked card."],
   operations: [search, read, add])
 

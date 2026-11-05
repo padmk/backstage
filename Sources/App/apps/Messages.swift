@@ -96,7 +96,7 @@ private func chatLabels(containing text: String) -> Set<String>? {
 
 let messagesKnowledge = AppKnowledge(
   bundleId: "com.apple.MobileSMS", name: "Messages", scripted: true, summary: "List chats and send iMessages; read conversations through the window",
-  access: "Can also send messages in your name through scripting.",
+  access: "Send messages in your name",
   hints: [
     "Each chat in the sidebar is a static text labelled with its name, unread state, latest message and time; press opens it. Its own actions include Pin, Mark as Unread, Hide Alerts, Open in New Window and Delete.",
   ],
