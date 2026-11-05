@@ -6,20 +6,29 @@ import AppKit
 private let target = "Messages"
 
 private let listChats = Operation(
-  name: "list_chats", summary: "List chats with their ids, names and participants' handles", effect: .reads, arguments: [limitArgument]
+  name: "list_chats", summary: "List chats with their ids, names and participants' handles", effect: .reads,
+  arguments: [Argument(name: "query", kind: .string, required: false, description: "Only chats whose name or a participant's handle contains this, ignoring case"), limitArgument]
 ) { arguments in
   try dictionary(runScript(#"""
     const Messages = Application('Messages');
     const chats = Messages.chats();
     // Some chats, such as one-to-one ones, have no name, and some details are missing; each is read on its own.
     const read = (get, fallback) => { try { return get(); } catch (error) { return fallback; } };
-    return { total: chats.length, chats: chats.slice(0, args.limit).map((chat) => ({
+    const describe = (chat) => ({
       id: chat.id(),
       name: read(() => chat.name(), '') || '',
       service: read(() => chat.account().serviceType(), ''),
       participants: read(() => chat.participants().map((person) => person.handle()), []),
-    })) };
-    """#, arguments: ["limit": limit(arguments)], target: target), from: target)
+    });
+    const query = (args.query || '').toLowerCase();
+    // Without a query only the chats returned are read, since reading each one costs an Apple event.
+    const matching = query
+      ? chats.map(describe).filter((chat) => [chat.name].concat(chat.participants).some((text) => text.toLowerCase().includes(query)))
+      : null;
+    const total = matching ? matching.length : chats.length;
+    const found = matching ? matching.slice(0, args.limit) : chats.slice(0, args.limit).map(describe);
+    return { total: total, has_more: total > found.length, chats: found };
+    """#, arguments: ["limit": limit(arguments), "query": optionalString(arguments, "query") ?? ""], target: target), from: target)
 }
 
 // A chat id from list_chats contains semicolons ("iMessage;-;+15555550100"); anything else is a handle.

@@ -96,7 +96,25 @@ func knowledgeLines(forBundleId bundleId: String) -> [String] {
 }
 
 // Refuses unknown, missing and mistyped arguments, so an operation receives only what it declares.
+// A refused argument comes back with the operation's whole argument list, so the agent can fix the call at once.
 private func validated(_ arguments: Any?, for operation: Operation) throws -> JSON {
+  do {
+    return try checkedArguments(arguments, for: operation)
+  } catch let error as HelperError where error.code == "invalid_arguments" {
+    throw HelperError(code: error.code, message: "\(error.message) \(usage(of: operation))")
+  }
+}
+
+private func usage(of operation: Operation) -> String {
+  guard !operation.arguments.isEmpty else { return "\(operation.name) takes no arguments." }
+  let parts = operation.arguments.map { argument in
+    let kind = argument.allowed.map { $0.joined(separator: "|") } ?? argument.kind.rawValue
+    return "\(argument.name) (\(kind)\(argument.required ? ", required" : "")): \(argument.description)"
+  }
+  return "\(operation.name) takes: " + parts.joined(separator: "; ") + "."
+}
+
+private func checkedArguments(_ arguments: Any?, for operation: Operation) throws -> JSON {
   let given: JSON
   if arguments == nil {
     given = [:]
@@ -108,7 +126,7 @@ private func validated(_ arguments: Any?, for operation: Operation) throws -> JS
   let declared = Dictionary(uniqueKeysWithValues: operation.arguments.map { ($0.name, $0) })
   // app_id is set by the helper, never taken from a request.
   for key in given.keys where declared[key] == nil {
-    throw HelperError(code: "invalid_arguments", message: "\(operation.name) takes no argument \(key). It takes: \(operation.arguments.map(\.name).joined(separator: ", ")).")
+    throw HelperError(code: "invalid_arguments", message: "\(operation.name) takes no argument \(key).")
   }
   for argument in operation.arguments {
     guard let value = given[argument.name], !(value is NSNull) else {

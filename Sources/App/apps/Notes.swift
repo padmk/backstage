@@ -81,17 +81,22 @@ private let search = Operation(
 }
 
 private let read = Operation(
-  name: "read", summary: "Read a note as plain text and as HTML", effect: .reads,
-  arguments: [Argument(name: "id", kind: .string, required: true, description: "Note id from search")]
+  name: "read", summary: "Read a note as plain text, and as HTML when asked", effect: .reads,
+  arguments: [
+    Argument(name: "id", kind: .string, required: true, description: "Note id from search"),
+    Argument(name: "html", kind: .boolean, required: false, description: "Also return the body as HTML, with its formatting; default false"),
+  ]
 ) { arguments in
   try dictionary(runScript(script(#"""
     const note = noteWithId(args.id);
-    const html = note.body();
     const result = summary(note);
     result.created = note.creationDate();
     result.text = note.plaintext();
-    result.html = html.slice(0, 100000);
-    if (html.length > 100000) result.html_truncated = true;
+    if (args.html) {
+      const html = note.body();
+      result.html = html.slice(0, 100000);
+      if (html.length > 100000) result.html_truncated = true;
+    }
     return result;
     """#), arguments: arguments, target: target), from: target)
 }

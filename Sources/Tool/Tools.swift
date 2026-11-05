@@ -53,21 +53,21 @@ let tools: [ToolDefinition] = [
     properties: [
       ("app", ["type": "string", "description": "App name or bundle id"] as JSON)
     ],
-    required: [], annotations: [:]),
+    required: [], annotations: ["readOnlyHint": true, "destructiveHint": false, "openWorldHint": false] as JSON),
   ToolDefinition(
     name: "launch_app",
     description: "Start an app in the background. Needs the app on the list. If it takes the focus while starting, the app you were in gets it back and the new app stays behind it. An app that is already running is left as it is.",
     properties: [
       ("app", ["type": "string", "description": "App name or bundle id, not a path"] as JSON)
     ],
-    required: ["app"], annotations: [:]),
+    required: ["app"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
   ToolDefinition(
     name: "list_operations",
-    description: "List the ready operations, hints and pitfalls Backstage knows for well-known apps. Without app: the apps that have them. With app: its operations and their arguments. Prefer an operation to working through the window: it is faster, runs in the background and checks its own result. Listing works for any app; running an operation needs the app on the list.",
+    description: "List the ready operations, hints and pitfalls Backstage knows for well-known apps: Notes, Reminders, Calendar, Contacts, Mail, Messages, Finder, Pages, Numbers, Music, Shortcuts and System Settings have operations. With app: its operations and their arguments; without: every app with hints. Prefer an operation to working through the window: it is faster, runs in the background and checks its own result. Listing works for any app; running an operation needs the app on the list.",
     properties: [
       ("app", ["type": "string", "description": "App name or bundle id"] as JSON)
     ],
-    required: [], annotations: [:]),
+    required: [], annotations: ["readOnlyHint": true, "destructiveHint": false, "openWorldHint": false] as JSON),
   ToolDefinition(
     name: "run_operation",
     description: "Run one operation from list_operations. The reply carries the result and, for a change, `verified`. `outcome_unknown` means the change may have been made: read the state before trying again.",
@@ -76,7 +76,7 @@ let tools: [ToolDefinition] = [
       ("operation", ["type": "string", "description": "Operation name from list_operations, such as create"] as JSON),
       ("arguments", ["type": "object", "description": "The operation's arguments, as list_operations describes them"] as JSON)
     ],
-    required: ["app", "operation"], annotations: [:]),
+    required: ["app", "operation"], annotations: ["readOnlyHint": false, "destructiveHint": true, "openWorldHint": false] as JSON),
   ToolDefinition(
     name: "get_window_state",
     description: "Read a window as lines of numbered elements with their state and actions. The first line lists the app's windows. Numbers stay valid across reads in this session.",
@@ -88,7 +88,7 @@ let tools: [ToolDefinition] = [
       ("root", ["type": "integer", "minimum": 1, "description": "Read only this element's subtree"] as JSON),
       ("max_elements", ["type": "integer", "minimum": 1, "maximum": 5000] as JSON)
     ],
-    required: ["app"], annotations: [:]),
+    required: ["app"], annotations: ["readOnlyHint": true, "destructiveHint": false, "openWorldHint": false] as JSON),
   ToolDefinition(
     name: "screenshot",
     description: "Capture a window as a PNG, one image pixel per window point, so its coordinates work with click_at. Needs Screen Recording, which is optional; without it, work from get_window_state.",
@@ -96,7 +96,7 @@ let tools: [ToolDefinition] = [
       ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
       ("window", ["type": "integer", "minimum": 0, "description": "Window index shown in get_window_state; default the first"] as JSON)
     ],
-    required: ["app"], annotations: [:]),
+    required: ["app"], annotations: ["readOnlyHint": true, "destructiveHint": false, "openWorldHint": false] as JSON),
   ToolDefinition(
     name: "press",
     description: "Press an element without taking focus, or run one of the actions it lists. The reply's `state` reports what changed in the area last read, or `unknown` when it cannot tell; `verified: false` means delivery could not be confirmed.",
@@ -105,7 +105,7 @@ let tools: [ToolDefinition] = [
       ("element", ["type": "integer", "minimum": 1, "description": "Element number from get_window_state"] as JSON),
       ("action", ["type": "string", "description": "An action the element lists, such as ShowMenu. Default: press"] as JSON)
     ],
-    required: ["app", "element"], annotations: [:]),
+    required: ["app", "element"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
   ToolDefinition(
     name: "set_value",
     description: "Replace the value of an editable element.",
@@ -114,7 +114,7 @@ let tools: [ToolDefinition] = [
       ("element", ["type": "integer", "minimum": 1, "description": "Element number from get_window_state"] as JSON),
       ("value", ["type": "string"] as JSON)
     ],
-    required: ["app", "element", "value"], annotations: [:]),
+    required: ["app", "element", "value"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
   ToolDefinition(
     name: "type_text",
     description: "Insert text at an element, or without one send it as keys to the app's focused element. Delivery `value_appended_at_end` means an unfocused one-line field took it at its end, ignoring the cursor. Line breaks and tabs need an element that takes text directly; otherwise send them with press_key. Nothing is typed if the element cannot take it.",
@@ -123,7 +123,7 @@ let tools: [ToolDefinition] = [
       ("text", ["type": "string", "maxLength": 100000] as JSON),
       ("element", ["type": "integer", "minimum": 1, "description": "Element number from get_window_state"] as JSON)
     ],
-    required: ["app", "text"], annotations: [:]),
+    required: ["app", "text"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
   ToolDefinition(
     name: "press_key",
     description: "Send a key or combination, such as return or cmd+s, to the app in the background. A native view receives it once it has focus, so click the view with click_at first. Other apps and combinations may behave differently, so check the effect, and prefer pressing the menu item.",
@@ -131,7 +131,7 @@ let tools: [ToolDefinition] = [
       ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
       ("key", ["type": "string", "maxLength": 64] as JSON)
     ],
-    required: ["app", "key"], annotations: [:]),
+    required: ["app", "key"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
   ToolDefinition(
     name: "scroll",
     description: "Scroll the area containing an element.",
@@ -141,7 +141,7 @@ let tools: [ToolDefinition] = [
       ("direction", ["type": "string", "enum": ["up", "down", "left", "right"]] as JSON),
       ("pages", ["type": "integer", "minimum": 1, "maximum": 20] as JSON)
     ],
-    required: ["app", "element", "direction"], annotations: [:]),
+    required: ["app", "element", "direction"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
   ToolDefinition(
     name: "drag",
     description: "Drag from one place to another in the background, without moving the cursor: a slider's knob, an item onto a target, a selection. Each end is an element number or a point in window coordinates. Check the effect in `state` or with a screenshot.",
@@ -155,7 +155,7 @@ let tools: [ToolDefinition] = [
       ("to_x", ["type": "number", "minimum": 0] as JSON),
       ("to_y", ["type": "number", "minimum": 0] as JSON)
     ],
-    required: ["app"], annotations: [:]),
+    required: ["app"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
   ToolDefinition(
     name: "click_at",
     description: "Send a click at a point in window coordinates, in the background and without moving the cursor. Use it only when no element can do the job, and check the effect, for example with a screenshot.",
@@ -167,7 +167,7 @@ let tools: [ToolDefinition] = [
       ("count", ["type": "integer", "minimum": 1, "maximum": 3] as JSON),
       ("foreground", ["type": "boolean", "description": "Last resort when a background click did not land: the window comes forward for the click, then the previous app gets the focus back and the cursor returns. Tell the user you used it."] as JSON)
     ],
-    required: ["app", "x", "y"], annotations: [:]),
+    required: ["app", "x", "y"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
 ]
 
 let toolsByName = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0) })

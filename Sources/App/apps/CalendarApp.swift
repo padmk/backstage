@@ -49,7 +49,7 @@ private let listEvents = Operation(
     let calendars = try optionalString(arguments, "calendar").map { [try calendar($0, among: store.calendars(for: .event), kind: "calendar")] }
     let found = store.events(matching: store.predicateForEvents(withStart: start, end: end, calendars: calendars))
       .sorted { $0.startDate < $1.startDate }
-    return ["total": found.count, "events": found.prefix(limit(arguments)).map(describe)]
+    return ["total": found.count, "has_more": found.count > limit(arguments), "events": found.prefix(limit(arguments)).map(describe)]
   }
 }
 
@@ -95,17 +95,81 @@ private let createEvent = Operation(
       throw HelperError(code: "outcome_unknown", message: "Calendar saved the event but it cannot be read back. List the events before trying again.")
     }
     var result = describe(saved)
+    // Every field that was asked for, compared with what the store gives back.
     result["verified"] = saved.title == event.title && saved.isAllDay == allDay
       && abs(saved.startDate.timeIntervalSince(event.startDate)) < 1 && abs(saved.endDate.timeIntervalSince(event.endDate)) < 1
+      && (saved.location ?? "") == (event.location ?? "") && (saved.notes ?? "") == (event.notes ?? "")
+      && saved.calendar.calendarIdentifier == event.calendar.calendarIdentifier
+    return result
+  }
+}
+
+private let updateEvent = Operation(
+  name: "update_event", summary: "Change one event's title, times, location, notes or calendar; only the fields given change. A recurring event is refused", effect: .changes,
+  arguments: [
+    Argument(name: "id", kind: .string, required: true, description: "Event id from list_events"),
+    Argument(name: "title", kind: .string, required: false, description: "New title"),
+    Argument(name: "start", kind: .string, required: false, description: "New start, in the event's kind (a time, or a date for an all-day event); without end, the event keeps its length"),
+    Argument(name: "end", kind: .string, required: false, description: "New end; for an all-day event the last day, inclusive"),
+    Argument(name: "location", kind: .string, required: false, description: "New location; empty removes it"),
+    Argument(name: "notes", kind: .string, required: false, description: "New notes, replacing the old ones"),
+    Argument(name: "calendar", kind: .string, required: false, description: "Calendar id or exact name to move it to"),
+  ]
+) { arguments in
+  let fields = ["title", "start", "end", "location", "notes", "calendar"].filter { arguments[$0] is String }
+  guard !fields.isEmpty else { throw HelperError(code: "invalid_arguments", message: "Give at least one field to change.") }
+  let start = try optionalString(arguments, "start").map { try moment($0, key: "start") }
+  let end = try optionalString(arguments, "end").map { try moment($0, key: "end") }
+  return try withEventStore(.event) { store -> JSON in
+    let id = try string(arguments, "id")
+    guard let event = store.event(withIdentifier: id) else { throw HelperError(code: "not_found", message: "There is no event with id \(id).") }
+    // Every occurrence of a recurring event shares the id, so a change could reach the whole series.
+    guard !event.hasRecurrenceRules, !event.isDetached else { throw HelperError(code: "not_allowed", message: "\(event.title ?? id) repeats; changing a recurring event is not supported. Change it in Calendar.") }
+    try requireWritable(event.calendar, kind: "calendar")
+    let allDay = event.isAllDay
+    for given in [start, end].compactMap({ $0 }) where given.isDay != allDay {
+      throw HelperError(code: "invalid_arguments", message: allDay ? "This is an all-day event, so it takes dates, such as 2026-11-05." : "This event has times, so start and end need a time of day.")
+    }
+    // An all-day event keeps its number of days, which a clock change would break if counted in seconds.
+    let length = event.endDate.timeIntervalSince(event.startDate)
+    let days = isoCalendar.dateComponents([.day], from: isoCalendar.startOfDay(for: event.startDate), to: isoCalendar.startOfDay(for: event.endDate)).day ?? 0
+    let lastDay = { (day: Date) in isoCalendar.date(byAdding: .day, value: 1, to: day)!.addingTimeInterval(-1) }
+    if let start { event.startDate = start.date }
+    if let end {
+      event.endDate = allDay ? lastDay(end.date) : end.date
+    } else if let start {
+      event.endDate = allDay ? lastDay(isoCalendar.date(byAdding: .day, value: days, to: start.date)!) : start.date.addingTimeInterval(length)
+    }
+    guard event.endDate > event.startDate else { throw HelperError(code: "invalid_arguments", message: "end must be after start.") }
+    if let title = arguments["title"] as? String {
+      guard !title.isEmpty else { throw HelperError(code: "invalid_arguments", message: "title cannot be empty.") }
+      event.title = title
+    }
+    if let location = arguments["location"] as? String { event.location = location.isEmpty ? nil : location }
+    if let notes = arguments["notes"] as? String { event.notes = notes }
+    if let query = optionalString(arguments, "calendar") {
+      event.calendar = try calendar(query, among: store.calendars(for: .event), kind: "calendar")
+      try requireWritable(event.calendar, kind: "calendar")
+    }
+    try store.save(event, span: .thisEvent, commit: true)
+    guard let savedId = event.eventIdentifier, let saved = confirmingStore().event(withIdentifier: savedId) else {
+      throw HelperError(code: "outcome_unknown", message: "Calendar saved the change but the event cannot be read back. List the events before trying again.")
+    }
+    var result = describe(saved)
+    result["changed"] = fields
+    result["verified"] = saved.title == event.title
+      && abs(saved.startDate.timeIntervalSince(event.startDate)) < 1 && abs(saved.endDate.timeIntervalSince(event.endDate)) < 1
+      && (saved.location ?? "") == (event.location ?? "") && (saved.notes ?? "") == (event.notes ?? "")
+      && saved.calendar.calendarIdentifier == event.calendar.calendarIdentifier
     return result
   }
 }
 
 let calendarKnowledge = AppKnowledge(
-  bundleId: "com.apple.iCal", name: "Calendar", summary: "List calendars and events, and create events",
+  bundleId: "com.apple.iCal", name: "Calendar", summary: "List calendars and events, and create and change events",
   access: "Read and change your calendars in every account, even while Calendar is closed",
   pitfalls: [
     "Times without an offset are local time on this Mac.",
     "A recurring event appears once per occurrence in list_events, with the same id.",
   ],
-  operations: [listCalendars, listEvents, createEvent])
+  operations: [listCalendars, listEvents, createEvent, updateEvent])

@@ -66,10 +66,28 @@ private func documentOperations(app: String, name: String) -> [Operation] {
     guard (try? FileManager.default.attributesOfItem(atPath: url.path)) == nil else {
       throw HelperError(code: "not_allowed", message: "\(url.path) exists already; give a new path.")
     }
-    _ = try run("App.export(documentNamed(args.document), { to: Path(args.path), as: 'PDF' }); return {};",
-                app: app, ["document": try string(arguments, "document"), "path": url.path, "app_id": arguments["app_id"] ?? app], name: name, timeout: 120)
-    let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
-    return ["path": url.path, "bytes": size, "verified": size > 0]
+    // The app writes a hidden file next to the destination, which then takes the name only if nothing has it by
+    // then, so a file that appeared meanwhile is never replaced.
+    // A short name of its own, so a long destination name still fits the file system's limit.
+    let staging = url.deletingLastPathComponent().appendingPathComponent(".export-\(UUID().uuidString).pdf")
+    defer { try? FileManager.default.removeItem(at: staging) }
+    do {
+      _ = try run("App.export(documentNamed(args.document), { to: Path(args.path), as: 'PDF' }); return {};",
+                  app: app, ["document": try string(arguments, "document"), "path": staging.path, "app_id": arguments["app_id"] ?? app], name: name, timeout: 120)
+    } catch {
+      // The app may still finish an export the script gave up on, so the hidden file is removed again later.
+      for minutes in [2.0, 10.0] {
+        DispatchQueue.global().asyncAfter(deadline: .now() + minutes * 60) { try? FileManager.default.removeItem(at: staging) }
+      }
+      throw error
+    }
+    let size = (try? FileManager.default.attributesOfItem(atPath: staging.path)[.size] as? Int) ?? 0
+    guard size > 0 else { throw HelperError(code: "action_failed", message: "\(name) wrote no PDF.") }
+    guard renamex_np(staging.path, url.path, UInt32(RENAME_EXCL)) == 0 else {
+      if errno == EEXIST { throw HelperError(code: "not_allowed", message: "\(url.path) appeared while exporting, so it was left as it is; give a new path.") }
+      throw HelperError(code: "action_failed", message: "The PDF could not be moved to \(url.path): \(String(cString: strerror(errno))).")
+    }
+    return ["path": url.path, "bytes": size, "verified": true]
   }
   let close = Operation(
     name: "close", summary: "Close a document, saving it first or discarding unsaved changes", effect: .changes,
@@ -140,17 +158,23 @@ private let findTable = #"""
 
 private let readTable = Operation(
   name: "read_table", summary: "Read a table's cells as shown, row by row, with the document's sheets and tables", effect: .reads,
-  arguments: tableArguments + [Argument(name: "rows", kind: .integer, required: false, description: "Most rows to read; default 50", minimum: 1, maximum: 500)]
+  arguments: tableArguments + [
+    Argument(name: "rows", kind: .integer, required: false, description: "Most rows to read; default 50", minimum: 1, maximum: 500),
+    Argument(name: "first_row", kind: .integer, required: false, description: "Row to start at, counting from 1; default 1", minimum: 1),
+  ]
 ) { arguments in
   var given = arguments
   given["rows"] = arguments["rows"] as? Int ?? 50
+  given["first_row"] = arguments["first_row"] as? Int ?? 1
   return try run(findTable + #"""
     const document = documentNamed(args.document);
     const { sheet, table } = tableIn(document);
     const rowCount = table.rowCount();
-    const rows = table.rows().slice(0, args.rows).map((row) => row.cells.formattedValue().map((value) => value === null ? '' : value));
+    const first = args.first_row - 1;
+    const rows = table.rows().slice(first, first + args.rows).map((row) => row.cells.formattedValue().map((value) => value === null ? '' : value));
     return { document: describe(document), sheets: document.sheets().map((item) => ({ name: item.name(), tables: item.tables.name() })),
-      sheet: sheet.name(), table: table.name(), row_count: rowCount, column_count: table.columnCount(), rows: rows, rows_truncated: rowCount > rows.length };
+      sheet: sheet.name(), table: table.name(), row_count: rowCount, column_count: table.columnCount(), first_row: args.first_row, rows: rows,
+      has_more: rowCount > first + rows.length };
     """#, app: numbersId, given, name: "Numbers")
 }
 
@@ -179,6 +203,62 @@ private let setCell = Operation(
     """#, app: numbersId, arguments.merging(["cell": cell]) { $1 }, name: "Numbers")
 }
 
+private let maxCells = 500
+
+// Several cells in one script, checked before any is written, so a bad address changes nothing.
+private let setCells = Operation(
+  name: "set_cells", summary: "Set several cells at once, as if typed, and report each one", effect: .changes,
+  arguments: tableArguments + [
+    Argument(name: "values", kind: .string, required: true, description: "A JSON object of cell address to value, such as {\"B2\": \"10\", \"C2\": \"done\"}; at most 500 cells, empty clears"),
+  ]
+) { arguments in
+  guard let data = try string(arguments, "values").data(using: .utf8),
+    let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any], !object.isEmpty
+  else { throw HelperError(code: "invalid_arguments", message: "values must be a JSON object of cell address to value.") }
+  guard object.count <= maxCells else { throw HelperError(code: "invalid_arguments", message: "values may hold at most \(maxCells) cells.") }
+  var cells: [String: String] = [:]
+  for (address, value) in object {
+    let cell = address.uppercased()
+    guard cells[cell] == nil else { throw HelperError(code: "invalid_arguments", message: "\(cell) is given more than once.") }
+    guard cell.range(of: #"^[A-Z]{1,3}[1-9][0-9]{0,5}$"#, options: .regularExpression) != nil else {
+      throw HelperError(code: "invalid_arguments", message: "\(address) is not a cell address such as B2.")
+    }
+    guard let text = value as? String ?? (value as? NSNumber).map({ $0.stringValue }) else {
+      throw HelperError(code: "invalid_arguments", message: "The value for \(address) must be text or a number.")
+    }
+    cells[cell] = text
+  }
+  var given = arguments
+  given["values"] = cells
+  return try run(findTable + #"""
+    const document = documentNamed(args.document);
+    const { sheet, table } = tableIn(document);
+    const addresses = Object.keys(args.values).sort();
+    const targets = addresses.map((address) => {
+      const cell = table.cells.byName(address);
+      try { cell.name(); } catch (error) { fail('not_found', 'The table has no cell ' + address + '. Nothing was changed.'); }
+      return cell;
+    });
+    // Once a cell is written, a failure leaves the earlier ones changed, so it reports what was done.
+    const results = [];
+    for (let index = 0; index < addresses.length; index++) {
+      const address = addresses[index];
+      const value = args.values[address];
+      try {
+        targets[index].value = value;
+        const shown = targets[index].formattedValue();
+        const stored = targets[index].value();
+        const verified = value === '' ? stored === null : (String(stored) === value || shown === value || (stored !== null && Number(value) === stored));
+        results.push({ cell: address, shown: shown === null ? '' : shown, verified: verified });
+      } catch (error) {
+        fail('outcome_unknown', 'Writing ' + address + ' failed (' + error.message + '), after ' + results.length + ' cells were set: '
+          + JSON.stringify(results) + '. ' + address + ' may have changed; read the table before trying again.');
+      }
+    }
+    return { document: describe(document), sheet: sheet.name(), table: table.name(), cells: results, verified: results.every((item) => item.verified) };
+    """#, app: numbersId, given, name: "Numbers", timeout: 120)
+}
+
 let numbersKnowledge = AppKnowledge(
   bundleId: numbersId, otherBundleIds: [earlierNumbersId], name: "Numbers", scripted: true, summary: "Open, read tables, set cells, export as PDF and close documents",
   access: "Open, read, change, export and close your Numbers documents",
@@ -188,4 +268,4 @@ let numbersKnowledge = AppKnowledge(
     "set_cell does not save a document that has a file; close with save: true does.",
     "close with save: false discards unsaved changes.",
   ],
-  operations: documentOperations(app: numbersId, name: "Numbers") + [readTable, setCell])
+  operations: documentOperations(app: numbersId, name: "Numbers") + [readTable, setCell, setCells])

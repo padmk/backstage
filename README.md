@@ -14,7 +14,7 @@ cd backstage
 make install
 ```
 
-`make install` builds `build/Backstage.app` and runs its `setup`: it installs the app into `/Applications`, signed with a certificate of this Mac so macOS keeps its permissions across updates, waits for you to enable it under **Accessibility**, registers `/Applications/Backstage.app/Contents/Helpers/backstage mcp` as the `backstage` MCP server with Claude Code, and opens the Backstage window on the Apps tab. Screen Recording is optional, for screenshots.
+`make install` builds `build/Backstage.app` and runs its `setup`: it installs the app into `/Applications`, signed with a certificate of this Mac so macOS keeps its permissions across updates, waits for you to enable it under **Accessibility**, registers `/Applications/Backstage.app/Contents/Helpers/backstage mcp` as the `backstage` MCP server with Claude Code and Codex, and opens the Backstage window on the Apps tab. Screen Recording is optional, for screenshots.
 
 ## Tools
 

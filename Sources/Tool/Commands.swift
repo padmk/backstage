@@ -30,6 +30,7 @@ private struct MCPClient {
 
 private let mcpClients = [
   MCPClient(name: "Claude Code", command: "claude", remove: { ["mcp", "remove", $0, "-s", "user"] }, add: { ["mcp", "add", "-s", "user", $0, "--"] + $1 }),
+  MCPClient(name: "Codex", command: "codex", remove: { ["mcp", "remove", $0] }, add: { ["mcp", "add", $0, "--"] + $1 }),
 ]
 
 private func findCommand(_ name: String) -> String? {
@@ -225,7 +226,7 @@ private func usage() -> Int32 {
   let name = Product.commandName
   FileHandle.standardError.write(Data("""
   Usage:
-    \(name) setup [--no-register]     Install the app, ask for Accessibility, register with Claude Code
+    \(name) setup [--no-register]     Install the app, ask for Accessibility, register with Claude Code and Codex
     \(name) doctor                    Check this Mac
     \(name) approvals [list]          List the apps agents may use
     \(name) approvals add <app>       Add an app by name or bundle id

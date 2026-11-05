@@ -131,8 +131,10 @@ private let createDraft = Operation(
   ]
 ) { arguments in
   try dictionary(runScript(script(#"""
-    const drafts = () => Mail.draftsMailbox.messages.whose({ subject: args.subject }).length;
-    const before = drafts();
+    // The draft is the message with this subject that was not in Drafts before, so another draft with the same
+    // subject cannot pass for it.
+    const draftIds = () => Mail.draftsMailbox.messages.whose({ subject: args.subject }).id();
+    const before = new Set(draftIds());
     const draft = Mail.OutgoingMessage({ subject: args.subject, content: args.body, visible: false });
     Mail.outgoingMessages.push(draft);
     addresses(args.to).forEach((address) => draft.toRecipients.push(Mail.ToRecipient({ address })));
@@ -141,13 +143,16 @@ private let createDraft = Operation(
     draft.save();
     draft.close({ saving: 'yes' });
     // Mail files the draft a moment after saving it.
-    let saved = false;
-    for (let check = 0; check < 20 && !saved; check++) {
-      saved = drafts() > before;
-      if (!saved) delay(0.15);
+    let saved = null;
+    for (let check = 0; check < 20 && saved === null; check++) {
+      const fresh = draftIds().filter((id) => !before.has(id));
+      if (fresh.length) saved = Mail.draftsMailbox.messages.byId(fresh[0]);
+      else delay(0.15);
     }
-    if (!saved) fail('outcome_unknown', 'Mail did not show the draft in Drafts. Check Drafts before trying again; Mail needs an enabled account to keep drafts.');
-    return { subject: args.subject, to: addresses(args.to), verified: true };
+    if (saved === null) fail('outcome_unknown', 'Mail did not show the draft in Drafts. Check Drafts before trying again; Mail needs an enabled account to keep drafts.');
+    const savedTo = saved.toRecipients.address().map((address) => address.toLowerCase()).sort();
+    const wanted = addresses(args.to).map((address) => address.toLowerCase()).sort();
+    return { id: saved.id(), subject: args.subject, to: addresses(args.to), verified: JSON.stringify(savedTo) === JSON.stringify(wanted) };
     """#), arguments: arguments, target: target), from: target)
 }
 

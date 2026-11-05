@@ -60,6 +60,7 @@ private let list = Operation(
   arguments: [
     Argument(name: "list", kind: .string, required: false, description: "List id or exact name; default all lists"),
     Argument(name: "include_completed", kind: .boolean, required: false, description: "Include completed reminders; default false"),
+    Argument(name: "query", kind: .string, required: false, description: "Only reminders whose title or notes contain this, ignoring case"),
     limitArgument,
   ]
 ) { arguments in
@@ -69,8 +70,12 @@ private let list = Operation(
       ? store.predicateForReminders(in: calendars)
       : store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: calendars)
     let due = { (item: EKReminder) in item.dueDateComponents.flatMap { isoCalendar.date(from: $0) } ?? .distantFuture }
-    let found = try fetch(predicate, in: store).sorted { due($0) < due($1) }
-    return ["total": found.count, "reminders": found.prefix(limit(arguments)).map(describe)]
+    let query = optionalString(arguments, "query")
+    let matches = { (item: EKReminder) in
+      query.map { ((item.title ?? "") + "\n" + (item.notes ?? "")).localizedCaseInsensitiveContains($0) } ?? true
+    }
+    let found = try fetch(predicate, in: store).filter(matches).sorted { due($0) < due($1) }
+    return ["total": found.count, "has_more": found.count > limit(arguments), "reminders": found.prefix(limit(arguments)).map(describe)]
   }
 }
 
@@ -105,7 +110,10 @@ private let add = Operation(
     try store.save(item, commit: true)
     let saved = try savedReminder(item.calendarItemIdentifier)
     var result = describe(saved)
+    // Every field that was asked for, compared with what the store gives back.
     result["verified"] = saved.title == item.title && dueText(saved.dueDateComponents) == dueText(item.dueDateComponents)
+      && (saved.notes ?? "") == (item.notes ?? "") && saved.priority == item.priority
+      && saved.calendar.calendarIdentifier == item.calendar.calendarIdentifier
     return result
   }
 }
@@ -139,8 +147,72 @@ private let complete = Operation(
   }
 }
 
+private let read = Operation(
+  name: "read", summary: "Read one reminder with its full notes", effect: .reads,
+  arguments: [Argument(name: "id", kind: .string, required: true, description: "Reminder id from list")]
+) { arguments in
+  try withEventStore(.reminder) { store in
+    let item = try reminder(try string(arguments, "id"), in: store)
+    var result = describe(item)
+    if let notes = item.notes, !notes.isEmpty { result["notes"] = notes }
+    return result
+  }
+}
+
+private let update = Operation(
+  name: "update", summary: "Change a reminder's title, due date, notes, priority or list; only the fields given change", effect: .changes,
+  arguments: [
+    Argument(name: "id", kind: .string, required: true, description: "Reminder id from list"),
+    Argument(name: "title", kind: .string, required: false, description: "New title"),
+    Argument(name: "due", kind: .string, required: false, description: "ISO 8601 date or local time, as for add; none removes the due date and its alert"),
+    Argument(name: "notes", kind: .string, required: false, description: "New notes, replacing the old ones"),
+    Argument(name: "priority", kind: .string, required: false, description: "New priority", allowed: ["none", "low", "medium", "high"]),
+    Argument(name: "list", kind: .string, required: false, description: "List id or exact name to move it to"),
+  ]
+) { arguments in
+  let fields = ["title", "due", "notes", "priority", "list"].filter { arguments[$0] is String }
+  guard !fields.isEmpty else { throw HelperError(code: "invalid_arguments", message: "Give at least one field to change.") }
+  let due = try (arguments["due"] as? String).flatMap { $0 == "none" ? nil : try moment($0, key: "due") }
+  return try withEventStore(.reminder) { store in
+    let item = try reminder(try string(arguments, "id"), in: store)
+    try requireWritable(item.calendar, kind: "list")
+    if let title = arguments["title"] as? String {
+      guard !title.isEmpty else { throw HelperError(code: "invalid_arguments", message: "title cannot be empty.") }
+      item.title = title
+    }
+    if arguments["due"] is String {
+      // The alert at the due time moves with it; one set relative to the due time stays unless the due time goes.
+      // Location alerts are left alone.
+      for alarm in item.alarms ?? [] where alarm.structuredLocation == nil && (alarm.absoluteDate != nil || due == nil) {
+        item.removeAlarm(alarm)
+      }
+      if let due {
+        let fields: Set<Calendar.Component> = due.isDay ? [.year, .month, .day] : [.year, .month, .day, .hour, .minute, .second, .timeZone]
+        item.dueDateComponents = isoCalendar.dateComponents(fields, from: due.date)
+        if !due.isDay { item.addAlarm(EKAlarm(absoluteDate: due.date)) }
+      } else {
+        item.dueDateComponents = nil
+      }
+    }
+    if let notes = arguments["notes"] as? String { item.notes = notes }
+    if let priority = arguments["priority"] as? String { item.priority = priorities[priority] ?? 0 }
+    if let query = optionalString(arguments, "list") {
+      item.calendar = try calendar(query, among: store.calendars(for: .reminder), kind: "list")
+      try requireWritable(item.calendar, kind: "list")
+    }
+    try store.save(item, commit: true)
+    let saved = try savedReminder(item.calendarItemIdentifier)
+    var result = describe(saved)
+    result["changed"] = fields
+    result["verified"] = saved.title == item.title && dueText(saved.dueDateComponents) == dueText(item.dueDateComponents)
+      && (saved.notes ?? "") == (item.notes ?? "") && saved.priority == item.priority
+      && saved.calendar.calendarIdentifier == item.calendar.calendarIdentifier
+    return result
+  }
+}
+
 let remindersKnowledge = AppKnowledge(
-  bundleId: "com.apple.reminders", name: "Reminders", summary: "List, add and complete reminders",
+  bundleId: "com.apple.reminders", name: "Reminders", summary: "List, find, read, add, change and complete reminders",
   access: "Read and change your reminders in every account, even while Reminders is closed",
   pitfalls: ["Operations work on the data directly, so the Reminders window may show a change a moment later."],
-  operations: [listLists, list, add, complete])
+  operations: [listLists, list, read, add, update, complete])
