@@ -1,5 +1,5 @@
-// Selecting text by what it says, so an agent can replace or insert at an exact place in a field or document with
-// type_text instead of rewriting the whole value. Accessibility counts text in UTF-16 units.
+// Reading and selecting text by what it says, so an agent can read a long value in full and replace or insert at
+// an exact place with type_text instead of rewriting the whole value. Accessibility counts text in UTF-16 units.
 
 import ApplicationServices
 
@@ -66,4 +66,28 @@ func selectText(app: AppIdentity, params: JSON, session: ApprovalSession) throws
   let now = selectedRange(of: element)
   let verified = now.map { $0.location == range.location && $0.length == range.length } ?? false
   return ["delivery": "accessibility", "verified": verified, "selection": ["start": range.location, "length": range.length] as JSON]
+}
+
+// The whole text of an element, or a part of it, where the tree shows only its start. Offsets count UTF-16 units,
+// as select_text reports them.
+private let maxReadLength = 50_000
+
+func readText(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
+  let element = try session.table.element(integer(params, "element"), pid: app.pid)
+  guard stringAttribute(element, kAXSubroleAttribute) != "AXSecureTextField" else {
+    throw HelperError(code: "invalid_request", message: "A secure field's value is never shown.")
+  }
+  guard let value = textAttribute(element, kAXValueAttribute) else {
+    throw HelperError(code: "no_text", message: "This element has no text value. Its label is in the tree.")
+  }
+  let units = Array(value.utf16)
+  let start = min(max(params["start"] as? Int ?? 0, 0), units.count)
+  let length = min(max(params["length"] as? Int ?? maxReadLength, 0), maxReadLength, units.count - start)
+  // A cut inside a character pair would not decode, so the end moves back to a whole character.
+  var end = start + length
+  while end > start, end < units.count, UTF16.isTrailSurrogate(units[end]) { end -= 1 }
+  let text = String(decoding: units[start..<end], as: UTF16.self)
+  var result: JSON = ["text": text, "start": start, "length": end - start, "total": units.count]
+  if end < units.count { result["more"] = true }
+  return result
 }

@@ -77,7 +77,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     break
   }
 
-  guard ["get_window_state", "screenshot", "run_actions"].contains(method) || actionMethods.contains(method) else {
+  guard ["get_window_state", "screenshot", "read_text", "run_actions"].contains(method) || actionMethods.contains(method) else {
     throw HelperError(code: "unknown_method", message: "Unknown method \(method).")
   }
 
@@ -99,6 +99,10 @@ private func performAppRequest(_ method: String, app: AppIdentity, params: JSON,
   case "screenshot":
     let application = try applicationElement(app)
     return try captureWindow(pid: app.pid, window: selectWindow(application, params: params))
+
+  case "read_text":
+    try requireAccessibility()
+    return try readText(app: app, params: params, session: session)
 
   case "run_actions":
     try requireAccessibility()

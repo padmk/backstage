@@ -86,6 +86,37 @@ func postText(_ text: String, pid: pid_t) throws {
   }
 }
 
+// A click's button and the keys held during it, such as cmd for adding to a selection.
+struct ClickStyle {
+  var button: CGMouseButton = .left
+  var flags: CGEventFlags = []
+
+  static func parse(button name: String?, modifiers names: [String]) throws -> ClickStyle {
+    var style = ClickStyle()
+    switch name ?? "left" {
+    case "left": style.button = .left
+    case "right": style.button = .right
+    case "middle": style.button = .center
+    default: throw HelperError(code: "invalid_request", message: "button must be left, right or middle.")
+    }
+    for name in names {
+      guard let flag = modifierFlags[name.lowercased()] else {
+        throw HelperError(code: "invalid_key", message: "Unknown modifier \(name).")
+      }
+      style.flags.insert(flag)
+    }
+    return style
+  }
+
+  var types: (down: CGEventType, up: CGEventType) {
+    switch button {
+    case .right: return (.rightMouseDown, .rightMouseUp)
+    case .left: return (.leftMouseDown, .leftMouseUp)
+    default: return (.otherMouseDown, .otherMouseUp)
+    }
+  }
+}
+
 // Where a pointer event goes in a window the app is not showing in front.
 struct PointerTarget {
   let window: CGWindowID?
@@ -95,8 +126,8 @@ struct PointerTarget {
 // The window server routes a pointer event by what is under the real cursor unless the event names its
 // window, so these fields are what lets it reach a background window without moving the cursor. Flags are
 // set explicitly, because the event would otherwise carry whatever keys the user is holding.
-private func route(_ event: CGEvent, point: CGPoint, target: PointerTarget, pid: pid_t, extra: [(UInt32, Int64)]) {
-  event.flags = []
+private func route(_ event: CGEvent, point: CGPoint, target: PointerTarget, pid: pid_t, extra: [(UInt32, Int64)], flags: CGEventFlags = []) {
+  event.flags = flags
   guard let window = target.window else { return }
   setEventWindowLocation?(event, CGPoint(x: point.x - target.origin.x, y: point.y - target.origin.y))
   let number = Int64(window)
@@ -119,16 +150,16 @@ private func postMove(to point: CGPoint, source: CGEventSource?, target: Pointer
   sleep(seconds: pointerEventGap)
 }
 
-func postClick(at point: CGPoint, target: PointerTarget, pid: pid_t, count: Int) throws {
+func postClick(at point: CGPoint, target: PointerTarget, pid: pid_t, count: Int, style: ClickStyle = ClickStyle()) throws {
   let source = CGEventSource(stateID: .hidSystemState)
   let gesture = Int64.random(in: 1...Int64(Int32.max))
   try postMove(to: point, source: source, target: target, pid: pid, gesture: gesture)
   for click in 1...min(max(1, count), 3) {
-    for type in [CGEventType.leftMouseDown, .leftMouseUp] {
-      guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
+    for type in [style.types.down, style.types.up] {
+      guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: style.button) else {
         throw HelperError(code: "action_failed", message: "Could not create a mouse event.")
       }
-      route(event, point: point, target: target, pid: pid, extra: clickFields(state: Int64(click), gesture: gesture))
+      route(event, point: point, target: target, pid: pid, extra: clickFields(state: Int64(click), gesture: gesture), flags: style.flags)
       post(event, to: pid)
       sleep(seconds: pointerEventGap)
     }
@@ -188,7 +219,7 @@ private func requireOwnWindowOnTop(at point: CGPoint, pid: pid_t) throws {
   }
 }
 
-func postForegroundClick(at point: CGPoint, window: AXUIElement, pid: pid_t, count: Int) throws {
+func postForegroundClick(at point: CGPoint, window: AXUIElement, pid: pid_t, count: Int, style: ClickStyle = ClickStyle()) throws {
   guard let app = NSRunningApplication(processIdentifier: pid) else {
     throw HelperError(code: "app_not_found", message: "The app is no longer running.")
   }
@@ -216,13 +247,13 @@ func postForegroundClick(at point: CGPoint, window: AXUIElement, pid: pid_t, cou
   moved.post(tap: .cghidEventTap)
   sleep(seconds: pointerEventGap)
   for click in 1...min(max(1, count), 3) {
-    for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+    for type in [style.types.down, style.types.up] {
       // Checked right before each press, so a window that appeared meanwhile, such as an approval, is not hit.
-      if type == .leftMouseDown { try requireOwnWindowOnTop(at: point, pid: pid) }
-      guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
+      if type == style.types.down { try requireOwnWindowOnTop(at: point, pid: pid) }
+      guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: style.button) else {
         throw HelperError(code: "action_failed", message: "Could not create a mouse event.")
       }
-      event.flags = []
+      event.flags = style.flags
       event.setIntegerValueField(.mouseEventClickState, value: Int64(click))
       event.post(tap: .cghidEventTap)
       sleep(seconds: pointerEventGap)

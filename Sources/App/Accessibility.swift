@@ -52,10 +52,16 @@ func frame(of element: AXUIElement) -> CGRect? {
   return CGRect(origin: position, size: size)
 }
 
+private func flattened(_ text: String) -> String {
+  text.replacingOccurrences(of: "\n", with: "\\n").replacingOccurrences(of: "\"", with: "\\\"")
+}
+
 func clamped(_ text: String) -> String {
-  let flat = text.replacingOccurrences(of: "\n", with: "\\n").replacingOccurrences(of: "\"", with: "\\\"")
+  let flat = flattened(text)
   return flat.count > maxTextLength ? String(flat.prefix(maxTextLength)) + "…" : flat
 }
+
+func isClamped(_ text: String) -> Bool { flattened(text).count > maxTextLength }
 
 func describeValue(_ value: AnyObject?) -> String? {
   switch value {
@@ -105,13 +111,64 @@ func prepareAccessibility(of application: AXUIElement, pid: pid_t) {
 private let maxRememberedElements = 20000
 private let rolesIdentifiedByValue: Set<String> = [kAXStaticTextRole, kAXCellRole, kAXRowRole]
 
+// The attributes a tree line and a fingerprint need, asked for in one call: each separate call is a round trip
+// to the app, and an app such as Notes answers slowly.
+private let lineAttributeNames = [
+  kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute,
+  kAXPlaceholderValueAttribute, kAXIdentifierAttribute, kAXEnabledAttribute, kAXFocusedAttribute,
+  kAXSelectedAttribute, kAXExpandedAttribute, kAXChildrenAttribute,
+]
+
+struct ElementAttributes {
+  private var values: [String: AnyObject] = [:]
+  // The app did not answer, so the element's children are unknown.
+  private(set) var appStoppedAnswering = false
+
+  init(of element: AXUIElement) {
+    var answer: CFArray?
+    let outcome = AXUIElementCopyMultipleAttributeValues(element, lineAttributeNames as CFArray, AXCopyMultipleAttributeOptions(rawValue: 0), &answer)
+    if outcome == .cannotComplete {
+      appStoppedAnswering = true
+      return
+    }
+    guard outcome == .success, let list = answer as? [AnyObject], list.count == lineAttributeNames.count else {
+      // Some elements refuse a batch; asking one by one still works for them.
+      for name in lineAttributeNames { values[name] = attribute(element, name) }
+      return
+    }
+    for (name, value) in zip(lineAttributeNames, list) {
+      // An attribute the element lacks comes back as an error value.
+      if CFGetTypeID(value) == AXValueGetTypeID(), AXValueGetType(value as! AXValue) == .axError { continue }
+      values[name] = value
+    }
+  }
+
+  func value(_ name: String) -> AnyObject? { values[name] }
+  func string(_ name: String) -> String? {
+    guard let text = values[name] as? String, !text.isEmpty else { return nil }
+    return text
+  }
+  func bool(_ name: String) -> Bool? { values[name] as? Bool }
+  var children: [AXUIElement] { (values[kAXChildrenAttribute] as? [AXUIElement]) ?? [] }
+}
+
 // What an element is, without its value. A list may reuse an element for another row, and a number must not
 // silently come to mean something else than what the agent read.
-private func fingerprint(of element: AXUIElement) -> [String?] {
+func fingerprint(of element: AXUIElement) -> [String?] {
+  fingerprint(from: ElementAttributes(of: element))
+}
+
+func fingerprint(from attributes: ElementAttributes) -> [String?] {
   let names = [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXIdentifierAttribute]
-  var parts = names.map { stringAttribute(element, $0) }
-  // These show their content only as a value.
-  if rolesIdentifiedByValue.contains(parts[0] ?? "") { parts.append(describeValue(attribute(element, kAXValueAttribute))) }
+  var parts = names.map { attributes.string($0) }
+  // These show their content only as a value, which counts in full, so a change past what the tree shows counts too.
+  if rolesIdentifiedByValue.contains(parts[0] ?? "") {
+    switch attributes.value(kAXValueAttribute) {
+    case let text as String where !text.isEmpty: parts.append("\(text.utf16.count):\(text.hashValue)")
+    case let number as NSNumber: parts.append(number.stringValue)
+    default: parts.append(nil)
+    }
+  }
   return parts
 }
 
@@ -130,8 +187,8 @@ final class ElementTable {
   private var nextNumber = 1
 
   // What an element is counts from what the agent saw, so a read it did not see never updates that.
-  func number(for element: AXUIElement, pid: pid_t, shownToAgent: Bool) -> Int {
-    let seen = fingerprint(of: element)
+  func number(for element: AXUIElement, pid: pid_t, shownToAgent: Bool, attributes: ElementAttributes? = nil) -> Int {
+    let seen = attributes.map(fingerprint(from:)) ?? fingerprint(of: element)
     let hash = CFHash(element)
     return lock.withLock {
       if let known = numbersByHash[hash]?.first(where: { CFEqual($0.element, element) }) {

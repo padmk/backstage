@@ -22,7 +22,13 @@ func log(_ event: String, _ detail: String = "") {
 final class RawClickView: NSView {
   override var acceptsFirstResponder: Bool { true }
   override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-  override func mouseDown(with event: NSEvent) { log("raw_click") }
+  override func mouseDown(with event: NSEvent) { log("raw_click", modifiers(event)) }
+  override func rightMouseDown(with event: NSEvent) { log("raw_right_click", modifiers(event)) }
+  override func otherMouseDown(with event: NSEvent) { log("raw_middle_click", modifiers(event)) }
+  private func modifiers(_ event: NSEvent) -> String {
+    let names: [(NSEvent.ModifierFlags, String)] = [(.command, "cmd"), (.shift, "shift"), (.option, "alt"), (.control, "ctrl")]
+    return names.filter { event.modifierFlags.contains($0.0) }.map(\.1).joined(separator: "+")
+  }
   override func keyDown(with event: NSEvent) { log("raw_key", event.charactersIgnoringModifiers ?? "") }
   override func scrollWheel(with event: NSEvent) { log("raw_scroll") }
   override func draw(_ dirtyRect: NSRect) {

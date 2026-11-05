@@ -101,7 +101,7 @@ func performAction(_ method: String, app: AppIdentity, params: JSON, session: Ap
     return ["delivery": "key_events", "verified": false]
   case "scroll": return try scroll(app: app, params: params, session: session)
   case "drag": return try drag(app: app, params: params, session: session)
-  case "click_at": return try clickAt(app: app, params: params)
+  case "click_at": return try clickAt(app: app, params: params, session: session)
   default: throw HelperError(code: "unknown_method", message: "Unknown action \(method).")
   }
 }
@@ -325,25 +325,39 @@ func prepareInput(app: AppIdentity, window: AXUIElement?) {
   _ = makeKeyInApp(window: number, pid: app.pid)
 }
 
-func clickAt(app: AppIdentity, params: JSON) throws -> JSON {
+// A click at a point in window coordinates, or at an element's center.
+func clickAt(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
   let application = try applicationElement(app)
-  let x = try number(params, "x")
-  let y = try number(params, "y")
-  let window = try selectWindow(application, params: params)
-  guard let box = frame(of: window) else {
-    throw HelperError(code: "action_failed", message: "The window has no position.")
+  let style = try ClickStyle.parse(button: params["button"] as? String, modifiers: params["modifiers"] as? [String] ?? [])
+  let window: AXUIElement
+  let point: CGPoint
+  if let number = params["element"] as? Int {
+    let element = try session.table.element(number, pid: app.pid)
+    guard let box = frame(of: element) else { throw HelperError(code: "action_failed", message: "The element has no position.") }
+    window = try attribute(element, kAXWindowAttribute).map { $0 as! AXUIElement } ?? selectWindow(application, params: params)
+    point = CGPoint(x: box.midX, y: box.midY)
+  } else {
+    guard params["x"] != nil, params["y"] != nil else {
+      throw HelperError(code: "invalid_request", message: "Give element, or x and y.")
+    }
+    let x = try number(params, "x")
+    let y = try number(params, "y")
+    window = try selectWindow(application, params: params)
+    guard let box = frame(of: window) else {
+      throw HelperError(code: "action_failed", message: "The window has no position.")
+    }
+    guard x >= 0, y >= 0, x <= box.width, y <= box.height else {
+      throw HelperError(code: "out_of_window", message: "The point is outside the window (\(Int(box.width))×\(Int(box.height))).")
+    }
+    point = CGPoint(x: box.minX + x, y: box.minY + y)
   }
-  guard x >= 0, y >= 0, x <= box.width, y <= box.height else {
-    throw HelperError(code: "out_of_window", message: "The point is outside the window (\(Int(box.width))×\(Int(box.height))).")
-  }
-  let point = CGPoint(x: box.minX + x, y: box.minY + y)
   let count = params["count"] as? Int ?? 1
   if params["foreground"] as? Bool == true {
-    try postForegroundClick(at: point, window: window, pid: app.pid, count: count)
+    try postForegroundClick(at: point, window: window, pid: app.pid, count: count, style: style)
     return ["delivery": "foreground_pointer_event", "verified": false, "window": stringAttribute(window, kAXTitleAttribute) ?? ""]
   }
   prepareInput(app: app, window: window)
-  try postClick(at: point, target: pointerTarget(for: window), pid: app.pid, count: count)
+  try postClick(at: point, target: pointerTarget(for: window), pid: app.pid, count: count, style: style)
   return ["delivery": "pointer_event", "verified": false, "window": stringAttribute(window, kAXTitleAttribute) ?? ""]
 }
 

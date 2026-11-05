@@ -91,6 +91,16 @@ let tools: [ToolDefinition] = [
     ],
     required: ["app"], annotations: ["readOnlyHint": true, "destructiveHint": false, "openWorldHint": false] as JSON),
   ToolDefinition(
+    name: "read_text",
+    description: "Read the full text of an element, or part of it, where get_window_state cuts a long value (it then shows length=). start and length count UTF-16 units, like select_text; the reply says the total and whether more follows.",
+    properties: [
+      ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
+      ("element", ["type": "integer", "minimum": 1, "description": "Element number from get_window_state"] as JSON),
+      ("start", ["type": "integer", "minimum": 0] as JSON),
+      ("length", ["type": "integer", "minimum": 1, "maximum": 50000] as JSON)
+    ],
+    required: ["app", "element"], annotations: ["readOnlyHint": true, "destructiveHint": false, "openWorldHint": false] as JSON),
+  ToolDefinition(
     name: "screenshot",
     description: "Capture a window as a PNG, one image pixel per window point, so its coordinates work with click_at. Needs Screen Recording, which is optional; without it, work from get_window_state.",
     properties: [
@@ -171,16 +181,19 @@ let tools: [ToolDefinition] = [
     required: ["app"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
   ToolDefinition(
     name: "click_at",
-    description: "Send a click at a point in window coordinates, in the background and without moving the cursor. Use it only when no element can do the job, and check the effect, for example with a screenshot.",
+    description: "Send a click at a point in window coordinates, or at an element's center, in the background and without moving the cursor. Use it when press cannot do the job, such as a right-click, a cmd-click or a view without elements, and check the effect, for example with a screenshot.",
     properties: [
       ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
+      ("element", ["type": "integer", "minimum": 1, "description": "Click this element's center instead of a point"] as JSON),
       ("x", ["type": "number", "minimum": 0] as JSON),
       ("y", ["type": "number", "minimum": 0] as JSON),
       ("window", ["type": "integer", "minimum": 0, "description": "Window index shown in get_window_state; default the first"] as JSON),
       ("count", ["type": "integer", "minimum": 1, "maximum": 3] as JSON),
+      ("button", ["type": "string", "enum": ["left", "right", "middle"], "description": "Default: left"] as JSON),
+      ("modifiers", ["type": "array", "maxItems": 4, "items": ["type": "string", "enum": ["cmd", "shift", "alt", "ctrl"]] as JSON, "description": "Keys held during the click"] as JSON),
       ("foreground", ["type": "boolean", "description": "Last resort when a background click did not land: the window comes forward for the click, then the previous app gets the focus back and the cursor returns. Tell the user you used it."] as JSON)
     ],
-    required: ["app", "x", "y"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
+    required: ["app"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
   ToolDefinition(
     name: "run_actions",
     description: "Run up to 20 actions in one app in order, then report the combined change once, saving a round trip per step. Each step is {\"tool\": one of press, set_value, type_text, select_text, press_key, scroll, drag, click_at, plus that tool's arguments without app}, such as {\"tool\":\"set_value\",\"element\":4,\"value\":\"Paris\"}. Use element numbers you have already read: elements a step makes appear have no number yet. Steps stop at the first that fails or may have worked (`failed` names it); nothing is retried, so read the state before going on.",
