@@ -313,16 +313,18 @@ private final class OwnInputIgnoringWindow: NSWindow {
   }
 }
 
-// The window's frame: a title bar that is only a band for the traffic lights and the tabs, over the gradient.
+// The window's frame: an opaque title bar band in the gradient's top color, holding the traffic lights and the
+// tabs, with the content below it.
 private func makeControlWindow(content: NSView, toolbar: TabsToolbar) -> NSWindow {
   let window = OwnInputIgnoringWindow(
     contentRect: NSRect(x: 0, y: 0, width: controlWindowWidth, height: controlWindowHeight),
-    styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+    styleMask: [.titled, .closable, .miniaturizable, .resizable],
     backing: .buffered, defer: false)
   window.title = Configuration.appName
   window.titleVisibility = .hidden
   window.titlebarAppearsTransparent = true
   window.titlebarSeparatorStyle = .none
+  window.backgroundColor = NSColor(Palette.royal)
   let bar = NSToolbar(identifier: "tabs")
   bar.delegate = toolbar
   bar.centeredItemIdentifiers = [tabsItem]
