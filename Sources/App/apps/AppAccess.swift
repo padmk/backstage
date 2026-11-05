@@ -18,7 +18,9 @@ struct AppGrant: Identifiable {
   }
 
   let id: String
-  let name: String
+  var name: String
+  // The app's own name, for an app known in several versions, whose name otherwise carries the bundle id.
+  var plainName: String? = nil
   let purpose: String
   let kind: Kind
   // The apps on the list whose operations use it, and which of their operations; nil means all of them.
@@ -69,15 +71,22 @@ private func scriptedGrants(_ id: String, purpose: String, of app: AppKnowledge)
   let several = app.bundleIds.count > 1
   return app.bundleIds.map { bundleId in
     AppGrant(id: several ? "\(id)-\(bundleId)" : id, name: several ? "\(app.name) (\(bundleId))" : app.name,
-             purpose: purpose, kind: .automation(bundleId: bundleId), listedApps: [bundleId])
+             plainName: several ? app.name : nil, purpose: purpose, kind: .automation(bundleId: bundleId), listedApps: [bundleId])
   }
 }
 
 // The grants that matter for the apps on the list: those of every installed app while every app is allowed.
+// A version's bundle id shows only while another version of the same app shows too.
 func appGrants(forListed bundleIds: Set<String>, everyApp: Bool) -> [AppGrant] {
-  everyApp
+  let shown = everyApp
     ? appGrants.filter { grant in grant.listedApps.contains { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil } }
     : appGrants.filter { !bundleIds.isDisjoint(with: $0.listedApps) }
+  return shown.map { grant in
+    guard let plain = grant.plainName, shown.filter({ $0.plainName == plain }).count == 1 else { return grant }
+    var single = grant
+    single.name = plain
+    return single
+  }
 }
 
 // Before an operation runs: a missing Automation grant fails at once with what to do, instead of a prompt
