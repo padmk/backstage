@@ -79,7 +79,7 @@ private let send = Operation(
   // Scripting reports no delivery, and an undelivered message shows in the list too.
   var result: JSON = ["to": destination, "sent": true, "verified": shown, "delivered": "unknown"]
   result["check"] = shown
-    ? "verified means the chat list shows the message, not that it was delivered. Read the conversation with get_window_state on Messages to see its delivery state."
+    ? "verified means a new entry in the chat list shows the message; it does not prove which chat it went to or that it was delivered. Read the conversation with get_window_state on Messages to see its recipient and delivery state."
     : "The chat list did not confirm the message. Read the conversation with get_window_state on Messages before sending again."
   return result
 }

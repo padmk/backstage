@@ -18,8 +18,51 @@ private func describe(_ event: EKEvent) -> JSON {
     result["end"] = timeText(event.endDate)
   }
   if let location = event.location, !location.isEmpty { result["location"] = location }
-  if let notes = event.notes, !notes.isEmpty { result["notes"] = String(notes.prefix(500)) }
+  if let notes = event.notes, !notes.isEmpty {
+    result["notes"] = String(notes.prefix(listedNotesLength))
+    if notes.count > listedNotesLength { result["notes_cut"] = true }
+  }
   return result
+}
+
+// Lists show the start of long notes; get_event shows them in full.
+private let listedNotesLength = 500
+
+private let getEvent = Operation(
+  name: "get_event", summary: "Read one event in full: all its notes, its link, attendees and organizer", effect: .reads,
+  arguments: [Argument(name: "id", kind: .string, required: true, description: "Event id from list_events")]
+) { arguments in
+  let id = try string(arguments, "id")
+  return try withEventStore(.event) { store -> JSON in
+    guard let event = store.event(withIdentifier: id) else { throw HelperError(code: "not_found", message: "There is no event with id \(id).") }
+    var result = describe(event)
+    result["notes"] = event.notes ?? ""
+    result["notes_cut"] = nil
+    if let url = event.url { result["url"] = url.absoluteString }
+    if let organizer = event.organizer { result["organizer"] = organizer.name ?? organizer.url.absoluteString }
+    if let attendees = event.attendees, !attendees.isEmpty {
+      result["attendees"] = attendees.map { person -> JSON in
+        var entry: JSON = ["name": person.name ?? "", "status": statusName(person.participantStatus)]
+        if person.url.scheme == "mailto" { entry["email"] = person.url.absoluteString.replacingOccurrences(of: "mailto:", with: "") }
+        return entry
+      }
+    }
+    if event.hasRecurrenceRules { result["note"] = "A recurring event: this is its first occurrence; list_events shows each one." }
+    return result
+  }
+}
+
+private func statusName(_ status: EKParticipantStatus) -> String {
+  switch status {
+  case .accepted: return "accepted"
+  case .declined: return "declined"
+  case .tentative: return "tentative"
+  case .pending: return "pending"
+  case .delegated: return "delegated"
+  case .completed: return "completed"
+  case .inProcess: return "in_process"
+  default: return "unknown"
+  }
 }
 
 private let listCalendars = Operation(name: "list_calendars", summary: "List calendars with their ids", effect: .reads, arguments: []) { _ in
@@ -132,7 +175,10 @@ private let updateEvent = Operation(
     }
     // An all-day event keeps its number of days, which a clock change would break if counted in seconds.
     let length = event.endDate.timeIntervalSince(event.startDate)
-    let days = isoCalendar.dateComponents([.day], from: isoCalendar.startOfDay(for: event.startDate), to: isoCalendar.startOfDay(for: event.endDate)).day ?? 0
+    // Counted to the last day the event covers: some sources end an all-day event at the next midnight, others a
+    // second before it.
+    let days = isoCalendar.dateComponents([.day], from: isoCalendar.startOfDay(for: event.startDate),
+                                          to: isoCalendar.startOfDay(for: event.endDate.addingTimeInterval(-1))).day ?? 0
     let lastDay = { (day: Date) in isoCalendar.date(byAdding: .day, value: 1, to: day)!.addingTimeInterval(-1) }
     if let start { event.startDate = start.date }
     if let end {
@@ -171,5 +217,6 @@ let calendarKnowledge = AppKnowledge(
   pitfalls: [
     "Times without an offset are local time on this Mac.",
     "A recurring event appears once per occurrence in list_events, with the same id.",
+    "list_events shows the start of long notes (notes_cut); get_event shows them in full.",
   ],
-  operations: [listCalendars, listEvents, createEvent, updateEvent])
+  operations: [listCalendars, listEvents, getEvent, createEvent, updateEvent])

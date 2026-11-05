@@ -113,11 +113,16 @@ private let create = Operation(
     const folder = args.folder ? folderNamed(args.folder) : Notes.defaultAccount().defaultFolder();
     const html = '<div><h1>' + escape(args.title) + '</h1></div>' + (args.text ? paragraphs(args.text) : '');
     const made = Notes.make({ new: 'note', at: folder, withProperties: { body: html } });
-    const note = Notes.notes.byId(made.id());
-    const text = note.plaintext();
-    const result = summary(note);
-    result.verified = plain(text) === plain(args.title + (args.text ? '\n' + args.text : ''));
-    return result;
+    // The note exists from here on, so a failure to read it back must not look like nothing happened.
+    try {
+      const note = Notes.notes.byId(made.id());
+      const text = note.plaintext();
+      const result = summary(note);
+      result.verified = plain(text) === plain(args.title + (args.text ? '\n' + args.text : ''));
+      return result;
+    } catch (error) {
+      fail('outcome_unknown', 'Notes made the note but it cannot be read back (' + error.message + '). Search for it before trying again.');
+    }
     """#), arguments: arguments, target: target), from: target)
 }
 

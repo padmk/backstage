@@ -150,9 +150,21 @@ private let createDraft = Operation(
       else delay(0.15);
     }
     if (saved === null) fail('outcome_unknown', 'Mail did not show the draft in Drafts. Check Drafts before trying again; Mail needs an enabled account to keep drafts.');
-    const savedTo = saved.toRecipients.address().map((address) => address.toLowerCase()).sort();
-    const wanted = addresses(args.to).map((address) => address.toLowerCase()).sort();
-    return { id: saved.id(), subject: args.subject, to: addresses(args.to), verified: JSON.stringify(savedTo) === JSON.stringify(wanted) };
+    // Every field given is read back: recipients by address, ignoring case and order, and the body ignoring line
+    // ending style and trailing space, which Mail normalizes.
+    const sameAddresses = (list, wanted) =>
+      JSON.stringify(list.address().map((address) => address.toLowerCase()).sort()) === JSON.stringify(addresses(wanted).map((address) => address.toLowerCase()).sort());
+    const plain = (text) => String(text || '').replace(/\r\n?/g, '\n').trimEnd();
+    const checks = {
+      to: sameAddresses(saved.toRecipients, args.to),
+      cc: sameAddresses(saved.ccRecipients, args.cc),
+      bcc: sameAddresses(saved.bccRecipients, args.bcc),
+      body: plain(saved.content()) === plain(args.body),
+    };
+    const differing = Object.keys(checks).filter((key) => !checks[key]);
+    const result = { id: saved.id(), subject: args.subject, to: addresses(args.to), verified: differing.length === 0 };
+    if (differing.length) result.differs = differing;
+    return result;
     """#), arguments: arguments, target: target), from: target)
 }
 

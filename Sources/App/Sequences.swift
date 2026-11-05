@@ -13,6 +13,8 @@ func runActions(app: AppIdentity, params: JSON, session: ApprovalSession) throws
     throw HelperError(code: "invalid_request", message: "steps must list 1 to \(maxSteps) actions.")
   }
   let frontBefore = onMain { NSWorkspace.shared.frontmostApplication }
+  // Also when a cancel ends the steps early.
+  defer { _ = returnFocus(to: frontBefore, from: app.pid) }
   var done: [JSON] = []
   var failure: JSON?
   for (index, step) in steps.enumerated() {
@@ -30,7 +32,13 @@ func runActions(app: AppIdentity, params: JSON, session: ApprovalSession) throws
       outcome["tool"] = method
       done.append(outcome)
     } catch let error as HelperError {
-      if error.code == "interrupted" || error.code == "cancelled" { throw error }
+      if error.code == "interrupted" || error.code == "cancelled" {
+        // Steps that already ran may have changed something, so the cancel must not read as nothing done.
+        guard done.isEmpty else {
+          throw HelperError(code: "outcome_unknown", message: "Cancelled after \(done.count) of \(steps.count) steps had run. Read the state before trying again.")
+        }
+        throw error
+      }
       failure = ["step": index + 1, "tool": method, "code": error.code, "message": error.message]
       break
     }
@@ -42,6 +50,5 @@ func runActions(app: AppIdentity, params: JSON, session: ApprovalSession) throws
     result["note"] = "Steps after the failed one did not run. Read the state before going on."
   }
   result["state"] = observeChange(app: app, session: session)
-  _ = returnFocus(to: frontBefore, from: app.pid)
   return result
 }

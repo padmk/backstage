@@ -11,6 +11,8 @@ private let silentContainers: Set<String> = ["AXGroup", "AXSplitGroup", "AXLayou
 struct RenderedTree {
   var lines: [String]
   var partialReason: String?
+  // What each numbered element was when this tree was rendered.
+  var fingerprints: [Int: [String?]] = [:]
 }
 
 // FNV-1a over the UTF-8 bytes, the same in every run.
@@ -89,6 +91,7 @@ func renderTree(roots: [AXUIElement], pid: pid_t, table: ElementTable, maxElemen
     }
 
     let number = table.number(for: element, pid: pid, shownToAgent: shownToAgent, attributes: attributes)
+    tree.fingerprints[number] = fingerprint(from: attributes)
     tree.lines.append(line(for: element, attributes: attributes, role: role, number: number, depth: depth, actionNames: actionNames))
     kids.forEach { visit($0, depth: depth + 1) }
   }
@@ -117,6 +120,8 @@ struct LastRead {
   var root: AXUIElement?
   var lines: [String]
   var isPartial: Bool
+  // The last report of a change listed only part of it, so the agent has not seen these lines in full.
+  var reportedInPart = false
 
   private static let scopeKeys = ["window", "root", "menu_bar", "menu_extras", "max_elements"]
 

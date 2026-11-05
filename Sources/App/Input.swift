@@ -71,7 +71,11 @@ func postKey(_ combination: String, pid: pid_t) throws {
 }
 
 func postText(_ text: String, pid: pid_t) throws {
-  for character in text {
+  for (sent, character) in text.enumerated() {
+    // A cancel stops the typing between characters; what was typed stays, so the outcome is unknown.
+    if currentConnection()?.isCancelled == true {
+      throw HelperError(code: sent == 0 ? "cancelled" : "outcome_unknown", message: sent == 0 ? "The request was cancelled." : "Cancelled after \(sent) characters were typed. Read the state before trying again.")
+    }
     let units = Array(String(character).utf16)
     for down in [true, false] {
       guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: down) else {

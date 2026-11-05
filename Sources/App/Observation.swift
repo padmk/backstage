@@ -17,16 +17,17 @@ private let pollReadSeconds = 2.0
 private let maxRememberedReads = 32
 
 // Two agents acting in the same app would interleave their clicks and keys and misread each other's effects, so
-// each request that reads or acts in an app holds that app's lock until its report is done. Other apps go on.
+// each request that reads or acts in an app holds that app's lock until its report is done. Other apps go on. The
+// lock is the bundle id's, so an operation that starts a closed app holds the same lock as window work in it.
 enum AppLocks {
   private static let guardLock = NSLock()
-  private static var locks: [pid_t: NSLock] = [:]
+  private static var locks: [String: NSLock] = [:]
 
-  static func with<T>(_ pid: pid_t, connection: Connection, _ body: () throws -> T) throws -> T {
+  static func with<T>(_ bundleId: String, connection: Connection, _ body: () throws -> T) throws -> T {
     let lock = guardLock.withLock { () -> NSLock in
-      if let known = locks[pid] { return known }
+      if let known = locks[bundleId] { return known }
       let made = NSLock()
-      locks[pid] = made
+      locks[bundleId] = made
       return made
     }
     // Waiting for another agent stays cancellable.
@@ -46,12 +47,31 @@ func remember(_ read: LastRead, pid: pid_t, session: ApprovalSession) {
 // A read of the place last read in this session answers with what changed, unless the agent asks for everything.
 // The full tree comes back on a first read, after a partial one, and when the changes would be longer than it.
 func windowState(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
+  var reply = try treeState(app: app, params: params, session: session)
+  // A screenshot of the same window right after the tree, for what the tree cannot show. Without Screen Recording
+  // the tree still comes back.
+  if params["screenshot"] as? Bool == true, params["menu_bar"] as? Bool != true, params["menu_extras"] as? Bool != true {
+    do {
+      // The window the tree came from, also when it was a subtree.
+      let root = try (params["root"] as? Int).map { try session.table.element($0, pid: app.pid) }
+      let window = try root.flatMap { attribute($0, kAXWindowAttribute).map { $0 as! AXUIElement } }
+        ?? selectWindow(try applicationElement(app), params: params)
+      reply.merge(try captureWindow(pid: app.pid, window: window)) { current, _ in current }
+    } catch let error as HelperError {
+      reply["screenshot_error"] = "\(error.code): \(error.message)"
+    }
+  }
+  return reply
+}
+
+private func treeState(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
   let read = try readTree(app: app, params: params, session: session, shownToAgent: true)
   let previous = session.lock.withLock { session.lastReads[app.pid] }
   let isPartial = read.tree.partialReason != nil
   remember(LastRead(request: params, root: read.root, lines: read.tree.lines, isPartial: isPartial), pid: app.pid, session: session)
 
-  if params["full"] as? Bool != true, !isPartial, let previous, !previous.isPartial, previous.covers(params, root: read.root) {
+  if params["full"] as? Bool != true, !isPartial, let previous, !previous.isPartial, !previous.reportedInPart,
+     previous.covers(params, root: read.root) {
     let before = Set(previous.lines)
     let after = Set(read.tree.lines)
     let added = read.tree.lines.filter { !before.contains($0) }
@@ -107,6 +127,7 @@ func observeChange(app: AppIdentity, session: ApprovalSession) -> JSON {
   let started = Date()
   let before = Set(last.lines)
   var after = last.lines
+  var afterFingerprints: [Int: [String?]] = [:]
   var lastChange: Date?
   var settled = true
   while true {
@@ -128,6 +149,7 @@ func observeChange(app: AppIdentity, session: ApprovalSession) -> JSON {
       after = read.tree.lines
       lastChange = now
     }
+    afterFingerprints = read.tree.fingerprints
     let waited = now.timeIntervalSince(started)
     guard let changedAt = lastChange else {
       if waited >= firstChangeSeconds { break }
@@ -140,10 +162,14 @@ func observeChange(app: AppIdentity, session: ApprovalSession) -> JSON {
     }
   }
   var report = changeReport(before: last.lines, after: after)
+  // Only the lines the report shows count as seen.
+  let shown = (report["added"] as? [String] ?? []).compactMap { Int($0.split(separator: " ").first ?? "") }
+  session.table.acknowledge(afterFingerprints.filter { shown.contains($0.key) })
   if !settled {
     report["settled"] = false
     report["note"] = "The app was still changing or showed a busy indicator after \(Int(settleLimitSeconds)) s. Read the state again before relying on it."
   }
-  remember(LastRead(request: last.request, root: last.root, lines: after, isPartial: false), pid: app.pid, session: session)
+  remember(LastRead(request: last.request, root: last.root, lines: after, isPartial: false,
+                    reportedInPart: last.reportedInPart || report["more_changes"] != nil), pid: app.pid, session: session)
   return report
 }

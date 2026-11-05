@@ -84,6 +84,7 @@ let tools: [ToolDefinition] = [
       ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
       ("window", ["type": "integer", "minimum": 0, "description": "Window index shown in get_window_state; default the first"] as JSON),
       ("full", ["type": "boolean", "description": "Return every element even when an earlier read of this place exists"] as JSON),
+      ("screenshot", ["type": "boolean", "description": "Also capture the window as a PNG, as the screenshot tool does (needs Screen Recording)"] as JSON),
       ("menu_bar", ["type": "boolean", "description": "Read the menu bar instead of a window"] as JSON),
       ("menu_extras", ["type": "boolean", "description": "Read the app's items on the right of the menu bar, such as status icons, instead of a window"] as JSON),
       ("root", ["type": "integer", "minimum": 1, "description": "Read only this element's subtree"] as JSON),

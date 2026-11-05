@@ -213,6 +213,14 @@ final class ElementTable {
     }
   }
 
+  // Elements a change report showed the agent, as that report's read saw them, so acting on them right after is not
+  // refused as stale, while an element that changed again since then still is.
+  func acknowledge(_ seen: [Int: [String?]]) {
+    lock.withLock {
+      for (number, fingerprint) in seen { entries[number]?.fingerprint = fingerprint }
+    }
+  }
+
   func element(_ number: Int, pid: pid_t) throws -> AXUIElement {
     guard let entry = lock.withLock({ entries[number] }), entry.pid == pid else {
       throw HelperError(code: "unknown_element", message: "Element \(number) does not belong to this app in this session. Read the window state.")

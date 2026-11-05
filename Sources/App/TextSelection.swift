@@ -1,16 +1,21 @@
 // Reading and selecting text by what it says, so an agent can read a long value in full and replace or insert at
 // an exact place with type_text instead of rewriting the whole value. Accessibility counts text in UTF-16 units.
 
+import AppKit
 import ApplicationServices
 
-private func occurrences(of text: String, in value: String, prefix: String, suffix: String) -> [Range<String.Index>] {
-  var found: [Range<String.Index>] = []
-  var searchStart = value.startIndex
+// Where text occurs between prefix and suffix, as UTF-16 ranges of the text alone. The search compares UTF-16 units
+// as given, so an accent written as its own character never lands inside another one.
+private func occurrences(of text: String, in value: String, prefix: String, suffix: String) -> [NSRange] {
+  let haystack = value as NSString
   let needle = prefix + text + suffix
-  while let match = value.range(of: needle, range: searchStart..<value.endIndex) {
-    let start = value.index(match.lowerBound, offsetBy: prefix.count)
-    found.append(start..<value.index(start, offsetBy: text.count))
-    searchStart = value.index(after: match.lowerBound)
+  var found: [NSRange] = []
+  var from = 0
+  while from < haystack.length {
+    let match = haystack.range(of: needle, options: .literal, range: NSRange(location: from, length: haystack.length - from))
+    guard match.location != NSNotFound else { break }
+    found.append(NSRange(location: match.location + (prefix as NSString).length, length: (text as NSString).length))
+    from = match.location + 1
   }
   return found
 }
@@ -50,8 +55,8 @@ func selectText(app: AppIdentity, params: JSON, session: ApprovalSession) throws
   guard matches.count == 1 else {
     throw HelperError(code: "ambiguous_text", message: "The text occurs \(matches.count) times. Add prefix or suffix text around it so it occurs once.")
   }
-  let start = value.utf16.distance(from: value.utf16.startIndex, to: match.lowerBound.samePosition(in: value.utf16) ?? value.utf16.startIndex)
-  let length = text.utf16.count
+  let start = match.location
+  let length = match.length
   var range: CFRange
   switch place {
   case "before": range = CFRange(location: start, length: 0)
@@ -63,9 +68,11 @@ func selectText(app: AppIdentity, params: JSON, session: ApprovalSession) throws
   }
   let outcome = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, rangeValue)
   guard outcome == .success else { throw axFailure(outcome, "selecting the text") }
-  let now = selectedRange(of: element)
-  let verified = now.map { $0.location == range.location && $0.length == range.length } ?? false
-  return ["delivery": "accessibility", "verified": verified, "selection": ["start": range.location, "length": range.length] as JSON]
+  // Typing into a selection the app did not take would change the wrong text, so an unconfirmed one stops here.
+  guard let now = selectedRange(of: element), now.location == range.location, now.length == range.length else {
+    throw HelperError(code: "action_failed", message: "The app did not confirm the selection, so nothing should be typed into it. Read the state and try again.")
+  }
+  return ["delivery": "accessibility", "verified": true, "selection": ["start": range.location, "length": range.length] as JSON]
 }
 
 // The whole text of an element, or a part of it, where the tree shows only its start. Offsets count UTF-16 units,
@@ -81,11 +88,13 @@ func readText(app: AppIdentity, params: JSON, session: ApprovalSession) throws -
     throw HelperError(code: "no_text", message: "This element has no text value. Its label is in the tree.")
   }
   let units = Array(value.utf16)
-  let start = min(max(params["start"] as? Int ?? 0, 0), units.count)
-  let length = min(max(params["length"] as? Int ?? maxReadLength, 0), maxReadLength, units.count - start)
-  // A cut inside a character pair would not decode, so the end moves back to a whole character.
-  var end = start + length
-  while end > start, end < units.count, UTF16.isTrailSurrogate(units[end]) { end -= 1 }
+  let requested = min(max(params["start"] as? Int ?? 0, 0), units.count)
+  let length = min(max(params["length"] as? Int ?? maxReadLength, 0), maxReadLength, units.count - requested)
+  // A cut inside a surrogate pair would not decode: the start moves back and the end forward to whole characters.
+  var start = requested
+  if start > 0, start < units.count, UTF16.isTrailSurrogate(units[start]) { start -= 1 }
+  var end = min(requested + length, units.count)
+  if end < units.count, end > 0, UTF16.isTrailSurrogate(units[end]) { end += 1 }
   let text = String(decoding: units[start..<end], as: UTF16.self)
   var result: JSON = ["text": text, "start": start, "length": end - start, "total": units.count]
   if end < units.count { result["more"] = true }

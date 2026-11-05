@@ -85,7 +85,11 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   try ApprovalGate.require(app, session: session)
   try requireSameProcess(app)
   try connection.throwIfCancelled()
-  return try AppLocks.with(app.pid, connection: connection) {
+  return try AppLocks.with(app.bundleId, connection: connection) {
+    // Checked again after the wait: the user may have removed the app, or it may have quit, meanwhile.
+    try ApprovalGate.require(app, session: session)
+    try requireSameProcess(app)
+    if method == "run_actions" || actionMethods.contains(method) { try requireUserNotWorking(in: app) }
     try connection.throwIfCancelled()
     return try performAppRequest(method, app: app, params: params, session: session)
   }

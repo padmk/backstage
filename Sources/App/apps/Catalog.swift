@@ -170,7 +170,30 @@ func runOperation(_ params: JSON, session: ApprovalSession, connection: Connecti
   let target = try operationTarget(app)
   try ApprovalGate.require(target, session: session)
   try connection.throwIfCancelled()
+  // One request at a time per app, as for the window tools, also while an operation starts a closed app.
+  var locked = target.bundleId
+  for _ in 0..<3 {
+    let outcome: JSON? = try AppLocks.with(locked, connection: connection) {
+      // Resolved and checked again after the wait: an operation before this one may have started or quit the app,
+      // and the user may have removed it from the list.
+      let target = try operationTarget(app)
+      // Another variant of the app (such as a newer Pages) started meanwhile: its lock is the one to hold.
+      guard target.bundleId == locked else {
+        locked = target.bundleId
+        return nil
+      }
+      try ApprovalGate.require(target, session: session)
+      if target.pid > 0 { try requireSameProcess(target) }
+      // A change while the user works in the app could overwrite their edits or close their document.
+      if operation.effect == .changes, target.pid > 0 { try requireUserNotWorking(in: target) }
+      return try execute(operation, of: app, target: target, arguments: arguments, connection: connection)
+    }
+    if let outcome { return outcome }
+  }
+  throw HelperError(code: "action_failed", message: "\(app.name) kept switching between its versions while starting. Try again.")
+}
 
+private func execute(_ operation: Operation, of app: AppKnowledge, target: AppIdentity, arguments: JSON, connection: Connection) throws -> JSON {
   let frontBefore = onMain { NSWorkspace.shared.frontmostApplication }
   // An app started by the operation would show its windows above the user's other apps, so it starts hidden.
   let started = app.scripted && target.pid == 0 ? try startHidden(app, at: target.path) : nil
