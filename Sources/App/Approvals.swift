@@ -40,13 +40,16 @@ func isNeverApproved(_ bundleId: String) -> Bool {
 }
 
 private let maxClientNameLength = 40
+// Words clients use in their names that read as capitals, such as "codex-mcp-client".
+private let acronyms: Set<String> = ["mcp", "cli", "ai", "api", "ide"]
 
 // The client names itself, so the name is kept to one short line in the Activity list and the menu.
 func readableClientName(_ name: String?) -> String? {
   let printable = (name ?? "").unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && !CharacterSet.newlines.contains($0) }
   let words = String(String.UnicodeScalarView(printable)).split(whereSeparator: { "-_ ".contains($0) })
   guard !words.isEmpty else { return nil }
-  let readable = words.map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+  let readable = words.map { acronyms.contains($0.lowercased()) ? $0.uppercased() : $0.prefix(1).uppercased() + $0.dropFirst() }
+    .joined(separator: " ")
   return readable.count > maxClientNameLength ? String(readable.prefix(maxClientNameLength - 1)) + "…" : readable
 }
 

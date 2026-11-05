@@ -12,3 +12,4 @@ The first version: Backstage operates Mac apps for MCP clients in the background
 - The Backstage window: Apps, Setup and Activity tabs, Open at login and a menu bar item. The activity log keeps its newest thousand records once it passes 200 KB.
 - While the screen is locked, ready operations and the menu bar keep working and window requests stop with `screen_locked`; Windows while locked, off by default, adds screenshots and input by position, unverified.
 - `setup` signs the installed app with a certificate of this Mac, so permissions survive updates without a paid developer account, and swaps it in atomically; nothing else replaces it. A command from another build than the installed app refuses instead of stopping the helper. Files live at the XDG defaults.
+- Shortcuts `run` reports `verified: false`, since a shortcut's effect cannot be read back; turning on Windows while locked asks for confirmation.

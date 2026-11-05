@@ -61,7 +61,9 @@ private let run = Operation(
   guard finished.status == 0 else {
     throw HelperError(code: "action_failed", message: "The shortcut \(shortcut.name) stopped with an error: \(finished.errors.trimmingCharacters(in: .whitespacesAndNewlines).prefix(500))")
   }
-  var result: JSON = ["shortcut": shortcut.name, "id": shortcut.id, "finished": true]
+  // A shortcut's effect is whatever its actions do, which nothing here can read back.
+  var result: JSON = ["shortcut": shortcut.name, "id": shortcut.id, "finished": true, "verified": false,
+                      "check": "The shortcut ran to its end; read the state it was meant to change to see its effect."]
   if let data = FileManager.default.contents(atPath: outputFile.path) {
     let text = String(decoding: data, as: UTF8.self)
     result["output"] = String(text.prefix(maxOutput))
