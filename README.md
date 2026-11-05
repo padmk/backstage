@@ -1,13 +1,38 @@
-# Backstage
+<p align="center">
+  <img src="assets/AppIcon.png" width="128" alt="">
+</p>
 
-Backstage lets any MCP client operate Mac apps in the background. An agent reads a window as numbered elements, acts on them, and is told what changed, while you keep working in another app. For well-known apps it carries ready operations (create a note, add a reminder, read a table) that skip the window entirely. You choose which apps agents may use.
+<h1 align="center">Backstage</h1>
 
-Everything is Swift: a small command speaks MCP, and a signed helper app does the work through Accessibility, the window server, Apple events, EventKit and the Contacts framework.
+<p align="center">Let AI agents use your Mac's apps in the background, while you keep working.</p>
 
-- [How it works, and why](docs/architecture.md): the parts, a request step by step, and the reasoning behind the design.
-- [Working while the screen is locked](docs/locked-screen.md): what still works, what does not, and the optional Windows while locked mode.
-- [App knowledge](docs/app-knowledge.md): ready operations, their contracts and measurements.
-- [Security](SECURITY.md) and [privacy](PRIVACY.md).
+<p align="center">
+  <img src="https://img.shields.io/badge/macOS-26%2B%20%C2%B7%20Apple%20silicon-black" alt="macOS 26 or newer on Apple silicon">
+  <img src="https://img.shields.io/badge/Swift-6.2-black" alt="Swift 6.2">
+  <img src="https://img.shields.io/badge/MCP-stdio-0a7ea4" alt="MCP server over stdio">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-black" alt="MIT license"></a>
+</p>
+
+<p align="center">
+  <a href="#install"><b>Install</b></a> ·
+  <a href="#see-it-work"><b>See it work</b></a> ·
+  <a href="#for-ai-agents"><b>For AI agents</b></a> ·
+  <a href="#tools"><b>Tools</b></a> ·
+  <a href="#documentation"><b>Docs</b></a> ·
+  <a href="CHANGELOG.md"><b>Changelog</b></a>
+</p>
+
+<p align="center">
+  <img src="docs/images/window-apps.png" width="560" alt="The Backstage window on its Apps tab: Allow every app is off, and Calendar, Finder, Music, Notes, Pages and Reminders are on the list of apps agents may use">
+</p>
+
+**Backstage is an MCP server that operates Mac apps for Claude Code, Codex or any other MCP client.** An agent reads a window as numbered elements, presses, types and drags by number, and is told exactly what changed, all without bringing the app forward or moving your cursor. For well-known apps it skips the window and uses the app's own automation instead.
+
+- **Works behind your back, not in your way.** No tool activates an app, steals focus or moves the pointer. Requests for one app run one at a time, so two agents never type into each other.
+- **Says what happened, not what it hopes.** Every action reports how it was delivered and what changed in the window once the app settled, or says plainly that it could not tell.
+- **Ready operations for Apple's apps.** Notes, Reminders, Calendar, Contacts, Mail, Messages, Music, Finder, Pages, Numbers, Shortcuts and System Settings have typed operations that run while the app is hidden, closed or the screen is locked, and read their result back.
+- **You decide which apps.** Agents can use only the apps on your list. Nothing asks during a task, so unattended sessions stay within what you chose; Passwords, Keychain Access and login windows are never available.
+- **Local and independent.** No account, no telemetry, no dependency on any AI product. Everything is Swift: a small command speaks MCP, and a signed helper app does the work through Accessibility, the window server, Apple events, EventKit and the Contacts framework.
 
 ## Install
 
@@ -44,6 +69,49 @@ make install
 **Signing and updates.** macOS ties permissions to the app's signature. The first setup creates a certificate of this Mac in a keychain of its own and signs the installed app with it, so the permissions survive updates without a paid Apple developer account. To update, pull and run `make install` again, then restart client sessions. Nothing changes the installed app but an explicit setup. [SECURITY.md](SECURITY.md#signing) explains what that certificate means for other processes running as you.
 
 Files live at the XDG defaults: the app list in `~/.config/backstage`, the signing keychain in `~/.local/share/backstage`, the activity log and socket in `~/.local/state/backstage`.
+
+## See it work
+
+A read of a window, as an agent gets it from `get_window_state` (the fixture app from the live test, shortened):
+
+```text
+app="CUA Fixture" windows=[0*:"Fixture Main" 1:"Fixture Other"]
+1 Window(StandardWindow) "Fixture Main"
+  2 Button "Press Me" focused [Press]
+  3 StaticText value="presses: 0"
+  4 TextField placeholder="Plain" id="plain-field" editable [ShowMenu,Confirm]
+  5 TextField secure placeholder="Secret" editable [ShowMenu,Confirm]
+  6 Slider value="10" editable [Increment,Decrement]
+  8 Button "Open Sheet" [Press]
+```
+
+`press` with `element: 2` presses the button in the background and replies with what changed once the app settled:
+
+```json
+{ "delivery": "accessibility", "action": "AXPress",
+  "state": { "changed": true, "removed": ["3 StaticText value=\"presses: 0\""], "added": ["3 StaticText value=\"presses: 1\""] } }
+```
+
+For an app with ready operations the window is not needed at all. `run_operation` with `app: "Reminders"`, `operation: "list_lists"`:
+
+```json
+{ "operation": "list_lists", "lists": [{ "id": "A2560CE3-…", "title": "Inbox", "account": "iCloud", "default": true, "writable": true }, …] }
+```
+
+## For AI agents
+
+If you are an agent asked to install Backstage: follow [Setup](#setup). It needs the user at the keyboard once, to enable Accessibility in System Settings and to choose apps on the Apps tab; say so, and do not try to grant permissions or change the app list yourself.
+
+If you are an agent using Backstage, this is the shortest path to doing it well:
+
+1. **Check access first.** Call `list_apps` (with `app` for one that is not running). Use an app only when its `access` is `allowed`, by any route, including osascript and other tools. If it is not, tell the user which app to add on the Apps tab and carry on with the rest.
+2. **Prefer ready operations.** Call `list_operations` with the app. If an operation fits, `run_operation` is faster than the window, works in the background and checks its own result.
+3. **Read, act by number, check `state`.** `get_window_state`, then `press`, `set_value`, `type_text` or `select_text` with the element number. Read `state` in the reply: it lists what changed. `verified: false` or `state.unknown` means look again before going on.
+4. **Use pixels only when there are no elements.** For web content and custom views, `screenshot` then `click_at` with window coordinates.
+5. **Never retry a change blindly.** `outcome_unknown` means it may have happened: read the state first. Messages `send` cannot be undone.
+6. **On a locked screen** (`screen_locked` in `list_apps`), use ready operations and the menu bar; never try to unlock the Mac. See [Locked screen](#locked-screen).
+
+The server repeats the essentials in its MCP instructions, so a client that loads them gets the same rules. Every error code and what to do about it is in [Errors](#errors).
 
 ## Tools
 
@@ -157,6 +225,10 @@ While the Mac's screen is locked, macOS keeps windows out of Accessibility and S
 
 Open **Backstage** from `/Applications` to see and change everything in one window, with three tabs:
 
+<p align="center">
+  <img src="docs/images/window-setup.png" width="420" alt="The Setup tab: Open at login, Show in menu bar and Windows while locked under Background, Accessibility and Screen Recording allowed, and the macOS grants the listed apps use">
+  <img src="docs/images/window-activity.png" width="420" alt="The Activity tab: which agent first used which app, and changes to the list and the switches, with relative times">
+</p>
 
 - **Apps:** Allow every app, and otherwise the list of apps agents may use, with Add App… and Remove. Far-reaching apps carry their warning. While Allow every app is on, the list folds away and is kept for when it goes off.
 - **Setup:**
@@ -229,6 +301,18 @@ CI runs on macOS: it builds and assembles the app (`make app`), type-checks the 
 | `Sources/App/Accessibility.swift`, `Tree.swift` | Reading apps and numbering elements |
 | `Sources/App/Input.swift`, `BackgroundEvents.swift`, `Capture.swift` | Key and pointer events, background delivery, screenshots |
 | `Tests/ToolTests/` | Protocol, app, live and benchmark tests; `Tests/Fixtures/target` is the test app |
+
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | The parts, a request step by step, background input, verification, and the reasoning behind the design |
+| [docs/locked-screen.md](docs/locked-screen.md) | What changes when the screen locks and why, what still works, and the Windows while locked mode with its costs and limits |
+| [docs/app-knowledge.md](docs/app-knowledge.md) | Ready operations: routes, contracts, how each proves it worked, scope and measurements |
+| [SECURITY.md](SECURITY.md) | The security model, what it does not protect against, private macOS calls and signing |
+| [PRIVACY.md](PRIVACY.md) | What leaves the Mac and what stays on disk |
+| [bench/README.md](bench/README.md) | Latency measurements |
+| [CHANGELOG.md](CHANGELOG.md) | Changes |
 
 ## License
 
