@@ -13,6 +13,6 @@ Window contents, screenshots and the results of ready operations (notes, reminde
 | `~/.config/backstage/approvals.json` | The app list: bundle ids and signers (entries made by earlier versions may carry an expiry time) |
 | `~/.local/state/backstage/decisions.jsonl` | Time, client, app and decision of each first use in a session and each change to the list, Allow every app or Windows while locked; past 200 KB it keeps the newest thousand records |
 | `~/.local/share/backstage/signing.keychain-db` | The local signing certificate and its key |
-| `~/Library/Preferences/local.cua-mcp.helper.plist` | The window's switches and last tab |
+| `~/Library/Preferences/app.foreverbeta.backstage.plist` | The window's switches and last tab |
 
-None of them holds window contents or operation results. Delete `approvals.json` and `decisions.jsonl` to reset the list and the history.
+None of them holds window contents or operation results. Ready operations that list files (Finder's selection and front folder, the documents Pages and Numbers have open) leave out the paths of files outside your home folder and external volumes. Delete `approvals.json` and `decisions.jsonl` to reset the list and the history.

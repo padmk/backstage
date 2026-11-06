@@ -11,6 +11,8 @@ private typealias CaptureWindowList = @convention(c) (Int32, UnsafeMutablePointe
 
 private let mainConnection = lookUp("SLSMainConnectionID", as: MainConnection.self, in: skyLight)
 private let captureWindowList = lookUp("SLSHWCaptureWindowList", as: CaptureWindowList.self, in: skyLight)
+var lockedCaptureAvailable: Bool { mainConnection != nil && captureWindowList != nil }
+
 // Only the window itself, at its full resolution.
 private let captureOptions: UInt32 = 0x800 | 0x200
 

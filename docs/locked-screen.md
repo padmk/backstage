@@ -12,9 +12,11 @@ All measurements here are from 5 November 2026, on macOS 27.2 (build 26B123) on 
 |---|---|---|
 | Ready operations (`run_operation`) | Work | Work |
 | `list_apps`, `list_operations`, `launch_app` | Work; `list_apps` reports `screen_locked: true` | Same |
-| `get_window_state` with `menu_bar` or `menu_extras`, or with `root` inside a menu | Works | Works |
+| `get_window_state` with `menu_bar` or `menu_extras`, or with `root` inside a menu; `list_menu_commands`, `run_menu_command` | Works | Works |
+| `list_windows` | Window server data only, without titles or states | Same |
+| `set_app_state` (hide, show) | Works | Works |
 | `press` on a menu bar item or menu item, alone or as every step of `run_actions` | Works, and reports what changed in the menu bar | Same |
-| `get_window_state` of a window, `read_text`, `set_value`, `select_text`, `scroll`, `drag`, `press` on other elements, `click_at` with `element` | `screen_locked` | `screen_locked` |
+| `get_window_state` of a window, `read_text`, `set_value`, `select_text`, `scroll`, `drag`, `press` on other elements, `click_at` with `element`, `set_window`, `close`, `wait_for` on a window | `screen_locked` | `screen_locked` |
 | `screenshot` | `screen_locked` | Works, through a private window server call |
 | `click_at` with `x` and `y` | `screen_locked` | Works, unverified |
 | `press_key`, `type_text` without `element` | `screen_locked` | Works, unverified |
@@ -142,7 +144,7 @@ Unlocked, Backstage prefers accessibility: it reads elements, acts on them by nu
 
 ### Turning it on and off
 
-On the Setup tab, under Background, switch **Windows while locked**. The setting is stored in the app's defaults as `worksInWindowsWhileLocked` in `~/Library/Preferences/local.cua-mcp.helper.plist` and applies to the next request. The Activity tab records each change under Windows while locked, with On or Off, by You. Agents are told never to change Backstage's settings; like the app list, this relies on their cooperation (see [SECURITY.md](../SECURITY.md)).
+On the Setup tab, under Background, switch **Windows while locked**. The setting is stored in the app's defaults as `worksInWindowsWhileLocked` in `~/Library/Preferences/app.foreverbeta.backstage.plist` and applies to the next request. The Activity tab records each change under Windows while locked, with On or Off, by You. Agents are told never to change Backstage's settings; like the app list, this relies on their cooperation (see [SECURITY.md](../SECURITY.md)).
 
 ## What Backstage does not do
 

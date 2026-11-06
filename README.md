@@ -26,11 +26,13 @@
   <img src="docs/images/window-apps.png" width="560" alt="The Backstage window on its Apps tab: Allow every app is off, and Calendar, Finder, Music, Notes, Pages and Reminders are on the list of apps agents may use">
 </p>
 
-**Backstage is an MCP server that operates Mac apps for Claude Code, Codex or any other MCP client.** An agent reads a window as numbered elements, presses, types and drags by number, and is told exactly what changed, all without bringing the app forward or moving your cursor. For well-known apps it skips the window and uses the app's own automation instead.
+**Backstage is an MCP server that operates Mac apps for Claude Code, Codex or any other MCP client.** An agent reads a window as numbered elements, presses, types and drags by number, and is told exactly what changed, without bringing the app forward or moving your cursor. It runs any app's menu commands by name, manages and arranges windows across displays, and for well-known apps skips the window and uses the app's own automation instead.
 
-- **Works behind your back, not in your way.** No tool activates an app, steals focus or moves the pointer. Requests for one app run one at a time, so two agents never type into each other.
-- **Says what happened, not what it hopes.** Every action reports how it was delivered and what changed in the window once the app settled, or says plainly that it could not tell.
-- **Ready operations for Apple's apps.** Notes, Reminders, Calendar, Contacts, Mail, Messages, Music, Finder, Pages, Numbers, Shortcuts and System Settings have typed operations that run while the app is hidden, closed or the screen is locked, and read their result back.
+- **Works behind your back, not in your way.** Tools work in the background: nothing activates an app or moves the pointer, except the few that say so and need `foreground: true` (a last-resort click, bringing a window back from the Dock, full screen). Requests for one app run one at a time, so two agents never type into each other.
+- **Says what happened, not what it hopes.** Every action reports how it was delivered and what changed once the app settled, or says plainly that it could not tell.
+- **Every app's commands, without exploring.** `list_menu_commands` shows what any app can do, with its keyboard shortcuts, and `run_menu_command` runs a command by its menu path. It works in apps Backstage has never seen and keeps working when an app changes its layout.
+- **Windows as objects.** List every window on every display, move, resize and arrange them in halves, quarters or thirds, minimize, hide, close and quit, each change read back.
+- **Ready operations for Apple's apps.** Notes, Reminders, Calendar, Contacts, Mail, Messages, Music, Finder, Pages, Numbers, Shortcuts and System Settings have typed operations that run while the app is hidden or closed, most of them also while the screen is locked, and that read their result back where the app allows it.
 - **You decide which apps.** Agents can use only the apps on your list. Nothing asks during a task, so unattended sessions stay within what you chose; Passwords, Keychain Access and login windows are never available.
 - **Local and independent.** No account, no telemetry, no dependency on any AI product. Everything is Swift: a small command speaks MCP, and a signed helper app does the work through Accessibility, the window server, Apple events, EventKit and the Contacts framework.
 
@@ -38,11 +40,20 @@
 
 ### Requirements
 
-- A Mac with Apple silicon and macOS 26 or newer (the two latest versions), and an administrator account, since the app goes into `/Applications`.
+- A Mac with Apple silicon and macOS 26 or newer (the two latest versions). The app goes into `/Applications`, or into `~/Applications` for an account that cannot write there.
 - The Xcode command line tools (`xcode-select --install`) to build it. Xcode itself is needed only for the tests.
 - An MCP client: setup registers with Claude Code and Codex, and prints the configuration for any other.
 
 ### Setup
+
+With Homebrew:
+
+```sh
+brew install padmk/tap/backstage
+backstage setup
+```
+
+From a checkout:
 
 ```sh
 git clone https://github.com/padmk/backstage
@@ -50,9 +61,9 @@ cd backstage
 make install
 ```
 
-`make install` builds `build/Backstage.app` with Swift Package Manager and runs its `setup`, which:
+Homebrew builds the app from source; `make install` builds `build/Backstage.app` with Swift Package Manager. Either way, `setup`:
 
-1. Installs the app into `/Applications`, signed with a certificate of this Mac (see below).
+1. Installs the app into `/Applications` (or `~/Applications`), signed with a certificate of this Mac (see below).
 2. Opens System Settings and waits up to 3 minutes for you to enable Backstage under **Accessibility**, the one permission it needs. If it is not listed, drag it there from the Finder window setup opens.
 3. Registers `/Applications/Backstage.app/Contents/Helpers/backstage mcp` as the `backstage` MCP server with Claude Code and Codex, when they are installed, and prints the configuration for other clients.
 4. On the first install, opens the Backstage window on the Apps tab, where you choose the apps agents may use. An update opens nothing.
@@ -66,7 +77,9 @@ make install
 
 **The `backstage` command** lives inside the app, at `/Applications/Backstage.app/Contents/Helpers/backstage`; MCP clients run it with `mcp`. To use it from a shell by name, link it onto your `PATH`, for example `ln -s /Applications/Backstage.app/Contents/Helpers/backstage ~/.local/bin/backstage`.
 
-**Signing and updates.** macOS ties permissions to the app's signature. The first setup creates a certificate of this Mac in a keychain of its own and signs the installed app with it, so the permissions survive updates without a paid Apple developer account. To update, pull and run `make install` again, then restart client sessions. Nothing changes the installed app but an explicit setup. [SECURITY.md](SECURITY.md#signing) explains what that certificate means for other processes running as you.
+**Signing and updates.** macOS ties permissions to the app's signature. The first setup creates a certificate of this Mac in a keychain of its own and signs the installed app with it, so the permissions survive updates without a paid Apple developer account, as long as the certificate stays. Note that any process running as you can use that certificate; [SECURITY.md](SECURITY.md#signing) explains what that means. To update, run `brew upgrade backstage` (or pull and `make install`), then `backstage setup`, then restart client sessions. Nothing changes the installed app but an explicit setup.
+
+**Uninstall.** `backstage uninstall` quits the app, turns off its login item, removes its MCP registrations and moves it to the Trash; the app list, settings and certificate stay for a later install. `backstage uninstall --reset` removes those too, after asking, and resets its macOS permissions. With Homebrew, run it before `brew uninstall backstage`, which does not touch the copy in Applications.
 
 Files live at the XDG defaults: the app list in `~/.config/backstage`, the signing keychain in `~/.local/share/backstage`, the activity log and socket in `~/.local/state/backstage`.
 
@@ -105,11 +118,12 @@ If you are an agent asked to install Backstage: follow [Setup](#setup). It needs
 If you are an agent using Backstage, this is the shortest path to doing it well:
 
 1. **Check access first.** Call `list_apps` (with `app` for one that is not running). Use an app only when its `access` is `allowed`, by any route, including osascript and other tools. If it is not, tell the user which app to add on the Apps tab and carry on with the rest.
-2. **Prefer ready operations.** Call `list_operations` with the app. If an operation fits, `run_operation` is faster than the window, works in the background and checks its own result.
+2. **Prefer ready operations, then menu commands.** Call `list_operations` with the app. If an operation fits, `run_operation` is faster than the window, works in the background and checks its own result. Otherwise `list_menu_commands` (with `query`) shows what the app can do; `run_menu_command` runs it.
 3. **Read, act by number, check `state`.** `get_window_state`, then `press`, `set_value`, `type_text` or `select_text` with the element number. Read `state` in the reply: it lists what changed. `verified: false` or `state.unknown` means look again before going on.
 4. **Use pixels only when there are no elements.** For web content and custom views, `screenshot` then `click_at` with window coordinates.
-5. **Never retry a change blindly.** `outcome_unknown` means it may have happened: read the state first. Messages `send` cannot be undone.
-6. **On a locked screen** (`screen_locked` in `list_apps`), use ready operations and the menu bar; never try to unlock the Mac. See [Locked screen](#locked-screen).
+5. **Wait instead of polling.** After an action that takes time, `wait_for` the text that shows when it is done (or `gone: true` for a progress bar).
+6. **Never retry a change blindly.** `outcome_unknown` means it may have happened: read the state first. Messages `send` cannot be undone.
+7. **On a locked screen** (`screen_locked` in `list_apps`), use ready operations and the menu bar; never try to unlock the Mac. See [Locked screen](#locked-screen).
 
 The server repeats the essentials in its MCP instructions, so a client that loads them gets the same rules. Every error code and what to do about it is in [Errors](#errors).
 
@@ -132,7 +146,14 @@ The server repeats the essentials in its MCP instructions, so a client that load
 | `read_text` | Reads the full text of an element, or a range of it, where the tree cuts a long value (marked `length=`) |
 | `screenshot` | Captures a window as a PNG, one pixel per window point, so its coordinates work with `click_at` |
 | `click_at` | Sends a click at a point in a window or at an element's center, with any button and held modifiers (right-click, cmd-click); with `foreground: true` brings the window forward for that click as a last resort |
-| `run_actions` | Runs up to 20 of the actions above in one app in order and reports the combined change once; stops at the first step that fails or may have worked |
+| `list_windows` | Lists windows across apps and displays: id, app, frame, display, on screen, Space (`current`, `other`, `unknown`); for apps on your list also the title, window number, minimized, full screen, modal, movable and resizable. Displays come with their frame and visible area |
+| `set_window` | Changes one window in one way: `frame`, `layout` (halves, quarters, thirds, `maximize`, `center`, on any display), `minimized` or `fullscreen`; reads the frame back and says when the app kept it within its own limits |
+| `set_app_state` | Hides an app, or shows it again without bringing it forward |
+| `close` | Closes a window through its close button, or quits the app (`quit: true`) as if you chose Quit; never forced |
+| `list_menu_commands` | Lists an app's menu commands with their path, shortcut, enabled state and element number, without opening a menu |
+| `run_menu_command` | Runs one menu command by its path (`File > Export…`) or shortcut (`cmd+shift+s`), without opening the menu or typing the keys |
+| `wait_for` | Waits until text shows in a window, or until it is gone, up to 30 s |
+| `run_actions` | Runs up to 20 of the actions above in one app in order and reports the combined change once; stops at the first step that fails or may have worked, while a step delivered but not confirmable (`verified: false`) does not stop the others |
 
 ### Action replies
 
@@ -154,13 +175,20 @@ Requests for the same app run one at a time, also across agents, so two sessions
 | Code | Meaning | What to do |
 |---|---|---|
 | `not_approved` | The app is not on the user's list | Ask the user to add it on the Apps tab; do not reach it another way |
-| `not_allowed` | The app is never available (Passwords, Keychain Access, login windows, Backstage) | Nothing |
+| `not_allowed` | Never available: the app (Passwords, Keychain Access, login windows, Backstage), an item in the Apple, Services or Share menu, or what an operation's rules refuse (a read-only calendar, a recurring event, a file outside your home folder, a locked note) | Change the arguments, or ask the user to do it |
 | `permission_missing` | A macOS grant is missing (Accessibility, Screen Recording, or one a ready operation needs) | Ask the user to allow it on the Setup tab |
 | `access_denied` | The user declined that grant | The message names the pane in System Settings |
 | `screen_locked` | The screen is locked, so windows cannot be read | Use ready operations or the menu bar; see [Locked screen](#locked-screen) |
 | `user_active` | The app is in front and the user typed or clicked in the last 2 s | Try again in a few seconds |
 | `outcome_unknown` | The action or operation may have worked, for example it opened a blocking dialog or was cancelled midway | Read the state before trying again; never retry blindly |
 | `stale_element`, `unknown_element` | The element number no longer names what was read | Read the window again |
+| `stale_window` | A window id from `list_windows` now belongs to another app | List the windows again |
+| `needs_foreground` | The change would bring a window in front (back from the Dock, full screen) | Pass `foreground: true` if that is what the user wants, and tell them |
+| `disabled` | The menu command is disabled now, often because the app has no key window in the background | Use a ready operation, or ask the user |
+| `helper_stopped` | The app quit or restarted while a request ran; it may or may not have run | Read the state before trying again |
+| `busy`, `request_too_large` | Too many requests are waiting on one connection, or one is larger than 4 MB | Wait for answers; send less at once |
+| `unknown_app`, `unknown_operation`, `unknown_method` | No ready operations for that app, no such operation, or no such request | Check `list_operations` and the tool name |
+| `store_failed` | The app list could not be saved | Tell the user |
 | `window_not_found`, `out_of_window`, `point_covered` | No such window, a point outside it, or another window on top of the point (`foreground: true` only) | Read again and pick another target |
 | `invalid_request`, `invalid_arguments`, `invalid_key` | The request is malformed; the message names the problem and, for operations, the whole argument list | Fix the call |
 | `not_settable`, `no_text`, `text_not_found`, `ambiguous_text`, `ambiguous`, `not_found` | The element or item cannot do what was asked, or the target is not unique | Follow the message |
@@ -214,8 +242,10 @@ While the Mac's screen is locked, macOS keeps windows out of Accessibility and S
 | | Screen locked |
 |---|---|
 | Ready operations, `list_apps`, `list_operations`, `launch_app` | Work |
-| The menu bar: `get_window_state` with `menu_bar` or `menu_extras`, and `press` on its items | Works |
-| Window trees and element actions | Stop with `screen_locked` |
+| The menu bar: `get_window_state` with `menu_bar` or `menu_extras`, `press` on its items, `list_menu_commands` and `run_menu_command` | Works |
+| `list_windows` | Lists windows from the window server, without titles or states |
+| `set_app_state` (hide, show) | Works |
+| Window trees, element actions, `set_window`, `close`, `wait_for` on a window | Stop with `screen_locked` |
 | Messages `send` | Sends, but cannot confirm it (`verified: false`); do not send again |
 | `screenshot`, `click_at` with `x` and `y`, `press_key`, `type_text` without an element | Only with **Windows while locked** on, from screenshots and never verified |
 
@@ -230,7 +260,7 @@ Open **Backstage** from `/Applications` to see and change everything in one wind
   <img src="docs/images/window-activity.png" width="420" alt="The Activity tab: which agent first used which app, and changes to the list and the switches, with relative times">
 </p>
 
-- **Apps:** Allow every app, and otherwise the list of apps agents may use, with Add App… and Remove. Far-reaching apps carry their warning. While Allow every app is on, the list folds away and is kept for when it goes off.
+- **Apps:** apps asked for from the command line or by an agent, waiting for you to add or decline them; Allow every app, and otherwise the list of apps agents may use, with Add App… and Remove. Far-reaching apps carry their warning. While Allow every app is on, the list folds away and is kept for when it goes off.
 - **Setup:**
   - Under Background: Open at login and Show in menu bar (off by default; its menu shows whether Backstage is ready, which agents are connected and the apps on the list), both available in the copy in `/Applications`; and Windows while locked (off by default, see above).
   - Under macOS permissions: Accessibility, which Backstage needs, and Screen Recording, which is optional and only for screenshots, each with a button for the right pane of System Settings. A new Screen Recording grant needs a restart, which the tab offers.
@@ -248,17 +278,19 @@ This keeps agents from using other apps through Backstage by mistake. It does no
 
 - List entries name the app's bundle id and signer, so another app claiming the same bundle id is not covered. An app without a valid signature cannot go on the list; Allow every app covers it.
 - Apps that give agents a shell or control of the system (terminals, Shortcuts, Finder, System Settings, Xcode and similar) carry a warning on the list.
-- Passwords, Keychain Access, login and authentication windows, and Backstage itself are never available, whatever the settings.
+- Passwords, Keychain Access, login and authentication windows, and Backstage itself are never available, whatever the settings. Nor are the Apple menu (Restart, Log Out) and the Services and Share menus of any app, which act on the whole Mac or hand content to other apps.
 
 ```sh
-backstage approvals add Notes
+backstage approvals add Notes          # asks you in the Backstage window; added once you click Add
 backstage approvals list
 backstage approvals revoke com.apple.Notes
 ```
 
+`approvals add` only asks: the command cannot tell you from an agent running it, so the app goes on the list when you add it in the window. Removing an app takes effect at once.
+
 ## Troubleshooting
 
-`backstage doctor` checks macOS, the installed app and its signature, Accessibility, Screen Recording and the grants of the listed apps.
+`backstage doctor` checks macOS, the installed app and its signature, Accessibility, Screen Recording, the grants of the listed apps and the private macOS calls background delivery uses.
 
 | Symptom | Fix |
 |---|---|
@@ -288,12 +320,17 @@ CI runs on macOS: it builds and assembles the app (`make app`), type-checks the 
 | `Sources/HelperLink/` | What the app and the command share: the product's name, version and identifiers, its directories, line framing and build identity |
 | `Sources/Tool/MCPServer.swift`, `Tools.swift` | MCP over stdio, the tool definitions and their argument checks |
 | `Sources/Tool/HelperClient.swift` | Starting the app and talking to it over its socket, with the build check |
-| `Sources/Tool/Commands.swift`, `Install.swift` | `setup`, `doctor`, `approvals`; installing and signing the app for this Mac |
+| `Sources/Tool/Commands.swift`, `Install.swift` | `setup`, `doctor`, `approvals`, `uninstall`; installing and signing the app for this Mac |
 | `Sources/App/HelperMain.swift`, `Server.swift` | The app's start, the Unix socket and sessions |
 | `Sources/App/Requests.swift` | The request router |
 | `Sources/App/Apps.swift`, `Actions.swift` | Finding and starting apps; reading windows and acting on them |
 | `Sources/App/Observation.swift`, `Sequences.swift` | Change reports after actions, the per-app lock, and `run_actions` |
 | `Sources/App/Presence.swift`, `LockedWindows.swift` | The user working in the target app; the locked screen and Windows while locked |
+| `Sources/App/WindowManagement.swift` | `list_windows`, `set_window`, `set_app_state`, `close`: displays, frames, layouts |
+| `Sources/App/MenuCommands.swift`, `MenuSafety.swift` | Menu commands with their shortcuts; the Apple, Services and Share menus refused on every route |
+| `Sources/App/WaitFor.swift` | `wait_for` |
+| `Sources/App/ApprovalRequests.swift` | Apps asked for over the socket, waiting for the user in the window |
+| `packaging/homebrew/backstage.rb` | The formula for the tap, filled in at each release |
 | `Sources/App/apps/` | App knowledge: the catalog (`Catalog.swift`), the script runner and event store, one file per app |
 | `Sources/App/Approvals.swift` | The app list and the check every request passes |
 | `Sources/App/window/`, `Theme.swift` | The Backstage window, one file per tab, its model, texts and look |
@@ -316,4 +353,6 @@ CI runs on macOS: it builds and assembles the app (`make app`), type-checks the 
 
 ## License
 
-MIT
+MIT. The app icon was made for Backstage and is covered by the same license.
+
+Apple, macOS and the names of Apple's apps are trademarks of Apple Inc.; Claude Code is a product of Anthropic and Codex of OpenAI. Backstage is an independent project, not affiliated with or endorsed by them.
