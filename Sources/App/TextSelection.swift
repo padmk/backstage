@@ -83,8 +83,19 @@ func readText(app: AppIdentity, params: JSON, session: ApprovalSession) throws -
   guard stringAttribute(element, kAXSubroleAttribute) != "AXSecureTextField" else {
     throw HelperError(code: "invalid_request", message: "A secure field's value is never shown.")
   }
-  guard let value = textAttribute(element, kAXValueAttribute) else {
-    throw HelperError(code: "no_text", message: "This element has no text value. Its label is in the tree.")
+  // An element without a text value, such as a message bubble that carries its text as the label, gives its label,
+  // the one the tree shows.
+  let value: String
+  var source = "value"
+  if let text = stringAttribute(element, kAXValueAttribute) {
+    value = text
+  } else if let label = stringAttribute(element, kAXTitleAttribute) ?? stringAttribute(element, kAXDescriptionAttribute) {
+    value = label
+    source = "label"
+  } else if textAttribute(element, kAXValueAttribute) != nil {
+    value = ""
+  } else {
+    throw HelperError(code: "no_text", message: "This element has no text value and no label.")
   }
   let units = Array(value.utf16)
   let requested = min(max(params["start"] as? Int ?? 0, 0), units.count)
@@ -95,7 +106,7 @@ func readText(app: AppIdentity, params: JSON, session: ApprovalSession) throws -
   var end = min(requested + length, units.count)
   if end < units.count, end > 0, UTF16.isTrailSurrogate(units[end]) { end += 1 }
   let text = String(decoding: units[start..<end], as: UTF16.self)
-  var result: JSON = ["text": text, "start": start, "length": end - start, "total": units.count]
+  var result: JSON = ["text": text, "start": start, "length": end - start, "total": units.count, "source": source]
   if end < units.count { result["more"] = true }
   return result
 }
