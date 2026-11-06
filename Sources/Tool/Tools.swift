@@ -69,7 +69,7 @@ let tools: [ToolDefinition] = [
     required: ["app", "operation"], annotations: ["readOnlyHint": false, "destructiveHint": true, "openWorldHint": false]),
   ToolDefinition(
     name: "get_window_state",
-    description: "Read a window as lines of numbered elements with their state and actions. The first line lists the app's windows. Numbers stay valid across reads in this session. Reading the same place again returns only what changed since your last read or action there; pass full: true for all of it.",
+    description: "Read a window as lines of numbered elements with their state and actions. The first line lists the app's windows. Numbers stay valid across reads in this session; a new session numbers elements anew, so read again before using a number from another one. Reading the same place again returns only what changed since your last read or action there; pass full: true for all of it.",
     properties: [
       ("app", app),
       ("window", window),
@@ -78,7 +78,7 @@ let tools: [ToolDefinition] = [
       ("menu_bar", ["type": "boolean", "description": "Read the menu bar instead of a window"]),
       ("menu_extras", ["type": "boolean", "description": "Read the app's items on the right of the menu bar, such as status icons, instead of a window"]),
       ("root", described(element, "Read only this element's subtree")),
-      ("max_elements", ["type": "integer", "minimum": 1, "maximum": 5000]),
+      ("max_elements", ["type": "integer", "minimum": 1, "maximum": 5000, "description": "Default 800. A read cut at this limit is partial, and an action after it cannot report what changed; to read less, use root"]),
     ],
     required: ["app"], annotations: reads),
   ToolDefinition(

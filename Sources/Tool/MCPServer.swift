@@ -65,8 +65,6 @@ final class MCPServer: @unchecked Sendable {
 
   // MARK: Input
 
-  // MARK: Input
-
   // Reads the client's input until it ends. A read happens only once input is waiting and no handoff has begun,
   // so a handoff leaves every byte it did not handle either in its state or still in stdin.
   func readInput(after resumed: Data) {
