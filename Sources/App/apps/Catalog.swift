@@ -48,7 +48,7 @@ struct AppKnowledge {
 
 let appCatalog: [AppKnowledge] = [
   notesKnowledge, remindersKnowledge, calendarKnowledge, contactsKnowledge, mailKnowledge, messagesKnowledge, settingsKnowledge,
-  shortcutsKnowledge, musicKnowledge, finderKnowledge, pagesKnowledge, numbersKnowledge, homeKnowledge,
+  shortcutsKnowledge, musicKnowledge, finderKnowledge, pagesKnowledge, numbersKnowledge, homeKnowledge, whatsAppKnowledge,
 ]
 
 func knowledge(forBundleId bundleId: String) -> AppKnowledge? {
@@ -207,7 +207,7 @@ private func execute(_ operation: Operation, of app: AppKnowledge, target: AppId
   var result: JSON
   do {
     // Nothing has acted yet: a failure here leaves no change.
-    try requireAutomation(for: operation.name, of: target.bundleId)
+    try requireGrant(for: operation.name, of: target.bundleId)
     try connection.throwIfCancelled()
   } catch {
     _ = tidyUp()

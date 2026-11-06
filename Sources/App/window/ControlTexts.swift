@@ -39,6 +39,13 @@ enum ControlTexts {
   static let noGrants = "Nothing to allow", noGrantsDetail = "Apps on your list that need a macOS grant appear here."
   static let allow = "Allow", allowed = "Allowed", off = "Off", unknownUntilOpen = "Unknown until the app is open"
   static let asking = "Waiting…"
+  static let needsFullDiskAccess = "Needs Full Disk Access, which macOS does not ask for"
+  static let addInSettings = "Add in Settings…"
+  static let dragIntoList = "Drag into the Full Disk Access list in System Settings"
+  static func dragTitle(_ name: String) -> String { "Let Backstage read \(name)" }
+  static let dragSteps = "Drag this icon into the Full Disk Access list in System Settings, then turn it on. Or click + there and choose Backstage."
+  static let done = "Done"
+  static let grantsWaiting = "Some apps need a macOS grant for their ready operations.", showSetup = "Show"
 
   static let recentDecisions = "Recent activity"
   static let activityNote = "A local history of which agent first used which app in each session, and of changes to the list. It is not tamper-proof."

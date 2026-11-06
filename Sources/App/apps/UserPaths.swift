@@ -5,8 +5,14 @@ import Foundation
 // The home folder as the file system names it, for checks of resolved paths.
 let resolvedHome = URL(fileURLWithPath: NSHomeDirectory()).resolvingSymlinksInPath().path
 
+// Library holds other apps' data, which macOS guards per app; with Full Disk Access, which the WhatsApp operations
+// need, nothing else would, so only iCloud Drive and cloud storage folders in it are reachable.
+let libraryFolder = resolvedHome + "/Library"
+let reachableInLibrary = ["/Mobile Documents/", "/CloudStorage/"].map { libraryFolder + $0 }
+
 func isReachablePath(_ path: String) -> Bool {
-  (path.hasPrefix(resolvedHome + "/") && path != resolvedHome) || path.hasPrefix("/Volumes/")
+  if path == libraryFolder || path.hasPrefix(libraryFolder + "/") { return reachableInLibrary.contains { path.hasPrefix($0) } }
+  return (path.hasPrefix(resolvedHome + "/") && path != resolvedHome) || path.hasPrefix("/Volumes/")
 }
 
 // A path an operation may report: one in the reachable set, links resolved; nil for anything else, so a listing
@@ -42,7 +48,7 @@ func userPath(_ arguments: JSON, key: String = "path", mustExist: Bool = true, f
     : resolvingExistingFolders(given.deletingLastPathComponent()).appendingPathComponent(given.lastPathComponent)
   let path = url.path
   guard isReachablePath(path) else {
-    throw HelperError(code: "not_allowed", message: "Only files in your home folder or on external volumes are reachable.")
+    throw HelperError(code: "not_allowed", message: "Only files in your home folder, outside Library except iCloud Drive and cloud storage, or on external volumes are reachable.")
   }
   if mustExist, (try? FileManager.default.attributesOfItem(atPath: path)) == nil { throw HelperError(code: "not_found", message: "\(path) does not exist.") }
   return url

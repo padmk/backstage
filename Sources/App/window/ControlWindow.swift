@@ -77,7 +77,7 @@ private struct ToolbarTabs: View {
   @ObservedObject var selection: ControlSelection
 
   var body: some View {
-    TabBar(selection: selection, permissionsMissing: model.permissionsMissing)
+    TabBar(selection: selection, permissionsMissing: model.permissionsMissing || model.grantsWaiting)
       .environment(\.colorScheme, .dark)
       .fixedSize()
   }
@@ -91,7 +91,7 @@ struct ControlView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
         switch selection.tab {
-        case .apps: AppsTab(model: model)
+        case .apps: AppsTab(model: model, showSetup: { selection.tab = .setup })
         case .setup: SetupTab(model: model)
         case .activity: ActivityTab(model: model)
         }

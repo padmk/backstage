@@ -43,6 +43,7 @@ Two tools, not one tool per operation:
   - Scripts are JavaScript for Automation, run by an `osascript` child of the helper. A child inherits the helper as its responsible process, so the Automation prompt should name Backstage; this is checked live, not assumed. The arguments go in as one JSON value after `--` to `run(argv)`, never spliced into the script text, so no input can change what a script does. Each run has a timeout, after which it is killed.
   - EventKit runs in the helper itself and asks with `requestFullAccessToReminders` and `requestFullAccessToEvents`, treating only `.fullAccess` as granted. `Info.plist` carries `NSAppleEventsUsageDescription`, `NSRemindersFullAccessUsageDescription` and `NSCalendarsFullAccessUsageDescription`, and the build fingerprint covers the plist, so a changed usage string rebuilds the app.
 - Contacts uses the Contacts framework in the helper and needs `NSContactsUsageDescription`; Shortcuts runs `/usr/bin/shortcuts` as a child of the helper, always naming the shortcut by its id.
+- WhatsApp has no automation surface, so its operations read its own SQLite database (`ChatStorage.sqlite` in its group container) read-only, with the write-ahead log, while WhatsApp runs or not. macOS guards that container as another app's data and, for Backstage, refuses without a prompt; Full Disk Access is the only grant that opens it, and macOS never asks for that one. So the Setup tab's WhatsApp row opens the pane with a panel to drag Backstage from, and the helper reads the files only after the user has asked there, since reading is what would make macOS ask on versions that do. The format is WhatsApp's own: the operations check the tables and columns they need and fail with `unsupported_format` otherwise, leaving the window as the way in. Times are Core Data seconds since 2001; message types 0 to 15 are named where known (14 is a deleted message); a document's text is its file name and an attachment's caption sits on the attachment. `save_media` copies an attachment to a temporary folder, because the agent's own process cannot read WhatsApp's folder, and refuses a stored path that leads outside it.
 - macOS shows each of these prompts once per data type or target app. macOS asks for an app's grants when the user adds it on the Apps tab, while they are at the keyboard, and never for an app that is not on the list. The Setup tab lists the grants of the listed apps under App access, with an Allow button each (every grant while Allow every app is on). Allow asks macOS; once macOS has an answer only System Settings can change it, so a declined grant offers Open Settings instead. macOS reports Automation only for a running app, so such a row says so until the app runs. An operation never shows the prompt itself, so a task cannot stall on a dialog no one answers: before it runs, a grant macOS has not asked about fails it with `permission_missing` (Automation is checked once the app runs, since macOS cannot tell before), and a declined one with `access_denied` naming the pane in System Settings.
 - A TCC prompt is a system dialog that comes to the front. That happens once per grant, not per use, and only after the user added the app.
 
@@ -77,6 +78,7 @@ Backstage covers a fixed set of macOS's own apps; apps from other makers are out
 | Done | Mail (without sending), Contacts, Shortcuts, Music |
 | Done | Messages (sending, and reading through its window rather than Full Disk Access), Finder (selection, reveal, tags, Trash) |
 | Done | Pages and Numbers |
+| Done | WhatsApp (reading, from its database) |
 | When it can be measured | Keynote: not installed on the Mac these were built on, and operations ship only once measured |
 | Hints only | Home: HomeKit needs an entitlement a locally signed app cannot have, so scenes go through Shortcuts |
 
@@ -93,6 +95,7 @@ Backstage covers a fixed set of macOS's own apps; apps from other makers are out
 | Shortcuts | `list`, `run` |
 | Music | `now_playing`, `control`, `play`, `set_volume`, `list_playlists` |
 | Messages | `list_chats` (with `query`), `send` |
+| WhatsApp | `list_chats` (with `query`), `read_chat`, `save_media` |
 | Finder | `selection`, `front_folder`, `reveal`, `get_tags`, `set_tags`, `trash` |
 | Pages | `list_documents`, `open`, `export_pdf`, `close`, `read_text` |
 | Numbers | `list_documents`, `open`, `export_pdf`, `close`, `read_table`, `set_cell`, `set_cells` |
@@ -102,7 +105,7 @@ Contracts:
 - Items are named by the ids their owner gives (note ids, EventKit calendar and item identifiers). Destinations are ids from the list operations, or names that match exactly one; read-only lists and calendars are refused.
 - Times are ISO 8601. A time without an offset is local time. All-day events take dates (`2026-11-05`), and their `end` is the last day, inclusive. Results give times with the local offset.
 - Searches and lists are bounded by `limit` (default 20, at most 200), and event ranges by at most 366 days.
-- Paths for files are absolute or start with `~`, and must be in the home folder (not the folder itself) or on an external volume; one module owns this rule. `export_pdf` never replaces an existing file.
+- Paths for files are absolute or start with `~`, and must be in the home folder (not the folder itself) or on an external volume; one module owns this rule. In the home folder's Library only iCloud Drive (`Mobile Documents`) and `CloudStorage` are reachable: Library holds other apps' data, which Full Disk Access, granted for WhatsApp, would otherwise open to every operation that takes a path. `export_pdf` never replaces an existing file.
 - Pages and Numbers answer as their Creator Studio versions (`com.apple.Pages`, `com.apple.Numbers`, 15.4) or the earlier ones (`com.apple.iWork.Pages`, `com.apple.iWork.Numbers`, 14.5), which have the same scripting: a running one is used, otherwise the first installed in that order. Each needs its own approval and Automation grant.
 - Apple announced on 27 October 2026 that Keynote, Pages and Numbers gain MCP support on macOS 27, letting external agents read, edit and run actions in documents, in an update due in November. It is not measured yet: whether it needs the Creator Studio subscription and how agents connect are not stated. Once it ships, compare it with these operations and, if it is better, point agents to it with a hint instead of growing the operations.
 - iWork documents are named by id or name; scripts hold them by id, because Numbers renames a new document from its content.
@@ -132,6 +135,7 @@ macOS 27.2, 4 November 2026, with another app in front throughout. Each operatio
 | Shortcuts | `list` works; the command lists every shortcut for an unknown folder, so the folder is checked first. `run` is measured only for an unknown shortcut, because every installed one acts on something |
 | Music | All five work, 0.1 to 1.8 s; Music started behind the front app, which kept the focus |
 | Messages | `list_chats` and `send` work; a test message was confirmed through the chat list in about 0.3 s. Messages labels each chat with its latest message |
+| WhatsApp | Measured with WhatsApp 26.44.15: `list_chats` about 7 ms, `read_chat` 14 ms for 50 messages and 100 ms for 500, `save_media` 2 ms. A day's messages matched what the window showed, including messages still in the database's write-ahead log, photos with captions, links, a document and group senders |
 | Finder | All six work. Finder asks for an administrator password to trash a symbolic link and then fails, so links go to the Trash directly; other items go through Finder for Put Back. Paths outside the home folder and external volumes, and the home folder itself, are refused |
 | Pages | All five work, 0.2 to 1.8 s. A plain text file opens as a new document without a file (`imported: true`) |
 | Numbers | Started hidden by an operation, Numbers Creator Studio showed no window and the front app kept the focus. All six work. Cells outside the table are refused; numbers and text are recognized as if typed. A new or imported document is named from its content (here "Fruit and Vegetable List") and saved to iCloud Drive as soon as it changes |

@@ -15,6 +15,8 @@ enum GrantState: String {
 struct AppGrant: Identifiable {
   enum Kind {
     case contacts, events(EKEntityType), automation(bundleId: String)
+    // Another app's files, which macOS guards per app; the path is the file whose reading needs the grant.
+    case appData(bundleId: String, path: String)
   }
 
   let id: String
@@ -32,8 +34,14 @@ struct AppGrant: Identifiable {
     switch kind {
     case .contacts: "com.apple.AddressBook"
     case .events(let type): type == .reminder ? "com.apple.reminders" : "com.apple.iCal"
-    case .automation(let bundleId): bundleId
+    case .automation(let bundleId), .appData(let bundleId, _): bundleId
     }
+  }
+
+  // Asked when the user adds the app. Another app's data has no prompt: its row on the Setup tab leads to Settings.
+  var asksWhenAdded: Bool {
+    if case .appData = kind { return false }
+    return true
   }
 
   // The Privacy & Security pane where the user can change it.
@@ -42,6 +50,8 @@ struct AppGrant: Identifiable {
     case .contacts: "Privacy_Contacts"
     case .events(let type): type == .reminder ? "Privacy_Reminders" : "Privacy_Calendars"
     case .automation: "Privacy_Automation"
+    // macOS lists no per-app switch for another app's data; Full Disk Access covers it.
+    case .appData: "Privacy_AllFiles"
     }
   }
 }
@@ -59,6 +69,8 @@ let appGrants: [AppGrant] = [
            operations: ["selection", "front_folder", "reveal", "trash"]),
 ] + scriptedGrants("pages", purpose: "Open, read and export documents", of: pagesKnowledge)
   + scriptedGrants("numbers", purpose: "Read and change spreadsheets", of: numbersKnowledge) + [
+  AppGrant(id: "whatsapp", name: "WhatsApp", purpose: "Read chats and messages", kind: .appData(bundleId: whatsAppBundleId, path: whatsAppDatabasePath),
+           listedApps: [whatsAppBundleId]),
   AppGrant(id: "music", name: "Music", purpose: "Control playback", kind: .automation(bundleId: "com.apple.Music"), listedApps: ["com.apple.Music"]),
   // Only the appearance operations of System Settings script System Events; the volume uses no other app.
   AppGrant(id: "system-events", name: "System Events", purpose: "Switch dark and light appearance", kind: .automation(bundleId: "com.apple.systemevents"),
@@ -89,13 +101,20 @@ func appGrants(forListed bundleIds: Set<String>, everyApp: Bool) -> [AppGrant] {
   }
 }
 
-// Before an operation runs: a missing Automation grant fails at once with what to do, instead of a prompt
-// mid-task. macOS can tell only for a running app, so a target that is not running, such as System Events for
+// Before an operation runs: a missing grant fails at once with what to do, instead of a prompt mid-task.
+// macOS can tell Automation only for a running app, so a target that is not running, such as System Events for
 // the appearance operations, starts hidden first; when macOS still cannot tell, the operation does not run.
-func requireAutomation(for operation: String, of appBundleId: String) throws {
-  guard let grant = appGrants.first(where: { $0.listedApps.contains(appBundleId) && ($0.operations?.contains(operation) ?? true) }),
-    case .automation(let target) = grant.kind
-  else { return }
+func requireGrant(for operation: String, of appBundleId: String) throws {
+  guard let grant = appGrants.first(where: { $0.listedApps.contains(appBundleId) && ($0.operations?.contains(operation) ?? true) }) else { return }
+  if case .appData = grant.kind {
+    switch grantState(grant) {
+    case .granted: return
+    case .notAsked: throw grantMissing(grant.name)
+    case .denied: throw grantDenied(grant.name)
+    case .unknown: throw HelperError(code: "not_found", message: "\(grant.name) keeps no data on this Mac yet. The user opens it and signs in first.")
+    }
+  }
+  guard case .automation(let target) = grant.kind else { return }
   var state = automationState(target, ask: false)
   if state == .unknown, let url = onMain({ NSWorkspace.shared.urlForApplication(withBundleIdentifier: target) }) {
     _ = try startAppHidden(at: url.path, name: grant.name)
@@ -123,6 +142,7 @@ func grantState(_ grant: AppGrant) -> GrantState {
   case .contacts: return contactsAccessState()
   case .events(let type): return eventAccessState(type)
   case .automation(let bundleId): return automationState(bundleId, ask: false)
+  case .appData(let bundleId, let path): return appDataState(bundleId, path: path)
   }
 }
 
@@ -138,7 +158,22 @@ func requestGrant(_ grant: AppGrant) {
       _ = try? startAppHidden(at: url.path, name: grant.name)
     }
     _ = automationState(bundleId, ask: true)
+  case .appData(let bundleId, let path):
+    // Marked first: reading is what makes macOS ask, and from then on a read gets its answer without a prompt.
+    Preferences.askedAppData.insert(bundleId)
+    _ = appDataState(bundleId, path: path)
   }
+}
+
+// macOS has no call that tells this grant without asking, and any read of the files asks while it has not been
+// answered. So the files are read only after the user asked for the grant in the window; until then it is not asked.
+func appDataState(_ bundleId: String, path: String) -> GrantState {
+  guard FileManager.default.fileExists(atPath: path) else { return .unknown }
+  guard Preferences.askedAppData.contains(bundleId) else { return .notAsked }
+  let descriptor = open(path, O_RDONLY)
+  guard descriptor >= 0 else { return .denied }
+  close(descriptor)
+  return .granted
 }
 
 func automationState(_ bundleId: String, ask: Bool) -> GrantState {

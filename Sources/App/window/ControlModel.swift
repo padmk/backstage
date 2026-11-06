@@ -47,6 +47,9 @@ final class ControlModel: ObservableObject {
 
   var relevantGrants: [AppGrant] { appGrants(forListed: Set(rows.map(\.bundleId)), everyApp: allowsEveryApp) }
 
+  // Grants of apps on the list that macOS has not given, which the Apps tab points to.
+  var grantsWaiting: Bool { relevantGrants.contains { [.notAsked, .denied].contains(grants[$0.id] ?? .unknown) } }
+
   func refresh() {
     let trusted = AXIsProcessTrusted()
     if trusted != accessibility { accessibility = trusted }
@@ -106,7 +109,7 @@ final class ControlModel: ObservableObject {
       try addToList(AppIdentity(pid: 0, bundleId: bundleId, name: url.deletingPathExtension().lastPathComponent, launchDate: nil, path: url.path), by: settingsClient)
       problem = nil
       // The user is here now, so macOS asks now for what the app's operations need, not in the middle of a task.
-      request(appGrants.filter { $0.listedApps.contains(bundleId) && [.notAsked, .unknown].contains(grantState($0)) })
+      request(appGrants.filter { $0.asksWhenAdded && $0.listedApps.contains(bundleId) && [.notAsked, .unknown].contains(grantState($0)) })
     } catch {
       problem = (error as? HelperError)?.message ?? ControlTexts.saveFailed
     }
@@ -120,7 +123,7 @@ final class ControlModel: ObservableObject {
       do {
         try addToList(asked.app, by: settingsClient)
         problem = nil
-        request(appGrants.filter { $0.listedApps.contains(asked.app.bundleId) && [.notAsked, .unknown].contains(grantState($0)) })
+        request(appGrants.filter { $0.asksWhenAdded && $0.listedApps.contains(asked.app.bundleId) && [.notAsked, .unknown].contains(grantState($0)) })
       } catch {
         problem = (error as? HelperError)?.message ?? ControlTexts.saveFailed
       }

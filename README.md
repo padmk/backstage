@@ -175,7 +175,7 @@ Requests for the same app run one at a time, also across agents, so two sessions
 | Code | Meaning | What to do |
 |---|---|---|
 | `not_approved` | The app is not on the user's list | Ask the user to add it on the Apps tab; do not reach it another way |
-| `not_allowed` | Never available: the app (Passwords, Keychain Access, login windows, Backstage), an item in the Apple, Services or Share menu, or what an operation's rules refuse (a read-only calendar, a recurring event, a file outside your home folder, a locked note) | Change the arguments, or ask the user to do it |
+| `not_allowed` | Never available: the app (Passwords, Keychain Access, login windows, Backstage), an item in the Apple, Services or Share menu, or what an operation's rules refuse (a read-only calendar, a recurring event, a file outside your home folder or in its Library, a locked note) | Change the arguments, or ask the user to do it |
 | `permission_missing` | A macOS grant is missing (Accessibility, Screen Recording, or one a ready operation needs) | Ask the user to allow it on the Setup tab |
 | `access_denied` | The user declined that grant | The message names the pane in System Settings |
 | `screen_locked` | The screen is locked, so windows cannot be read | Use ready operations or the menu bar; see [Locked screen](#locked-screen) |
@@ -189,6 +189,7 @@ Requests for the same app run one at a time, also across agents, so two sessions
 | `busy`, `request_too_large` | Too many requests are waiting on one connection, or one is larger than 4 MB | Wait for answers; send less at once |
 | `unknown_app`, `unknown_operation`, `unknown_method` | No ready operations for that app, no such operation, or no such request | Check `list_operations` and the tool name |
 | `store_failed` | The app list could not be saved | Tell the user |
+| `unsupported_format` | WhatsApp keeps its data in a format Backstage does not know, usually after an update | Read the chat through the window |
 | `window_not_found`, `out_of_window`, `point_covered` | No such window, a point outside it, or another window on top of the point (`foreground: true` only) | Read again and pick another target |
 | `invalid_request`, `invalid_arguments`, `invalid_key` | The request is malformed; the message names the problem and, for operations, the whole argument list | Fix the call |
 | `not_settable`, `no_text`, `text_not_found`, `ambiguous_text`, `ambiguous`, `not_found` | The element or item cannot do what was asked, or the target is not unique | Follow the message |
@@ -210,12 +211,13 @@ For well-known apps Backstage carries ready operations, so an agent does not wor
 | Shortcuts | `list`, `run` |
 | Music | `now_playing`, `control`, `play`, `set_volume`, `list_playlists` |
 | Messages | `list_chats` (with `query`), `send`; conversations are read through its window |
+| WhatsApp | `list_chats` (with `query`), `read_chat` (latest messages, or a time range; earlier ones with `before`), `save_media` (copies a photo or document to a temporary file); read from WhatsApp's data on this Mac, without its window. Needs Full Disk Access |
 | Finder | `selection`, `front_folder`, `reveal`, `get_tags`, `set_tags`, `trash` |
 | Pages | `list_documents`, `open`, `read_text`, `export_pdf`, `close` |
 | Numbers | `list_documents`, `open`, `read_table` (from any row), `set_cell`, `set_cells`, `export_pdf`, `close` |
 | Home | Hints and pitfalls for its window |
 
-`get_window_state` shows an app's hints and pitfalls under its first line. Operations need the app to be allowed, like the other tools, and some need a macOS grant: Automation of the app, or Reminders, Calendars or Contacts. macOS asks once, when you add the app on the Apps tab, and never for an app that is not on the list. An operation never shows that prompt during a task: without the grant it fails with `permission_missing`. `outcome_unknown` means a change may have been made: read before trying again. Contracts (ids, dates, paths, limits), the reasoning behind them and the measurements are in [docs/app-knowledge.md](docs/app-knowledge.md).
+`get_window_state` shows an app's hints and pitfalls under its first line. Operations need the app to be allowed, like the other tools, and some need a macOS grant: Automation of the app, or Reminders, Calendars or Contacts. macOS asks once, when you add the app on the Apps tab, and never for an app that is not on the list. WhatsApp's operations need Full Disk Access, which macOS never asks for: the Setup tab opens its pane with a panel to drag Backstage into the list. An operation never shows that prompt during a task: without the grant it fails with `permission_missing`. `outcome_unknown` means a change may have been made: read before trying again. Contracts (ids, dates, paths, limits), the reasoning behind them and the measurements are in [docs/app-knowledge.md](docs/app-knowledge.md).
 
 ## What works in the background
 
@@ -260,11 +262,11 @@ Open **Backstage** from `/Applications` to see and change everything in one wind
   <img src="docs/images/window-activity.png" width="420" alt="The Activity tab: which agent first used which app, and changes to the list and the switches, with relative times">
 </p>
 
-- **Apps:** apps asked for from the command line or by an agent, waiting for you to add or decline them; Allow every app, and otherwise the list of apps agents may use, with Add App… and Remove. Far-reaching apps carry their warning. While Allow every app is on, the list folds away and is kept for when it goes off.
+- **Apps:** apps asked for from the command line or by an agent, waiting for you to add or decline them; Allow every app, and otherwise the list of apps agents may use, with Add App… and Remove. Far-reaching apps carry their warning. While Allow every app is on, the list folds away and is kept for when it goes off. While an app's ready operations wait for a macOS grant, a line here leads to Setup, and the Setup tab carries a dot.
 - **Setup:**
   - Under Background: Open at login and Show in menu bar (off by default; its menu shows whether Backstage is ready, which agents are connected and the apps on the list), both available in the copy in `/Applications`; and Windows while locked (off by default, see above).
   - Under macOS permissions: Accessibility, which Backstage needs, and Screen Recording, which is optional and only for screenshots, each with a button for the right pane of System Settings. A new Screen Recording grant needs a restart, which the tab offers.
-  - Under App access: an Allow button for each macOS grant that the listed apps' ready operations use (Calendars, Reminders, Contacts, and Automation of Notes, Mail, Messages, Finder, Pages, Numbers, Music and System Events); all of them while Allow every app is on.
+  - Under App access: an Allow button for each macOS grant that the listed apps' ready operations use (Calendars, Reminders, Contacts, and Automation of Notes, Mail, Messages, Finder, Pages, Numbers, Music and System Events); all of them while Allow every app is on. WhatsApp's row instead offers Add in Settings…, which opens Full Disk Access with a panel holding a large Backstage icon to drag into the list; the panel closes once the grant is on.
   - The window opens here while Accessibility is missing.
 - **Activity:** which agent first used which app in each session, changes to the list, and changes to Allow every app and Windows while locked, from the log `SECURITY.md` describes.
 

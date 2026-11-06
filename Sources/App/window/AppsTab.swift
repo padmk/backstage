@@ -6,6 +6,7 @@ import SwiftUI
 
 struct AppsTab: View {
   @ObservedObject var model: ControlModel
+  let showSetup: () -> Void
 
   private func addApp() {
     let panel = NSOpenPanel()
@@ -26,6 +27,13 @@ struct AppsTab: View {
       }
     }
 
+    // The list says which apps agents may use; macOS separately guards some apps' data, on the Setup tab.
+    if model.grantsWaiting {
+      HStack(spacing: 8) {
+        Text(ControlTexts.grantsWaiting).font(.system(size: 12)).foregroundStyle(Palette.amber)
+        Button(ControlTexts.showSetup, action: showSetup).buttonStyle(ChoiceStyle(kind: .plain, compact: true))
+      }
+    }
     if model.allowsEveryApp {
       if !model.rows.isEmpty {
         Text(ControlTexts.listKept(model.rows.count)).font(.system(size: 11)).foregroundStyle(Palette.secondary)
