@@ -71,8 +71,10 @@ private let listChats = Operation(
   // Removed chats stay in the database and are left out; chats without any message yet too, and the status
   // updates, which WhatsApp keeps as a chat of its own.
   let removed = (session.contains("ZREMOVED") ? " AND IFNULL(ZREMOVED, 0) = 0" : "") + " AND ZCONTACTJID NOT LIKE '%@status'"
-  let query = optionalString(arguments, "query").map { "%\($0)%" }
-  let filter = query == nil ? "" : " AND (ZPARTNERNAME LIKE ?1 OR ZCONTACTJID LIKE ?1)"
+  // The query's own % and _ match themselves, not any text.
+  let escaped = optionalString(arguments, "query").map { $0.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "%", with: "\\%").replacingOccurrences(of: "_", with: "\\_") }
+  let query = escaped.map { "%\($0)%" }
+  let filter = query == nil ? "" : " AND (ZPARTNERNAME LIKE ?1 ESCAPE '\\' OR ZCONTACTJID LIKE ?1 ESCAPE '\\')"
   let sql = "SELECT ZCONTACTJID, ZPARTNERNAME, ZLASTMESSAGEDATE\(extras.map { ", " + $0 }.joined()) FROM ZWACHATSESSION"
     + " WHERE ZLASTMESSAGEDATE IS NOT NULL\(removed)\(filter) ORDER BY ZLASTMESSAGEDATE DESC"
   let rows = try database.rows(sql, query.map { [$0] } ?? [])
@@ -207,10 +209,7 @@ private let saveMedia = Operation(
   guard FileManager.default.fileExists(atPath: source.path) else {
     throw HelperError(code: "not_found", message: "Message \(id)'s attachment is not on this Mac; WhatsApp downloads it when the user opens it.")
   }
-  let folder = FileManager.default.temporaryDirectory.appendingPathComponent("whatsapp-media", isDirectory: true)
-  try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-  let destination = folder.appendingPathComponent("\(id)-\(source.lastPathComponent)")
-  try? FileManager.default.removeItem(at: destination)
+  let destination = try newCopyFolder("whatsapp-media").appendingPathComponent(source.lastPathComponent)
   do {
     try FileManager.default.copyItem(at: source, to: destination)
   } catch {

@@ -53,3 +53,17 @@ func userPath(_ arguments: JSON, key: String = "path", mustExist: Bool = true, f
   if mustExist, (try? FileManager.default.attributesOfItem(atPath: path)) == nil { throw HelperError(code: "not_found", message: "\(path) does not exist.") }
   return url
 }
+
+// A new private folder for one copy an operation hands the agent, such as an attachment it cannot read where the app
+// keeps it: under the system's temporary folder, readable only by the user, so nothing is replaced and no other copy
+// is reached through it. macOS clears the temporary folder over time.
+func newCopyFolder(_ kind: String) throws -> URL {
+  let folder = FileManager.default.temporaryDirectory.appendingPathComponent(kind, isDirectory: true)
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  do {
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+  } catch {
+    throw HelperError(code: "action_failed", message: "No folder for the copy could be made: \(error.localizedDescription)")
+  }
+  return folder
+}
