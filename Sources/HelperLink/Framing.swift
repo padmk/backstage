@@ -31,28 +31,42 @@ public func jsonLine(_ object: Any) -> Data {
   return data
 }
 
-// Writes all of `data`, retrying after a signal and after a partial write. Returns false when the other side is gone,
-// or when `deadline` passes first: on a socket, each write then waits at most until the deadline.
+// Writes all of `data`, retrying after a signal and after a partial write. Returns false when the other side is gone.
+// With a deadline, for a nonblocking descriptor, it never waits past it: between writes it waits for the descriptor to
+// take more for at most the time left (a send timeout would restart while data drains).
 @discardableResult
 public func writeAll(_ descriptor: Int32, _ data: Data, deadline: Date? = nil) -> Bool {
   data.withUnsafeBytes { buffer in
     guard var base = buffer.baseAddress else { return true }
     var left = buffer.count
     while left > 0 {
-      if let deadline {
-        let remaining = deadline.timeIntervalSinceNow
-        guard remaining > 0 else { return false }
-        var limit = timeval(tv_sec: Int(remaining), tv_usec: Int32((remaining - remaining.rounded(.down)) * 1_000_000))
-        setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &limit, socklen_t(MemoryLayout<timeval>.size))
-      }
       let written = Darwin.write(descriptor, base, left)
       if written < 0 {
         if errno == EINTR { continue }
-        return false
+        guard let deadline, errno == EAGAIN || errno == EWOULDBLOCK else { return false }
+        let remaining = deadline.timeIntervalSinceNow
+        guard remaining > 0 else { return false }
+        var ready = pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)
+        let polled = poll(&ready, 1, Int32(min(remaining * 1000, Double(Int32.max)).rounded(.up)))
+        if polled < 0, errno != EINTR { return false }
+        continue
       }
       left -= written
       base = base.advanced(by: written)
+      if let deadline, left > 0, deadline.timeIntervalSinceNow <= 0 { return false }
     }
     return true
+  }
+}
+
+// Reads what is there, waiting while a nonblocking descriptor has nothing yet. Returns 0 at the end, -1 on an error.
+public func readAvailable(_ descriptor: Int32, into buffer: inout [UInt8]) -> Int {
+  while true {
+    let count = buffer.withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress, $0.count) }
+    if count >= 0 { return count }
+    if errno == EINTR { continue }
+    guard errno == EAGAIN || errno == EWOULDBLOCK else { return -1 }
+    var ready = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+    if poll(&ready, 1, -1) < 0, errno != EINTR { return -1 }
   }
 }

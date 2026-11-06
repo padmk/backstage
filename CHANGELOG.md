@@ -14,3 +14,4 @@ The first version: Backstage operates Mac apps for MCP clients in the background
 - `setup` signs the installed app with a certificate of this Mac, so permissions survive updates without a paid developer account, and swaps it in atomically; nothing else replaces it. A command from another build than the installed app refuses instead of stopping the helper. Files live at the XDG defaults.
 - Shortcuts `run` reports `verified: false`, since a shortcut's effect cannot be read back; turning on Windows while locked asks for confirmation.
 - An update through `setup` opens nothing; only the first install opens the window.
+- A cancel never reaches the app before the request it names, and a request to the app never waits past its deadline, however slowly the app reads.
