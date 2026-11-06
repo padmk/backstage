@@ -72,7 +72,7 @@ The result carries the item's id, so the agent can refer to it later without sea
 
 ## Scope
 
-Backstage covers a fixed set of macOS's own apps; apps from other makers are out of scope, because they change often and have their own CLIs and MCP servers. Within that set each app gets a small number of operations that agents ask for often, and generic gaps in the driver (drag, menu bar extras, system dialogs) keep their place, because they help every app.
+An app gets ready operations when many Mac users have it, agents often need it, a stable route reaches its data without the window (a scripting dictionary, a system framework, or its own database read-only), and the operations can be measured on a Mac before they ship. macOS's own apps come first. Apps from other makers get operations only where nothing better exists, as WhatsApp's database; an app with its own command-line tool or MCP server (Bear), one whose storage is encrypted (Telegram), or a browser that Bruse already drives (Chromium browsers) gets hints instead. Password managers, authenticators and wallets get nothing and are never available. Within that, each app gets a small number of operations that agents ask for often, and generic gaps in the driver (drag, menu bar extras, system dialogs) keep their place, because they help every app.
 
 | Order | Apps |
 |---|---|
@@ -82,6 +82,8 @@ Backstage covers a fixed set of macOS's own apps; apps from other makers are out
 | Done | Pages and Numbers |
 | Done | WhatsApp (reading, from its database) |
 | Done | Photos (finding and copying out, through PhotoKit) |
+| Done | Hints only: Bear, Telegram, Chromium browsers (Bruse for pages) |
+| Later | Safari (tabs and opening addresses), Voice Memos transcripts, Books highlights |
 | When it can be measured | Keynote: not installed on the Mac these were built on, and operations ship only once measured |
 | Hints only | Home: HomeKit needs an entitlement a locally signed app cannot have, so scenes go through Shortcuts |
 

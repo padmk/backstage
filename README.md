@@ -217,6 +217,9 @@ For well-known apps Backstage carries ready operations, so an agent does not wor
 | Pages | `list_documents`, `open`, `read_text`, `export_pdf`, `close` |
 | Numbers | `list_documents`, `open`, `read_table` (from any row), `set_cell`, `set_cells`, `export_pdf`, `close` |
 | Home | Hints and pitfalls for its window |
+| Bear | Hints: its own `bearcli` and MCP server read and write notes |
+| Telegram | Hints and pitfalls for its window, whose lists show no rows to Accessibility |
+| Chrome, Brave, Edge, Arc, Vivaldi, Helium | Hints: Bruse works their pages in background tabs |
 
 `get_window_state` shows an app's hints and pitfalls under its first line. Operations need the app to be allowed, like the other tools, and some need a macOS grant: Automation of the app, or Reminders, Calendars, Contacts or Photos. macOS asks once, when you add the app on the Apps tab, and never for an app that is not on the list. WhatsApp's operations and reading Messages need Full Disk Access, which macOS never asks for: the Setup tab opens its pane with a panel to drag Backstage into the list. An operation never shows that prompt during a task: without the grant it fails with `permission_missing`. `outcome_unknown` means a change may have been made: read before trying again. Contracts (ids, dates, paths, limits), the reasoning behind them and the measurements are in [docs/app-knowledge.md](docs/app-knowledge.md).
 
