@@ -114,7 +114,7 @@ struct SetupTab: View {
       }
     }
 
-    Text(ControlTexts.version(Configuration.appName, Configuration.buildVersion))
+    Text(ControlTexts.version(Configuration.appName, "\(Configuration.version) (\(Configuration.build))"))
       .font(.system(size: 11)).foregroundStyle(Palette.secondary)
       .padding(.top, 10)
   }

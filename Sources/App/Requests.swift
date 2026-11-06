@@ -2,7 +2,6 @@
 // still the one approved, because a pid can be reused while the user reads the window.
 
 import AppKit
-import HelperLink
 import ApplicationServices
 
 func handle(method: String, params: JSON, connection: Connection) throws -> Any {
@@ -12,11 +11,11 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     session.lock.withLock {
       session.clientName = params["client_name"] as? String
     }
-    return ["version": Configuration.buildVersion, "build": ownBuildIdentity] as JSON
+    return ["version": Configuration.version, "build": Configuration.build] as JSON
 
   case "status":
     return [
-      "accessibility": AXIsProcessTrusted(), "screen_recording": CGPreflightScreenCaptureAccess(), "version": Configuration.buildVersion,
+      "accessibility": AXIsProcessTrusted(), "screen_recording": CGPreflightScreenCaptureAccess(), "version": Configuration.version, "build": Configuration.build,
       "screen_locked": isScreenLocked(),
       // The same grants as the Setup tab: those of the listed apps.
       "app_access": appGrants(forListed: Set(ApprovalStore.list().compactMap { $0["bundle_id"] }), everyApp: Preferences.allowsEveryApp)

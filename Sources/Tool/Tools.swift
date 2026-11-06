@@ -29,11 +29,7 @@ struct ToolDefinition {
     ["type": "object", "properties": Dictionary(uniqueKeysWithValues: properties), "required": required, "additionalProperties": false]
   }
 
-  var listed: JSON {
-    var entry: JSON = ["name": name, "description": description, "inputSchema": inputSchema]
-    if !annotations.isEmpty { entry["annotations"] = annotations }
-    return entry
-  }
+  var listed: JSON { ["name": name, "description": description, "inputSchema": inputSchema, "annotations": annotations] }
 
   func rule(for key: String) -> JSON? { properties.first { $0.0 == key }?.1 }
 }
@@ -50,159 +46,125 @@ let tools: [ToolDefinition] = [
   ToolDefinition(
     name: "list_apps",
     description: "List running apps with `access` for each: `allowed`, `not_approved` (not on the user's list) or `never_available`. With app: that app, running or installed, without starting it. Check this before using an app by any route. Being listed here does not allow an app. `screen_locked: true` means windows cannot be read until the user unlocks the Mac; ready operations and the menu bar still work, and with `windows_while_locked` (the user's setting) so do screenshot, click_at with x and y, and press_key and type_text without an element, unverified.",
-    properties: [
-      ("app", ["type": "string", "description": "App name or bundle id"] as JSON)
-    ],
-    required: [], annotations: ["readOnlyHint": true, "destructiveHint": false, "openWorldHint": false] as JSON),
+    properties: [("app", ["type": "string", "description": "App name or bundle id"])],
+    required: [], annotations: reads),
   ToolDefinition(
     name: "launch_app",
     description: "Start an app in the background. Needs the app on the list. If it takes the focus while starting, the app you were in gets it back and the new app stays behind it. An app that is already running is left as it is.",
-    properties: [
-      ("app", ["type": "string", "description": "App name or bundle id, not a path"] as JSON)
-    ],
-    required: ["app"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
+    properties: [("app", ["type": "string", "description": "App name or bundle id, not a path"])],
+    required: ["app"], annotations: acts),
   ToolDefinition(
     name: "list_operations",
-    description: "List the ready operations, hints and pitfalls Backstage knows for well-known apps: Notes, Reminders, Calendar, Contacts, Mail, Messages, Finder, Pages, Numbers, Music, Shortcuts and System Settings have operations. With app: its operations and their arguments; without: every app with hints. Prefer an operation to working through the window: it is faster, runs in the background and checks its own result. Listing works for any app; running an operation needs the app on the list.",
-    properties: [
-      ("app", ["type": "string", "description": "App name or bundle id"] as JSON)
-    ],
-    required: [], annotations: ["readOnlyHint": true, "destructiveHint": false, "openWorldHint": false] as JSON),
+    description: "List the ready operations, hints and pitfalls Backstage knows for well-known apps: \(appsWithOperations) have operations. With app: its operations and their arguments; without: every app with hints. Prefer an operation to working through the window: it is faster, runs in the background and checks its own result. Listing works for any app; running an operation needs the app on the list.",
+    properties: [("app", ["type": "string", "description": "App name or bundle id"])],
+    required: [], annotations: reads),
   ToolDefinition(
     name: "run_operation",
     description: "Run one operation from list_operations. The reply carries the result and, for a change, `verified`. `outcome_unknown` means the change may have been made: read the state before trying again.",
     properties: [
-      ("app", ["type": "string", "description": "App name or bundle id"] as JSON),
-      ("operation", ["type": "string", "description": "Operation name from list_operations, such as create"] as JSON),
-      ("arguments", ["type": "object", "description": "The operation's arguments, as list_operations describes them"] as JSON)
+      ("app", ["type": "string", "description": "App name or bundle id"]),
+      ("operation", ["type": "string", "description": "Operation name from list_operations, such as create"]),
+      ("arguments", ["type": "object", "description": "The operation's arguments, as list_operations describes them"]),
     ],
-    required: ["app", "operation"], annotations: ["readOnlyHint": false, "destructiveHint": true, "openWorldHint": false] as JSON),
+    required: ["app", "operation"], annotations: ["readOnlyHint": false, "destructiveHint": true, "openWorldHint": false]),
   ToolDefinition(
     name: "get_window_state",
     description: "Read a window as lines of numbered elements with their state and actions. The first line lists the app's windows. Numbers stay valid across reads in this session. Reading the same place again returns only what changed since your last read or action there; pass full: true for all of it.",
     properties: [
-      ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
-      ("window", ["type": "integer", "minimum": 0, "description": "Window index shown in get_window_state; default the first"] as JSON),
-      ("full", ["type": "boolean", "description": "Return every element even when an earlier read of this place exists"] as JSON),
-      ("screenshot", ["type": "boolean", "description": "Also capture the window as a PNG, as the screenshot tool does (needs Screen Recording)"] as JSON),
-      ("menu_bar", ["type": "boolean", "description": "Read the menu bar instead of a window"] as JSON),
-      ("menu_extras", ["type": "boolean", "description": "Read the app's items on the right of the menu bar, such as status icons, instead of a window"] as JSON),
-      ("root", ["type": "integer", "minimum": 1, "description": "Read only this element's subtree"] as JSON),
-      ("max_elements", ["type": "integer", "minimum": 1, "maximum": 5000] as JSON)
+      ("app", app),
+      ("window", window),
+      ("full", ["type": "boolean", "description": "Return every element even when an earlier read of this place exists"]),
+      ("screenshot", ["type": "boolean", "description": "Also capture the window as a PNG, as the screenshot tool does (needs Screen Recording)"]),
+      ("menu_bar", ["type": "boolean", "description": "Read the menu bar instead of a window"]),
+      ("menu_extras", ["type": "boolean", "description": "Read the app's items on the right of the menu bar, such as status icons, instead of a window"]),
+      ("root", described(element, "Read only this element's subtree")),
+      ("max_elements", ["type": "integer", "minimum": 1, "maximum": 5000]),
     ],
-    required: ["app"], annotations: ["readOnlyHint": true, "destructiveHint": false, "openWorldHint": false] as JSON),
+    required: ["app"], annotations: reads),
   ToolDefinition(
     name: "read_text",
     description: "Read the full text of an element, or part of it, where get_window_state cuts a long value (it then shows length=). start and length count UTF-16 units, like select_text; the reply says the total and whether more follows.",
-    properties: [
-      ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
-      ("element", ["type": "integer", "minimum": 1, "description": "Element number from get_window_state"] as JSON),
-      ("start", ["type": "integer", "minimum": 0] as JSON),
-      ("length", ["type": "integer", "minimum": 1, "maximum": 50000] as JSON)
-    ],
-    required: ["app", "element"], annotations: ["readOnlyHint": true, "destructiveHint": false, "openWorldHint": false] as JSON),
+    properties: [("app", app), ("element", element), ("start", ["type": "integer", "minimum": 0]), ("length", ["type": "integer", "minimum": 1, "maximum": 50000])],
+    required: ["app", "element"], annotations: reads),
   ToolDefinition(
     name: "screenshot",
     description: "Capture a window as a PNG, one image pixel per window point, so its coordinates work with click_at. Needs Screen Recording, which is optional; without it, work from get_window_state.",
-    properties: [
-      ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
-      ("window", ["type": "integer", "minimum": 0, "description": "Window index shown in get_window_state; default the first"] as JSON)
-    ],
-    required: ["app"], annotations: ["readOnlyHint": true, "destructiveHint": false, "openWorldHint": false] as JSON),
+    properties: [("app", app), ("window", window)],
+    required: ["app"], annotations: reads),
   ToolDefinition(
     name: "press",
     description: "Press an element without taking focus, or run one of the actions it lists. The reply's `state` reports what changed in the area last read once the app settles (`settled: false` if it was still busy), or `unknown` when it cannot tell; `verified: false` means delivery could not be confirmed.",
-    properties: [
-      ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
-      ("element", ["type": "integer", "minimum": 1, "description": "Element number from get_window_state"] as JSON),
-      ("action", ["type": "string", "description": "An action the element lists, such as ShowMenu. Default: press"] as JSON)
-    ],
-    required: ["app", "element"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
+    properties: [("app", app), ("element", element), ("action", ["type": "string", "description": "An action the element lists, such as ShowMenu. Default: press"])],
+    required: ["app", "element"], annotations: acts),
   ToolDefinition(
     name: "set_value",
     description: "Replace the value of an editable element.",
-    properties: [
-      ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
-      ("element", ["type": "integer", "minimum": 1, "description": "Element number from get_window_state"] as JSON),
-      ("value", ["type": "string"] as JSON)
-    ],
-    required: ["app", "element", "value"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
+    properties: [("app", app), ("element", element), ("value", ["type": "string"])],
+    required: ["app", "element", "value"], annotations: acts),
   ToolDefinition(
     name: "type_text",
     description: "Insert text at an element, or without one send it as keys to the app's focused element. Delivery `value_appended_at_end` means an unfocused one-line field took it at its end, ignoring the cursor. Line breaks and tabs need an element that takes text directly; otherwise send them with press_key. Nothing is typed if the element cannot take it.",
-    properties: [
-      ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
-      ("text", ["type": "string", "maxLength": 100000] as JSON),
-      ("element", ["type": "integer", "minimum": 1, "description": "Element number from get_window_state"] as JSON)
-    ],
-    required: ["app", "text"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
+    properties: [("app", app), ("text", ["type": "string", "maxLength": 100000]), ("element", element)],
+    required: ["app", "text"], annotations: acts),
   ToolDefinition(
     name: "select_text",
     description: "Select text in a field or document by what it says, or put the cursor just before or after it, so type_text then replaces the selection or inserts there instead of rewriting the whole value. Give text exactly as the element's value has it; when it occurs more than once, add prefix or suffix text around it until it occurs once.",
     properties: [
-      ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
-      ("element", ["type": "integer", "minimum": 1, "description": "Element number from get_window_state"] as JSON),
-      ("text", ["type": "string", "maxLength": 10000] as JSON),
-      ("prefix", ["type": "string", "maxLength": 1000, "description": "Text right before it, to pick one occurrence"] as JSON),
-      ("suffix", ["type": "string", "maxLength": 1000, "description": "Text right after it, to pick one occurrence"] as JSON),
-      ("place", ["type": "string", "enum": ["select", "before", "after"], "description": "Select the text (default), or put the cursor before or after it"] as JSON)
+      ("app", app),
+      ("element", element),
+      ("text", ["type": "string", "maxLength": 10000]),
+      ("prefix", ["type": "string", "maxLength": 1000, "description": "Text right before it, to pick one occurrence"]),
+      ("suffix", ["type": "string", "maxLength": 1000, "description": "Text right after it, to pick one occurrence"]),
+      ("place", ["type": "string", "enum": ["select", "before", "after"], "description": "Select the text (default), or put the cursor before or after it"]),
     ],
-    required: ["app", "element", "text"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
+    required: ["app", "element", "text"], annotations: acts),
   ToolDefinition(
     name: "press_key",
     description: "Send a key or combination, such as return or cmd+s, to the app in the background. A native view receives it once it has focus, so click the view with click_at first. Other apps and combinations may behave differently, so check the effect, and prefer pressing the menu item.",
-    properties: [
-      ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
-      ("key", ["type": "string", "maxLength": 64] as JSON)
-    ],
-    required: ["app", "key"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
+    properties: [("app", app), ("key", ["type": "string", "maxLength": 64])],
+    required: ["app", "key"], annotations: acts),
   ToolDefinition(
     name: "scroll",
     description: "Scroll the area containing an element.",
     properties: [
-      ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
-      ("element", ["type": "integer", "minimum": 1, "description": "Element number from get_window_state"] as JSON),
-      ("direction", ["type": "string", "enum": ["up", "down", "left", "right"]] as JSON),
-      ("pages", ["type": "integer", "minimum": 1, "maximum": 20] as JSON)
+      ("app", app), ("element", element),
+      ("direction", ["type": "string", "enum": ["up", "down", "left", "right"]]),
+      ("pages", ["type": "integer", "minimum": 1, "maximum": 20]),
     ],
-    required: ["app", "element", "direction"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
+    required: ["app", "element", "direction"], annotations: acts),
   ToolDefinition(
     name: "drag",
     description: "Drag from one place to another in the background, without moving the cursor: a slider's knob, an item onto a target, a selection. Each end is an element number or a point in window coordinates. Check the effect in `state` or with a screenshot.",
     properties: [
-      ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
-      ("window", ["type": "integer", "minimum": 0, "description": "Window index shown in get_window_state; default the first"] as JSON),
-      ("from_element", ["type": "integer", "minimum": 1, "description": "Element to drag from, at its center"] as JSON),
-      ("from_x", ["type": "number", "minimum": 0] as JSON),
-      ("from_y", ["type": "number", "minimum": 0] as JSON),
-      ("to_element", ["type": "integer", "minimum": 1, "description": "Element to drag to, at its center"] as JSON),
-      ("to_x", ["type": "number", "minimum": 0] as JSON),
-      ("to_y", ["type": "number", "minimum": 0] as JSON)
+      ("app", app), ("window", window),
+      ("from_element", described(element, "Element to drag from, at its center")),
+      ("from_x", ["type": "number", "minimum": 0]), ("from_y", ["type": "number", "minimum": 0]),
+      ("to_element", described(element, "Element to drag to, at its center")),
+      ("to_x", ["type": "number", "minimum": 0]), ("to_y", ["type": "number", "minimum": 0]),
     ],
-    required: ["app"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
+    required: ["app"], annotations: acts),
   ToolDefinition(
     name: "click_at",
     description: "Send a click at a point in window coordinates, or at an element's center, in the background and without moving the cursor. Use it when press cannot do the job, such as a right-click, a cmd-click or a view without elements, and check the effect, for example with a screenshot.",
     properties: [
-      ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
-      ("element", ["type": "integer", "minimum": 1, "description": "Click this element's center instead of a point"] as JSON),
-      ("x", ["type": "number", "minimum": 0] as JSON),
-      ("y", ["type": "number", "minimum": 0] as JSON),
-      ("window", ["type": "integer", "minimum": 0, "description": "Window index shown in get_window_state; default the first"] as JSON),
-      ("count", ["type": "integer", "minimum": 1, "maximum": 3] as JSON),
-      ("button", ["type": "string", "enum": ["left", "right", "middle"], "description": "Default: left"] as JSON),
-      ("modifiers", ["type": "array", "maxItems": 4, "items": ["type": "string", "enum": ["cmd", "shift", "alt", "ctrl"]] as JSON, "description": "Keys held during the click"] as JSON),
-      ("foreground", ["type": "boolean", "description": "Last resort when a background click did not land: the window comes forward for the click, then the previous app gets the focus back and the cursor returns. Tell the user you used it."] as JSON)
+      ("app", app),
+      ("element", described(element, "Click this element's center instead of a point")),
+      ("x", ["type": "number", "minimum": 0]), ("y", ["type": "number", "minimum": 0]),
+      ("window", window),
+      ("count", ["type": "integer", "minimum": 1, "maximum": 3]),
+      ("button", ["type": "string", "enum": ["left", "right", "middle"], "description": "Default: left"]),
+      ("modifiers", ["type": "array", "maxItems": 4, "items": ["type": "string", "enum": ["cmd", "shift", "alt", "ctrl"]] as JSON, "description": "Keys held during the click"]),
+      ("foreground", ["type": "boolean", "description": "Last resort when a background click did not land: the window comes forward for the click, then the previous app gets the focus back and the cursor returns. Tell the user you used it."]),
     ],
-    required: ["app"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
+    required: ["app"], annotations: acts),
   ToolDefinition(
     name: "run_actions",
-    description: "Run up to 20 actions in one app in order, then report the combined change once, saving a round trip per step. Each step is {\"tool\": one of press, set_value, type_text, select_text, press_key, scroll, drag, click_at, plus that tool's arguments without app}, such as {\"tool\":\"set_value\",\"element\":4,\"value\":\"Paris\"}. Use element numbers you have already read: elements a step makes appear have no number yet. Steps stop at the first that fails or may have worked (`failed` names it); nothing is retried, so read the state before going on.",
+    description: "Run up to \(maxSteps) actions in one app in order, then report the combined change once, saving a round trip per step. Each step is {\"tool\": one of \(stepTools.joined(separator: ", ")), plus that tool's arguments without app}, such as {\"tool\":\"set_value\",\"element\":4,\"value\":\"Paris\"}. Use element numbers you have already read: elements a step makes appear have no number yet. Steps stop at the first that fails or may have worked (`failed` names it); a step that was delivered but cannot be confirmed, such as a click by position (`verified: false`), does not stop the others. Nothing is retried, so read the state before going on.",
     properties: [
-      ("app", ["type": "string", "description": "App name, bundle id or pid"] as JSON),
-      ("steps", ["type": "array", "minItems": 1, "maxItems": 20, "items": ["type": "object", "properties": ["tool": ["type": "string", "enum": ["press", "set_value", "type_text", "select_text", "press_key", "scroll", "drag", "click_at"]] as JSON] as JSON, "required": ["tool"]] as JSON] as JSON)
+      ("app", app),
+      ("steps", ["type": "array", "minItems": 1, "maxItems": maxSteps, "items": ["type": "object", "properties": ["tool": ["type": "string", "enum": stepTools]] as JSON, "required": ["tool"]] as JSON]),
     ],
-    required: ["app", "steps"], annotations: ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] as JSON),
+    required: ["app", "steps"], annotations: acts),
 ]
 
 let toolsByName = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0) })
