@@ -180,33 +180,40 @@ final class ElementTable {
     let pid: pid_t
     let element: AXUIElement
     var fingerprint: [String?]
+    // When a read last met the element, so eviction keeps the ones still in use, such as a window's frame.
+    var seenAt: Int
   }
 
   private let lock = NSLock()
   private var numbersByHash: [CFHashCode: [(element: AXUIElement, number: Int)]] = [:]
   private var entries: [Int: Entry] = [:]
   private var nextNumber = 1
+  private var reads = 0
 
   // What an element is counts from what the agent saw, so a read it did not see never updates that.
   func number(for element: AXUIElement, pid: pid_t, shownToAgent: Bool, attributes: ElementAttributes? = nil) -> Int {
     let seen = attributes.map(fingerprint(from:)) ?? fingerprint(of: element)
     let hash = CFHash(element)
     return lock.withLock {
+      reads += 1
       if let known = numbersByHash[hash]?.first(where: { CFEqual($0.element, element) }) {
         if shownToAgent { entries[known.number]?.fingerprint = seen }
+        entries[known.number]?.seenAt = reads
         return known.number
       }
       if entries.count >= maxRememberedElements { forgetOldest() }
       let number = nextNumber
       nextNumber += 1
       numbersByHash[hash, default: []].append((element, number))
-      entries[number] = Entry(pid: pid, element: element, fingerprint: seen)
+      entries[number] = Entry(pid: pid, element: element, fingerprint: seen, seenAt: reads)
       return number
     }
   }
 
+  // Keeps the half met most recently, not the newest numbers: apps that hand out new elements for unchanged ones
+  // mint numbers on every read, which would otherwise push out the window and its lasting parts.
   private func forgetOldest() {
-    let kept = entries.keys.sorted().suffix(maxRememberedElements / 2)
+    let kept = entries.sorted { $0.value.seenAt < $1.value.seenAt }.suffix(maxRememberedElements / 2).map(\.key)
     entries = Dictionary(uniqueKeysWithValues: kept.map { ($0, entries[$0]!) })
     numbersByHash = [:]
     for (number, entry) in entries {

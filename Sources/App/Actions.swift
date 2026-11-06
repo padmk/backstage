@@ -330,8 +330,24 @@ func scroll(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> 
     current = attribute(candidate, kAXParentAttribute).map { $0 as! AXUIElement }
     hops += 1
   }
+  // A list that has no scroll bar may still scroll by page through its own actions, as WhatsApp's chat does,
+  // which needs no pointer event.
+  let pageAction = vertical ? (forward ? "AXScrollDownByPage" : "AXScrollUpByPage") : (forward ? "AXScrollRightByPage" : "AXScrollLeftByPage")
+  current = element
+  hops = 0
+  while let candidate = current, hops < 12 {
+    if actions(of: candidate).contains(pageAction) {
+      for _ in 0..<pages {
+        let outcome = AXUIElementPerformAction(candidate, pageAction as CFString)
+        guard outcome == .success else { throw axFailure(outcome, "scrolling") }
+      }
+      return ["delivery": "accessibility", "action": pageAction]
+    }
+    current = attribute(candidate, kAXParentAttribute).map { $0 as! AXUIElement }
+    hops += 1
+  }
   guard vertical, let box = frame(of: element) else {
-    throw HelperError(code: "action_failed", message: "No scroll bar was found for this element.")
+    throw HelperError(code: "action_failed", message: "No scroll bar or scroll action was found for this element.")
   }
   try postScroll(at: CGPoint(x: box.midX, y: box.midY), target: pointerTarget(for: element), pid: app.pid, lines: Int32((forward ? -10 : 10) * pages))
   return ["delivery": "pointer_event", "verified": false]

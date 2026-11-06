@@ -93,7 +93,7 @@ let tools: [ToolDefinition] = [
     required: ["app"], annotations: reads),
   ToolDefinition(
     name: "press",
-    description: "Press an element without taking focus, or run one of the actions it lists. The reply's `state` reports what changed in the area last read once the app settles (`settled: false` if it was still busy), or `unknown` when it cannot tell; `verified: false` means delivery could not be confirmed.",
+    description: "Press an element without taking focus, or run one of the actions it lists. A list row without actions, or the text in one, is selected. The reply's `state` reports what changed in the area last read once the app settles (`settled: false` if it was still busy), or `unknown` when it cannot tell; `verified: false` means delivery could not be confirmed.",
     properties: [("app", app), ("element", element), ("action", ["type": "string", "description": "An action the element lists, such as ShowMenu. Default: press"])],
     required: ["app", "element"], annotations: acts),
   ToolDefinition(

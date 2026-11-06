@@ -56,7 +56,7 @@ The goal is that the user can keep working in another app while an agent works. 
 | `set_value`, `select_text`, `type_text` with an element | Accessibility: an action or an attribute set on the element, which needs no focus |
 | `click_at`, `drag`, clicks on elements without an action | Pointer events posted to the app's process and addressed to its window and a point in it, through private window server calls, so the real cursor does not move |
 | `press_key`, `type_text` without an element | Key events posted to the app's process, which reach its focused element |
-| `scroll` | Accessibility: the value of the nearest scroll bar around the element |
+| `scroll` | Accessibility: the value of the nearest scroll bar around the element, else the scroll-by-page action of the element or an ancestor; otherwise a posted scroll event |
 | `press` | Accessibility: the element's press action |
 
 Chromium and Electron apps take pointer and key input only in their key window. Before input to one that is not active, the helper makes the target window key inside the app with window server records, without activating or raising it. This is not done for AppKit apps: on the fixture it made the app report itself active.
