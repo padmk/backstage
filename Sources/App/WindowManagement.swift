@@ -157,9 +157,10 @@ func listWindows(params: JSON) throws -> JSON {
 // By the id from list_windows, checked against the app that owns it, or by the app's own window number.
 func targetWindow(app: AppIdentity, params: JSON) throws -> AXUIElement {
   let application = try applicationElement(app)
-  if let id = params["id"] as? Int {
-    if let element = axWindowsById(app.pid)[CGWindowID(id)] { return element }
-    let owner = serverWindows().first { $0.id == CGWindowID(id) }
+  if let given = params["id"] as? Int {
+    guard let id = CGWindowID(exactly: given) else { throw HelperError(code: "invalid_request", message: "id is a window id from list_windows.") }
+    if let element = axWindowsById(app.pid)[id] { return element }
+    let owner = serverWindows().first { $0.id == id }
     if let owner, owner.pid != app.pid {
       throw HelperError(code: "stale_window", message: "Window \(id) belongs to another app. List the windows again.")
     }
@@ -199,7 +200,9 @@ private func layoutFrame(_ name: String, current: CGRect, on area: CGRect) throw
   let x = area.minX, y = area.minY, w = area.width, h = area.height
   switch name {
   case "maximize": return area
-  case "center": return CGRect(x: x + (w - current.width) / 2, y: y + (h - current.height) / 2, width: min(current.width, w), height: min(current.height, h))
+  case "center":
+    let width = min(current.width, w), height = min(current.height, h)
+    return CGRect(x: x + (w - width) / 2, y: y + (h - height) / 2, width: width, height: height)
   case "left_half": return CGRect(x: x, y: y, width: w / 2, height: h)
   case "right_half": return CGRect(x: x + w / 2, y: y, width: w / 2, height: h)
   case "top_half": return CGRect(x: x, y: y, width: w, height: h / 2)
@@ -228,7 +231,7 @@ private func targetDisplay(_ choice: Any?, current: CGRect) throws -> Display {
     guard let index = all.firstIndex(where: { $0.id == here.id }) else { return here }
     return all[(index + (text == "next" ? 1 : all.count - 1)) % all.count]
   case let number as Int:
-    guard let display = all.first(where: { $0.id == CGDirectDisplayID(number) }) else {
+    guard let id = CGDirectDisplayID(exactly: number), let display = all.first(where: { $0.id == id }) else {
       throw HelperError(code: "invalid_request", message: "There is no display \(number). list_windows lists them.")
     }
     return display

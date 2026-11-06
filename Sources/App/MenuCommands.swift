@@ -53,7 +53,10 @@ func menuCommands(app: AppIdentity, limit: Int = .max) throws -> (commands: [Men
   var truncated = false
   let started = Date()
   func walk(_ menuParent: AXUIElement, path: [String], depth: Int) {
-    guard depth < maxDepth else { return }
+    guard depth < maxDepth else {
+      truncated = true
+      return
+    }
     for menu in (attribute(menuParent, kAXChildrenAttribute) as? [AXUIElement]) ?? [] {
       for item in (attribute(menu, kAXChildrenAttribute) as? [AXUIElement]) ?? [] {
         guard found.count < limit, Date().timeIntervalSince(started) < listSeconds else {
@@ -154,7 +157,11 @@ private func resolveCommand(_ all: [MenuCommand], params: JSON) throws -> MenuCo
 
 // Read again just before pressing, so a command disabled since the list is refused rather than pressed in vain.
 func runMenuCommand(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
-  let (all, _) = try menuCommands(app: app)
+  let (all, truncated) = try menuCommands(app: app)
+  // A path or shortcut that looks unique in part of the menus may not be; the command runs only from all of them.
+  guard !truncated else {
+    throw HelperError(code: "outcome_unknown", message: "\(app.name)'s menus could not be read in full in time, so the command did not run. Try again, or use press with an element number from list_menu_commands.")
+  }
   let command = try resolveCommand(all, params: params)
   try requireAllowedMenu(command.element, app: app)
   guard boolAttribute(command.element, kAXEnabledAttribute) else {
