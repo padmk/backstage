@@ -1,6 +1,7 @@
 // Types and small helpers shared by the helper's modules.
 
 import Foundation
+import HelperLink
 
 typealias JSON = [String: Any]
 
@@ -34,16 +35,15 @@ func sleep(seconds: Double) {
   Thread.sleep(forTimeInterval: seconds)
 }
 
+// The product's name and directories come from HelperLink, which the command shares.
 enum Configuration {
-  static var appName: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "helper" }
-  // The XDG base directories at their default places, as the command has them. The app starts from
-  // launchd too, without the shell's environment, so the XDG_* variables are not read. --home puts both in one.
-  // The app list.
-  static var configHome = NSHomeDirectory() + "/.config/" + appName.lowercased()
-  // The activity log and the socket.
-  static var stateHome = NSHomeDirectory() + "/.local/state/" + appName.lowercased()
-  static var socketPath: String { stateHome + "/helper.sock" }
-  static var buildVersion: String {
-    Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
-  }
+  static let appName = Product.appName
+  // Set once at start: a test build may put everything in one test home.
+  static var directories = Directories()
+  static var configHome: String { directories.config }
+  static var stateHome: String { directories.state }
+  static var socketPath: String { directories.socketPath }
+  static var version: String { Product.version }
+  // Which build of the app this process runs, so the command can tell when the app was replaced under it.
+  static var build: String { ownBuildIdentity }
 }
