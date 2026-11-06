@@ -192,6 +192,16 @@ func acting(app: AppIdentity, session: ApprovalSession, _ action: () throws -> J
 }
 
 // `watch` was made before the action, so it holds what the app reported while the action ran.
+// The lines without their element numbers, in order.
+private func content(of lines: [String]) -> [String] {
+  lines.map { line in
+    let indent = line.prefix { $0 == " " }
+    let rest = line.dropFirst(indent.count)
+    guard let space = rest.firstIndex(of: " "), rest[..<space].allSatisfy(\.isNumber) else { return line }
+    return String(indent + rest[rest.index(after: space)...])
+  }
+}
+
 func observeChange(app: AppIdentity, session: ApprovalSession, watch: ChangeWatch?) -> JSON {
   guard let last = session.lock.withLock({ session.lastReads[app.pid] }) else {
     return ["unknown": true, "reason": "Nothing was read before this action, so changes cannot be reported."] as JSON
@@ -202,6 +212,8 @@ func observeChange(app: AppIdentity, session: ApprovalSession, watch: ChangeWatc
   let started = Date()
   let before = Set(last.lines)
   var after = last.lines
+  var afterContent = content(of: last.lines)
+  var completeReads = 0
   var afterFingerprints: [Int: [String?]] = [:]
   var lastChange: Date?
   var settled = true
@@ -238,13 +250,21 @@ func observeChange(app: AppIdentity, session: ApprovalSession, watch: ChangeWatc
       return ["unknown": true, "reason": "The earlier read cannot be repeated: \(reason)"] as JSON
     }
     if let partial = read.tree.partialReason {
-      return ["unknown": true, "reason": "The app answered only in part: \(partial)"] as JSON
+      // A read cut short at the end of the wait leaves the last complete one to report.
+      guard completeReads > 0 else { return ["unknown": true, "reason": "The app answered only in part: \(partial)"] as JSON }
+      settled = false
+      break
     }
+    completeReads += 1
     let now = Date()
     lastRead = now
+    // Some apps, such as System Settings, hand out new elements for unchanged ones on every read, which renumbers
+    // them; only a change in what the lines say counts as the app still changing.
+    let readContent = content(of: read.tree.lines)
     if read.tree.lines != after {
       after = read.tree.lines
-      lastChange = now
+      if readContent != afterContent { lastChange = now }
+      afterContent = readContent
     }
     afterFingerprints = read.tree.fingerprints
     let waited = now.timeIntervalSince(started)

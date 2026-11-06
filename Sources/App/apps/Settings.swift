@@ -129,6 +129,7 @@ let settingsKnowledge = AppKnowledge(
   access: "Change system settings through System Events",
   hints: [
     "The sidebar lists panes; each pane is a scroll area of grouped rows whose switches and pop-up buttons can be pressed.",
+    "In lists such as Full Disk Access, press a Row (or the text in it) to select it; Remove under the list then acts on it.",
   ],
   pitfalls: [
     "Opening a pane with an x-apple.systempreferences: link from a shell can bring System Settings to the front; open_pane keeps it behind.",

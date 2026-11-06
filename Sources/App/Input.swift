@@ -223,17 +223,24 @@ private func requireOwnWindowOnTop(at point: CGPoint, pid: pid_t) throws {
   }
 }
 
+// Brings an app forward and waits until it is. macOS may ignore activate() from an app in the background, as
+// this helper is; Accessibility can still make the app frontmost.
+func bringForward(_ app: NSRunningApplication, waiting seconds: TimeInterval = 0.5) -> Bool {
+  let pid = app.processIdentifier
+  let isFront = { onMain { NSWorkspace.shared.frontmostApplication?.processIdentifier == pid } }
+  _ = onMain { app.activate() }
+  if !isFront() { AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), kAXFrontmostAttribute as CFString, kCFBooleanTrue) }
+  let deadline = Date().addingTimeInterval(seconds)
+  while !isFront(), Date() < deadline { sleep(seconds: 0.05) }
+  return isFront()
+}
+
 func postForegroundClick(at point: CGPoint, window: AXUIElement, pid: pid_t, count: Int, style: ClickStyle = ClickStyle()) throws {
   guard let app = NSRunningApplication(processIdentifier: pid) else {
     throw HelperError(code: "app_not_found", message: "The app is no longer running.")
   }
-  _ = onMain { app.activate() }
   AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-  let deadline = Date().addingTimeInterval(1)
-  while onMain({ NSWorkspace.shared.frontmostApplication?.processIdentifier }) != pid, Date() < deadline {
-    sleep(seconds: 0.05)
-  }
-  guard onMain({ NSWorkspace.shared.frontmostApplication?.processIdentifier }) == pid else {
+  guard bringForward(app, waiting: 1) else {
     throw HelperError(code: "action_failed", message: "The app did not come forward, so nothing was clicked.")
   }
   sleep(seconds: 0.15)
