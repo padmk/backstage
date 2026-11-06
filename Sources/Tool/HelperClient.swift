@@ -32,14 +32,14 @@ private final class SocketConnection: @unchecked Sendable {
   // Set by the reader once the helper's side is gone; read and written on the client's queue.
   var closed = false
 
-  // A write that the helper does not take within the request time fails rather than hangs.
-  init(descriptor: Int32) {
-    self.descriptor = descriptor
-    var limit = timeval(tv_sec: Int(requestTimeout), tv_usec: 0)
-    setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &limit, socklen_t(MemoryLayout<timeval>.size))
-  }
+  init(descriptor: Int32) { self.descriptor = descriptor }
 
-  func write(_ object: Any) -> Bool { writeLock.withLock { writeAll(descriptor, jsonLine(object)) } }
+  // A write that the helper does not take by the deadline fails rather than hangs, however slowly it drains.
+  func write(_ object: Any, deadline: Date = Date().addingTimeInterval(requestTimeout)) -> Bool {
+    guard writeLock.lock(before: deadline) else { return false }
+    defer { writeLock.unlock() }
+    return writeAll(descriptor, jsonLine(object), deadline: deadline)
+  }
 
   // Ends reads and writes; the reader thread then sees the end and reports it.
   func shut() { Darwin.shutdown(descriptor, SHUT_RDWR) }
@@ -103,16 +103,21 @@ final class HelperClient: @unchecked Sendable {
   }
 
   // Ends the request the ticket names, running or queued, leaving the others alone.
+  // Runs off the caller's thread, so a request stuck in its write never holds up the reader of the client's input.
   func cancel(_ ticket: Ticket?) {
     guard let ticket else { return }
-    orderLock.withLock {
-      let target: (Int, SocketConnection)? = queue.sync {
-        ticket.cancelled = true
-        guard ticket.sent, let id = ticket.id, let socket = current else { return nil }
-        return (id, socket)
-      }
-      if let (id, socket) = target { _ = socket.write(["method": "cancel", "params": ["id": id]]) }
+    DispatchQueue.global().async { self.sendCancel(ticket) }
+  }
+
+  private func sendCancel(_ ticket: Ticket) {
+    guard orderLock.lock(before: Date().addingTimeInterval(requestTimeout)) else { return }
+    defer { orderLock.unlock() }
+    let target: (Int, SocketConnection)? = queue.sync {
+      ticket.cancelled = true
+      guard ticket.sent, let id = ticket.id, let socket = current else { return nil }
+      return (id, socket)
     }
+    if let (id, socket) = target { _ = socket.write(["method": "cancel", "params": ["id": id]]) }
   }
 
   func close() {
@@ -133,19 +138,22 @@ final class HelperClient: @unchecked Sendable {
       })
       return id
     }
-    let deadline = Int((Date().timeIntervalSince1970 + requestTimeout) * 1000)
+    // One deadline covers waiting for the order lock, the write and the reply.
+    let due = Date().addingTimeInterval(requestTimeout)
+    let deadline = Int(due.timeIntervalSince1970 * 1000)
     // Cancelled between taking its id and being written, a request is never written.
-    orderLock.withLock {
+    if orderLock.lock(before: due) {
       if queue.sync(execute: { ticket?.cancelled == true }) {
         finish(id, .failure(HelperFailure(code: "cancelled", message: "The request was cancelled.")))
-      } else if socket.write(["id": id, "method": method, "params": params, "deadline": deadline]) {
+      } else if socket.write(["id": id, "method": method, "params": params, "deadline": deadline], deadline: due) {
         queue.sync { ticket?.sent = true }
       } else {
         finish(id, .failure(stoppedFailure))
         socket.shut()
       }
+      orderLock.unlock()
     }
-    if done.wait(timeout: .now() + requestTimeout) == .timedOut {
+    if done.wait(wallTimeout: .now() + max(0, due.timeIntervalSinceNow)) == .timedOut {
       // Later requests must not run behind one whose caller has given up.
       finish(id, .failure(HelperFailure(code: "timeout", message: "The helper did not answer \(method) in time. It may or may not have run.")))
       socket.shut()

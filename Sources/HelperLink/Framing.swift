@@ -31,13 +31,20 @@ public func jsonLine(_ object: Any) -> Data {
   return data
 }
 
-// Writes all of `data`, retrying after a signal and after a partial write. Returns false when the other side is gone.
+// Writes all of `data`, retrying after a signal and after a partial write. Returns false when the other side is gone,
+// or when `deadline` passes first: on a socket, each write then waits at most until the deadline.
 @discardableResult
-public func writeAll(_ descriptor: Int32, _ data: Data) -> Bool {
+public func writeAll(_ descriptor: Int32, _ data: Data, deadline: Date? = nil) -> Bool {
   data.withUnsafeBytes { buffer in
     guard var base = buffer.baseAddress else { return true }
     var left = buffer.count
     while left > 0 {
+      if let deadline {
+        let remaining = deadline.timeIntervalSinceNow
+        guard remaining > 0 else { return false }
+        var limit = timeval(tv_sec: Int(remaining), tv_usec: Int32((remaining - remaining.rounded(.down)) * 1_000_000))
+        setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &limit, socklen_t(MemoryLayout<timeval>.size))
+      }
       let written = Darwin.write(descriptor, base, left)
       if written < 0 {
         if errno == EINTR { continue }
