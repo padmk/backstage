@@ -140,7 +140,7 @@ Unlocked, Backstage prefers accessibility: it reads elements, acts on them by nu
 - **No keyboard focus control.** Keys go to the element that has focus in the app. Click the target with `click_at` first, and check with a screenshot.
 - **The window index can change.** It is the window server's front-to-back order. Read the header (`get_window_state` with `menu_bar: true`) or take a screenshot before each step.
 - **Pointer-only actions only.** `click_at` with `element` is refused, because element frames are not available; so is `foreground: true`, which would need to bring a window forward on a locked screen.
-- **Same app list.** The mode applies to the apps agents may use and nothing else. Passwords, Keychain Access, login and authentication windows and Backstage itself stay unavailable.
+- **Same app list.** The mode applies to the apps agents may use and nothing else. Passwords, Keychain Access, other password managers, authenticators and wallets, login and authentication windows and Backstage itself stay unavailable.
 
 ### Turning it on and off
 
