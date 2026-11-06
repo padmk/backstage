@@ -227,7 +227,8 @@ func runMCPServer() -> Never {
     exit(0)
   }
   server = MCPServer(directories: directories, managesHelper: managesHelper, expectedBuild: appBuildOfOwnBundle(),
-                     onOutputFailure: { shutdown() })
+                     // The output queue itself reports the failure, so the shutdown, which waits for that queue, runs elsewhere.
+                     onOutputFailure: { DispatchQueue.global().async { shutdown() } })
   for signalNumber in [SIGINT, SIGTERM, SIGHUP] {
     signal(signalNumber, SIG_IGN)
     let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .global())

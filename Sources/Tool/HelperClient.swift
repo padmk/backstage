@@ -15,6 +15,8 @@ struct HelperFailure: Error {
 final class Ticket: @unchecked Sendable {
   fileprivate var id: Int?
   fileprivate var cancelled = false
+  // Written to the socket, so a cancel has a request to name.
+  fileprivate var sent = false
 }
 
 private let startTimeout: TimeInterval = 8
@@ -27,8 +29,15 @@ private let startLockStale: TimeInterval = 20
 private final class SocketConnection: @unchecked Sendable {
   let descriptor: Int32
   private let writeLock = NSLock()
+  // Set by the reader once the helper's side is gone; read and written on the client's queue.
+  var closed = false
 
-  init(descriptor: Int32) { self.descriptor = descriptor }
+  // A write that the helper does not take within the request time fails rather than hangs.
+  init(descriptor: Int32) {
+    self.descriptor = descriptor
+    var limit = timeval(tv_sec: Int(requestTimeout), tv_usec: 0)
+    setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &limit, socklen_t(MemoryLayout<timeval>.size))
+  }
 
   func write(_ object: Any) -> Bool { writeLock.withLock { writeAll(descriptor, jsonLine(object)) } }
 
@@ -71,6 +80,8 @@ final class HelperClient: @unchecked Sendable {
   let sessionId = UUID().uuidString.lowercased()
 
   private let queue = DispatchQueue(label: "helper-client")
+  // Orders a request's write and its cancel, so a cancel never reaches the helper before the request it names.
+  private let orderLock = NSLock()
   // One connection attempt at a time, shared by the callers that wait for it.
   private let connectLock = NSLock()
   private var current: SocketConnection?
@@ -94,12 +105,14 @@ final class HelperClient: @unchecked Sendable {
   // Ends the request the ticket names, running or queued, leaving the others alone.
   func cancel(_ ticket: Ticket?) {
     guard let ticket else { return }
-    let target: (Int, SocketConnection)? = queue.sync {
-      ticket.cancelled = true
-      guard let id = ticket.id, let socket = current else { return nil }
-      return (id, socket)
+    orderLock.withLock {
+      let target: (Int, SocketConnection)? = queue.sync {
+        ticket.cancelled = true
+        guard ticket.sent, let id = ticket.id, let socket = current else { return nil }
+        return (id, socket)
+      }
+      if let (id, socket) = target { _ = socket.write(["method": "cancel", "params": ["id": id]]) }
     }
-    if let (id, socket) = target { _ = socket.write(["method": "cancel", "params": ["id": id]]) }
   }
 
   func close() {
@@ -121,8 +134,16 @@ final class HelperClient: @unchecked Sendable {
       return id
     }
     let deadline = Int((Date().timeIntervalSince1970 + requestTimeout) * 1000)
-    if !socket.write(["id": id, "method": method, "params": params, "deadline": deadline]) {
-      finish(id, .failure(stoppedFailure))
+    // Cancelled between taking its id and being written, a request is never written.
+    orderLock.withLock {
+      if queue.sync(execute: { ticket?.cancelled == true }) {
+        finish(id, .failure(HelperFailure(code: "cancelled", message: "The request was cancelled.")))
+      } else if socket.write(["id": id, "method": method, "params": params, "deadline": deadline]) {
+        queue.sync { ticket?.sent = true }
+      } else {
+        finish(id, .failure(stoppedFailure))
+        socket.shut()
+      }
     }
     if done.wait(timeout: .now() + requestTimeout) == .timedOut {
       // Later requests must not run behind one whose caller has given up.
@@ -171,6 +192,7 @@ final class HelperClient: @unchecked Sendable {
     }
     // Only this socket's requests fail; a newer connection keeps its own.
     let failed: [(Result<Any, HelperFailure>) -> Void] = queue.sync {
+      socket.closed = true
       if current === socket { current = nil }
       let mine = waiting.filter { $0.value.socket === socket }
       for id in mine.keys { waiting.removeValue(forKey: id) }
@@ -180,12 +202,21 @@ final class HelperClient: @unchecked Sendable {
     Darwin.close(socket.descriptor)
   }
 
+  // A helper that goes away right after the handshake leaves no closed socket behind: the next attempt connects
+  // again, and only a second loss in a row is reported.
   private func connection() throws -> SocketConnection {
     try connectLock.withLock {
       if let socket = queue.sync(execute: { current }) { return socket }
-      let socket = try establish()
-      queue.sync { current = socket }
-      return socket
+      for _ in 0..<2 {
+        let socket = try establish()
+        let published = queue.sync { () -> Bool in
+          guard !socket.closed else { return false }
+          current = socket
+          return true
+        }
+        if published { return socket }
+      }
+      throw stoppedFailure
     }
   }
 

@@ -22,6 +22,8 @@ enum HelperMain {
     // The system-wide timeout applies to every element, so one hung app cannot hold a request for long.
     AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 2)
 
+    // Read before anything can replace the executable, so the app reports the build it runs.
+    _ = Configuration.build
     startServer()
 
     let application = NSApplication.shared
