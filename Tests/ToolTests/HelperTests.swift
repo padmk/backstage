@@ -67,11 +67,11 @@ final class RawSocket {
       $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
     }
     guard connected == 0 else { throw TestFailure("Could not connect to \(path)") }
-    let descriptor = self.descriptor
+    let socketDescriptor = self.descriptor
     Thread { [weak self] in
       var buffer = [UInt8](repeating: 0, count: 65536)
       while true {
-        let count = read(descriptor, &buffer, buffer.count)
+        let count = read(socketDescriptor, &buffer, buffer.count)
         guard count > 0, let self else { return }
         let chunk = String(decoding: buffer[0..<count], as: UTF8.self)
         self.lock.withLock { self.text += chunk }
