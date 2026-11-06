@@ -9,6 +9,14 @@ func isReachablePath(_ path: String) -> Bool {
   (path.hasPrefix(resolvedHome + "/") && path != resolvedHome) || path.hasPrefix("/Volumes/")
 }
 
+// A path an operation may report: one in the reachable set, links resolved; nil for anything else, so a listing
+// does not reveal files outside it.
+func reportablePath(_ path: String) -> String? {
+  guard !path.isEmpty else { return nil }
+  let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+  return isReachablePath(resolved) ? path : nil
+}
+
 // Resolves links in the deepest folder that exists, since resolving skips a path that does not exist and a
 // missing folder under /Volumes could otherwise hide a link to the system disk.
 private func resolvingExistingFolders(_ url: URL) -> URL {

@@ -16,6 +16,7 @@ struct AppsTab: View {
   }
 
   var body: some View {
+    if !model.requests.isEmpty { requestList }
     ListSection(heading: ControlTexts.access, note: ControlTexts.honesty) {
       ControlRow(icon: .symbol("square.grid.2x2"), title: ControlTexts.everyApp,
                  detail: model.allowsEveryApp ? ControlTexts.everyAppOn : ControlTexts.everyAppOff,
@@ -34,6 +35,22 @@ struct AppsTab: View {
     }
     if let problem = model.problem {
       Text(problem).font(.system(size: 12)).foregroundStyle(Palette.coral)
+    }
+  }
+
+  // Apps asked for from the command line or by an agent, waiting for the user's answer.
+  private var requestList: some View {
+    ListSection(heading: ControlTexts.requestsHeading, note: ControlTexts.requestsNote) {
+      ForEach(Array(model.requests.enumerated()), id: \.element.id) { index, request in
+        if index > 0 { RowDivider() }
+        ControlRow(icon: .app(request.app.bundleId), title: readableAppName(request.app.name) ?? request.app.bundleId,
+                   detail: ControlTexts.askedBy(readableClientName(request.client) ?? ControlTexts.anAgent)) {
+          HStack(spacing: 6) {
+            Button(ControlTexts.decline) { model.answer(request, add: false) }.buttonStyle(ChoiceStyle(kind: .plain, compact: true))
+            Button(ControlTexts.addRequested) { model.answer(request, add: true) }.buttonStyle(ChoiceStyle(kind: .primary, compact: true))
+          }
+        }
+      }
     }
   }
 

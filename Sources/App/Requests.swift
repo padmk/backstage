@@ -25,9 +25,8 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   case "request_permissions":
     let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
     let accessibility = AXIsProcessTrustedWithOptions(options)
-    // Screen Recording is optional, so it is asked for only when the caller says so.
-    let screen = CGPreflightScreenCaptureAccess() || (params["screen_recording"] as? Bool == true && CGRequestScreenCaptureAccess())
-    return ["accessibility": accessibility, "screen_recording": screen] as JSON
+    // Screen Recording is optional and asked for only from the Setup tab, by the user, never over the socket.
+    return ["accessibility": accessibility, "screen_recording": CGPreflightScreenCaptureAccess()] as JSON
 
   case "quit":
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
@@ -48,8 +47,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   case "approvals_add":
     let query = try string(params, "app")
     let app = try (try? resolve(query)) ?? installedIdentity(try installedApp(query))
-    try addToList(app, by: commandLineClient)
-    return ["added": app.bundleId, "name": app.name] as JSON
+    return try requestAddition(app, client: session.lock.withLock { session.clientName } ?? commandLineClient)
 
   case "list_apps":
     // With app: that one app, running or only installed, without starting it.
@@ -64,6 +62,16 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
       return entry
     }, "every_app": Preferences.allowsEveryApp, "screen_locked": isScreenLocked(), "windows_while_locked": Preferences.worksInWindowsWhileLocked] as JSON
 
+  case "list_windows":
+    return try listWindows(params: params)
+
+  // It takes the app's lock for each look rather than for the whole wait.
+  case "wait_for":
+    let app = try resolve(string(params, "app"))
+    try ApprovalGate.require(app, session: session)
+    try requireAccessibility()
+    return try waitFor(app: app, params: params, connection: connection)
+
   case "launch_app":
     return try launch(string(params, "app"), session: session, connection: connection)
 
@@ -77,7 +85,8 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     break
   }
 
-  guard ["get_window_state", "screenshot", "read_text", "run_actions"].contains(method) || actionMethods.contains(method) else {
+  guard ["get_window_state", "screenshot", "read_text", "run_actions"].contains(method) || actionMethods.contains(method)
+    || windowMethods.contains(method) || ["list_menu_commands", "run_menu_command"].contains(method) else {
     throw HelperError(code: "unknown_method", message: "Unknown method \(method).")
   }
 
@@ -91,7 +100,9 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     try ApprovalGate.require(app, session: session)
     try requireSameProcess(app)
     try requireScreenUnlocked(method, params: params, app: app, session: session)
-    if method == "run_actions" || actionMethods.contains(method) { try requireUserNotWorking(in: app) }
+    if method == "run_actions" || method == "run_menu_command" || actionMethods.contains(method) || windowMethods.contains(method) {
+      try requireUserNotWorking(in: app)
+    }
     try connection.throwIfCancelled()
     if isScreenLocked(), worksOnLockedWindows(method, params: params) {
       if method != "screenshot" { try requireAccessibility() }
@@ -117,6 +128,21 @@ private func performAppRequest(_ method: String, app: AppIdentity, params: JSON,
   case "run_actions":
     try requireAccessibility()
     return try runActions(app: app, params: params, session: session)
+
+  case "list_menu_commands":
+    return try listMenuCommands(app: app, params: params, session: session)
+
+  case "run_menu_command":
+    return try acting(app: app, session: session) { try runMenuCommand(app: app, params: params, session: session) }
+
+  case "set_window":
+    return try setWindow(app: app, params: params)
+
+  case "set_app_state":
+    return try setAppState(app: app, params: params)
+
+  case "close":
+    return try closeWindowOrApp(app: app, params: params)
 
   default:
     try requireAccessibility()

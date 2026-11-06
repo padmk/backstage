@@ -48,6 +48,9 @@ private func worksWhileLocked(_ method: String, params: JSON, app: AppIdentity, 
     return params["menu_bar"] as? Bool == true || params["menu_extras"] as? Bool == true
   case "press":
     return isMenu(params["element"])
+  // Hiding and showing go through the app, and menus stay readable and usable while locked.
+  case "set_app_state", "list_menu_commands", "run_menu_command":
+    return true
   case "run_actions":
     guard let steps = params["steps"] as? [JSON], !steps.isEmpty else { return false }
     return steps.allSatisfy { $0["tool"] as? String == "press" && isMenu($0["element"]) }

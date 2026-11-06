@@ -94,6 +94,9 @@ let actionMethods: Set<String> = ["press", "set_value", "type_text", "select_tex
 
 // Runs one action without reporting its effect, which the caller does once for one action or a sequence.
 func performAction(_ method: String, app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
+  if let number = params["element"] as? Int {
+    try requireAllowedMenu(try session.table.element(number, pid: app.pid), app: app)
+  }
   switch method {
   case "press": return try press(app: app, params: params, session: session)
   case "set_value": return try setValue(app: app, params: params, session: session)

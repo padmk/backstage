@@ -16,6 +16,10 @@ enum ControlTexts {
   static let windowsWhileLockedConfirmDetail = "macOS hides windows from other apps while the screen is locked. With this on, agents still see screenshots of the apps you allow and click and type in them, through private macOS calls, without any check that an action worked, and without you watching. The Mac stays locked and the displays stay asleep."
   static let windowsWhileLockedConfirm = "Turn On", cancel = "Cancel"
   static let add = "Add App…"
+  static let requestsHeading = "Waiting for you"
+  static let requestsNote = "Asked for from the command line or by an agent. An app goes on the list only when you add it here."
+  static let addRequested = "Add", decline = "Decline"
+  static func askedBy(_ client: String) -> String { "Asked for by \(client)" }
   static let noApps = "No apps yet", noAppsDetail = "Add the apps agents may use with Add App…\nAn app that is not here is refused, without asking."
   static let remove = "Remove"
   static func listKept(_ count: Int) -> String {

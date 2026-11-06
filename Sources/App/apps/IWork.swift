@@ -46,7 +46,17 @@ private let pathArgument = Argument(name: "path", kind: .string, required: true,
 // The operations every iWork app has.
 private func documentOperations(app: String, name: String) -> [Operation] {
   let list = Operation(name: "list_documents", summary: "List open documents with their files", effect: .reads, arguments: []) { arguments in
-    try run("return { documents: App.documents().map(describe) };", app: app, arguments, name: name)
+    var result = try run("return { documents: App.documents().map(describe) };", app: app, arguments, name: name)
+    // A document from outside the reachable set is listed without its path.
+    result["documents"] = (result["documents"] as? [JSON] ?? []).map { document in
+      var entry = document
+      if let path = document["path"] as? String, !path.isEmpty, reportablePath(path) == nil {
+        entry["path"] = ""
+        entry["outside_reach"] = true
+      }
+      return entry
+    }
+    return result
   }
   let open = Operation(name: "open", summary: "Open a file as a document, behind the app you are in", effect: .changes, arguments: [pathArgument]) { arguments in
     let url = try userPath(arguments, followingLink: true)
