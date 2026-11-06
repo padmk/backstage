@@ -190,6 +190,11 @@ final class ElementTable {
   private var nextNumber = 1
   private var reads = 0
 
+  // Only before the first element is numbered, so a number already given never changes meaning.
+  func startNumbering(at first: Int) {
+    lock.withLock { if entries.isEmpty, nextNumber == 1, first > 0 { nextNumber = first } }
+  }
+
   // What an element is counts from what the agent saw, so a read it did not see never updates that.
   func number(for element: AXUIElement, pid: pid_t, shownToAgent: Bool, attributes: ElementAttributes? = nil) -> Int {
     let seen = attributes.map(fingerprint(from:)) ?? fingerprint(of: element)

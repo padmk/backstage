@@ -11,6 +11,8 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     session.lock.withLock {
       session.clientName = params["client_name"] as? String
     }
+    // A session handed over from an older command numbers its elements apart from the numbers it held before.
+    if let first = params["first_element_number"] as? Int { session.table.startNumbering(at: first) }
     return ["version": Configuration.version, "build": Configuration.build] as JSON
 
   case "status":

@@ -9,7 +9,7 @@ enum ToolMain {
     // A client that goes away must end this process through a failed write, not a signal.
     signal(SIGPIPE, SIG_IGN)
     let arguments = Array(CommandLine.arguments.dropFirst())
-    if arguments.first == "mcp" { runMCPServer() }
+    if arguments.first == "mcp" { runMCPServer(arguments: arguments) }
     exit(runCommand(arguments))
   }
 }

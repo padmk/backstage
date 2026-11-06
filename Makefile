@@ -11,6 +11,8 @@ APP_NAME := $(shell sed -n 's/.*static let appName = "\(.*\)"/\1/p' $(PRODUCT))
 VERSION := $(shell sed -n 's/.*static let version = "\(.*\)"/\1/p' $(PRODUCT))
 BUNDLE_ID := $(shell sed -n 's/.*static let bundleIdentifier = "\(.*\)"/\1/p' $(PRODUCT))
 MINIMUM_MACOS := $(shell sed -n 's/.*static let minimumMacOS = \([0-9]*\).*/\1/p' $(PRODUCT))
+HANDOFF_KEY := $(shell sed -n 's/.*static let sessionHandoffKey = "\(.*\)"/\1/p' $(PRODUCT))
+HANDOFF_REVISION := $(shell sed -n 's/.*static let sessionHandoffRevision = \([0-9]*\).*/\1/p' $(PRODUCT))
 COMMAND := $(shell echo $(APP_NAME) | tr A-Z a-z)
 BUILD = $(shell swift build -c release --arch arm64 --show-bin-path)
 APP := build/$(APP_NAME).app
@@ -26,7 +28,7 @@ app:
 	cp $(BUILD)/$(COMMAND)-tool $(APP).partial/Contents/Helpers/$(COMMAND)
 	cp assets/AppIcon.icns assets/Assets.car $(APP).partial/Contents/Resources/
 	sed -e 's/@APP_NAME@/$(APP_NAME)/g' -e 's/@VERSION@/$(VERSION)/g' -e 's/@BUNDLE_ID@/$(BUNDLE_ID)/g' \
-	    -e 's/@MINIMUM_MACOS@/$(MINIMUM_MACOS)/g' packaging/Info.plist > $(APP).partial/Contents/Info.plist
+	    -e 's/@MINIMUM_MACOS@/$(MINIMUM_MACOS)/g' -e 's/@HANDOFF_KEY@/$(HANDOFF_KEY)/g' -e 's/@HANDOFF_REVISION@/$(HANDOFF_REVISION)/g' packaging/Info.plist > $(APP).partial/Contents/Info.plist
 	plutil -lint -s $(APP).partial/Contents/Info.plist
 	codesign --force --sign - --identifier $(BUNDLE_ID).command $(APP).partial/Contents/Helpers/$(COMMAND)
 	codesign --force --sign - --identifier $(BUNDLE_ID) $(APP).partial

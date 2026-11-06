@@ -91,6 +91,14 @@ final class HelperClient: @unchecked Sendable {
   private var current: SocketConnection?
   private var nextId = 1
   private var waiting: [Int: (socket: SocketConnection, finish: (Result<Any, HelperFailure>) -> Void)] = [:]
+  // Requests waiting for a connection, which have not reached any helper.
+  private var awaitingConnection = Set<ObjectIdentifier>()
+  // Called, holding the connection lock, when this command turns out to be an older build than the installed app;
+  // it may replace this process with the installed command and then never returns.
+  var onOutdated: (() -> Void)?
+  // Where this session's element numbers start in the helper; set after a handoff, so numbers from before it do not
+  // name new elements.
+  var firstElementNumber: Int?
 
   init(directories: Directories, managesHelper: Bool, expectedBuild: String?, clientName: @escaping () -> String? = { nil }) {
     self.directories = directories
@@ -102,9 +110,22 @@ final class HelperClient: @unchecked Sendable {
   // MARK: Requests
 
   func request(_ method: String, _ params: JSON = [:], ticket: Ticket? = nil) throws -> Any {
-    let socket = try connection()
+    let key = ticket.map(ObjectIdentifier.init)
+    if let key { queue.sync { _ = awaitingConnection.insert(key) } }
+    let socket: SocketConnection
+    do {
+      defer { if let key { queue.sync { _ = awaitingConnection.remove(key) } } }
+      socket = try connection()
+    }
     return try send(socket, method, params, ticket: ticket)
   }
+
+  // Whether the request has not been sent anywhere yet and is waiting for a connection.
+  func isAwaitingConnection(_ ticket: Ticket) -> Bool {
+    queue.sync { awaitingConnection.contains(ObjectIdentifier(ticket)) }
+  }
+
+  func isCancelled(_ ticket: Ticket) -> Bool { queue.sync { ticket.cancelled } }
 
   // Ends the request the ticket names, running or queued, leaving the others alone.
   // Runs off the caller's thread, so a request stuck in its write never holds up the reader of the client's input.
@@ -234,6 +255,7 @@ final class HelperClient: @unchecked Sendable {
   private func hello(_ socket: SocketConnection) throws -> JSON {
     var params: JSON = ["session_id": sessionId]
     if let name = clientName() { params["client_name"] = name }
+    if let firstElementNumber { params["first_element_number"] = firstElementNumber }
     return try send(socket, "hello", params, ticket: nil) as? JSON ?? [:]
   }
 
@@ -249,6 +271,7 @@ final class HelperClient: @unchecked Sendable {
     // stale and replaced; otherwise this command is the stale one, and it stops nothing that others use.
     guard installedBuild() == expectedBuild else {
       socket.shut()
+      onOutdated?()
       throw differsFromInstalled()
     }
     return try withStartLock {
@@ -279,7 +302,10 @@ final class HelperClient: @unchecked Sendable {
   // Started through LaunchServices, so macOS treats the app as its own process for its grants, never as part of
   // the client that started this command.
   private func startHelper(locked: Bool = false) throws -> SocketConnection {
-    if installedBuild() != expectedBuild, expectedBuild != nil { throw differsFromInstalled() }
+    if installedBuild() != expectedBuild, expectedBuild != nil {
+      onOutdated?()
+      throw differsFromInstalled()
+    }
     let launch = { () throws -> SocketConnection in
       if let descriptor = connectSocket(self.directories.socketPath) { return self.attach(descriptor) }
       try runProcess("/usr/bin/open", ["-g", "-j", Product.installedAppPath, "--args", Product.backgroundArgument], timeout: 15)

@@ -13,6 +13,7 @@
 <key>LSMinimumSystemVersion</key><string>@MINIMUM_MACOS@.0</string>
 <key>LSArchitecturePriority</key><array><string>arm64</string></array>
 <key>LSUIElement</key><true/>
+<key>@HANDOFF_KEY@</key><integer>@HANDOFF_REVISION@</integer>
 <key>NSAppleEventsUsageDescription</key><string>@APP_NAME@ runs the operations an agent asks for in the apps you allow.</string>
 <key>NSRemindersFullAccessUsageDescription</key><string>@APP_NAME@ reads and changes reminders when an agent you approved asks.</string>
 <key>NSContactsUsageDescription</key><string>@APP_NAME@ reads and adds contacts when an agent you approved asks.</string>
