@@ -83,7 +83,7 @@ let tools: [ToolDefinition] = [
     required: ["app"], annotations: reads),
   ToolDefinition(
     name: "read_text",
-    description: "Read the full text of an element, or part of it, where get_window_state cuts a long value (it then shows length=). start and length count UTF-16 units, like select_text; the reply says the total and whether more follows.",
+    description: "Read the full text of an element, or part of it, where get_window_state cuts a long value or label (it then shows length= or label_length=); an element without a text value gives its label, and source says which. start and length count UTF-16 units, like select_text; the reply says the total and whether more follows.",
     properties: [("app", app), ("element", element), ("start", ["type": "integer", "minimum": 0]), ("length", ["type": "integer", "minimum": 1, "maximum": 50000])],
     required: ["app", "element"], annotations: reads),
   ToolDefinition(

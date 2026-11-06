@@ -33,6 +33,8 @@ private func line(for element: AXUIElement, attributes: ElementAttributes, role:
   if let subrole, subrole != "AXUnknown", !isSecure { text += "(\(shortName(subrole)))" }
   if let label = attributes.string(kAXTitleAttribute) ?? attributes.string(kAXDescriptionAttribute) {
     text += " \"\(clamped(label))\""
+    // A cut label says how long it is, as a cut value does, so the agent reads the rest with read_text.
+    if isClamped(label) { text += " label_length=\(label.utf16.count)" }
   }
   if isSecure {
     text += " secure"

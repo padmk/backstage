@@ -143,7 +143,7 @@ The server repeats the essentials in its MCP instructions, so a client that load
 | `press_key` | Sends a key or combination, such as `return` or `cmd+s` |
 | `scroll` | Scrolls the area containing an element |
 | `drag` | Drags from one element or point to another in the background, without moving the cursor |
-| `read_text` | Reads the full text of an element, or a range of it, where the tree cuts a long value (marked `length=`) |
+| `read_text` | Reads the full text of an element, or a range of it, where the tree cuts a long value or label (marked `length=` or `label_length=`). An element without a text value, such as a chat message, gives its label |
 | `screenshot` | Captures a window as a PNG, one pixel per window point, so its coordinates work with `click_at` |
 | `click_at` | Sends a click at a point in a window or at an element's center, with any button and held modifiers (right-click, cmd-click); with `foreground: true` brings the window forward for that click as a last resort |
 | `list_windows` | Lists windows across apps and displays: id, app, frame, display, on screen, Space (`current`, `other`, `unknown`); for apps on your list also the title, window number, minimized, full screen, modal, movable and resizable. Displays come with their frame and visible area |
@@ -165,7 +165,7 @@ Every action reply says how it was delivered and what changed:
 
 - `delivery`: `accessibility`, `value_appended_at_end` (an unfocused one-line field took the text at its end, ignoring the cursor), `key_events`, `pointer_event` or `foreground_pointer_event`.
 - `verified`: `true` when the helper read the result back (a value it set), `false` when delivery could not be confirmed, so check the effect before going on. Absent when the action itself is the confirmation, such as an accessibility press, which macOS accepts or refuses.
-- `state`: the difference from the last read of this app, taken once the app has settled: its Accessibility notifications have paused and a read shortly after shows the same (up to 5 s, while a new busy indicator shows; see [docs/architecture.md](docs/architecture.md)). `settled: false` means it was still changing. `{ "unknown": true, "reason": "..." }` means it cannot tell, for example when the window closed. Changes outside the area last read do not show. A value longer than 300 characters shows its start, its `length` and a `digest` of all of it, so a change anywhere in it shows as a changed line; read the rest with `read_text`.
+- `state`: the difference from the last read of this app, taken once the app has settled: its Accessibility notifications have paused and a read shortly after shows the same (up to 5 s, while a new busy indicator shows; see [docs/architecture.md](docs/architecture.md)). `settled: false` means it was still changing. `{ "unknown": true, "reason": "..." }` means it cannot tell, for example when the window closed. Changes outside the area last read do not show. A value longer than 300 characters shows its start, its `length` and a `digest` of all of it, so a change anywhere in it shows as a changed line; read the rest with `read_text`. A label longer than 300 characters shows its start and `label_length`.
 - `focus_returned: true`: the app brought itself forward in response, and the helper gave the focus back to the app you were in.
 
 Requests for the same app run one at a time, also across agents, so two sessions never interleave their input in one app.
