@@ -77,7 +77,7 @@ Homebrew builds the app from source; `make install` builds `build/Backstage.app`
 
 **The `backstage` command** lives inside the app, at `/Applications/Backstage.app/Contents/Helpers/backstage`; MCP clients run it with `mcp`. To use it from a shell by name, link it onto your `PATH`, for example `ln -s /Applications/Backstage.app/Contents/Helpers/backstage ~/.local/bin/backstage`.
 
-**Signing and updates.** macOS ties permissions to the app's signature. The first setup creates a certificate of this Mac in a keychain of its own and signs the installed app with it, so the permissions survive updates without a paid Apple developer account, as long as the certificate stays. Note that any process running as you can use that certificate; [SECURITY.md](SECURITY.md#signing) explains what that means. To update, run `brew upgrade backstage` (or pull and `make install`), then `backstage setup`, then restart client sessions. Nothing changes the installed app but an explicit setup.
+**Signing and updates.** macOS ties permissions to the app's signature. The first setup creates a certificate of this Mac in a keychain of its own and signs the installed app with it, so the permissions survive updates without a paid Apple developer account, as long as the certificate stays. Note that any process running as you can use that certificate; [SECURITY.md](SECURITY.md#signing) explains what that means. To update, run `brew upgrade backstage` (or pull and `make install`), then `backstage setup`. Running client sessions move to the new version on their next request; element numbers from before then need a new read. Nothing changes the installed app but an explicit setup.
 
 **Uninstall.** `backstage uninstall` quits the app, turns off its login item, removes its MCP registrations and moves it to the Trash; the app list, settings and certificate stay for a later install. `backstage uninstall --reset` removes those too, after asking, and resets its macOS permissions. With Homebrew, run it before `brew uninstall backstage`, which does not touch the copy in Applications.
 
@@ -302,7 +302,7 @@ backstage approvals revoke com.apple.Notes
 | `stale_element` or `unknown_element` | Read the window again |
 | `screen_locked` | Unlock the Mac, or let the agent use ready operations and the menu bar; see [Locked screen](#locked-screen) |
 | A client still runs the old server after `setup` | Restart the client session |
-| `This backstage command belongs to another build` | The session started before an update: restart it |
+| `This backstage command belongs to another build` | The session started before an update and could not move to the new version (a version from before this was possible, or one that cannot take it over): restart it |
 
 ## Development
 

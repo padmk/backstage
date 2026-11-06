@@ -13,6 +13,13 @@ private let meta = "io.modelcontextprotocol/"
 private let serverInfo: JSON = ["name": Product.commandName, "version": Product.version]
 // The tools and instructions stay the same while the server runs and hold nothing about the user.
 private let cacheHint: JSON = ["ttlMs": 3_600_000, "cacheScope": "public"]
+// The tool list can change when a handoff brings in a newer build.
+private let toolCapabilities: JSON = ["tools": ["listChanged": true] as JSON]
+// A handoff waits this long for calls that already reached the old helper to finish; otherwise it does not happen.
+private let handoffDrainSeconds: TimeInterval = 5
+private let handoffPollSeconds: TimeInterval = 0.02
+// Element numbers after each handoff start this far apart, above any a session reaches.
+let elementNumbersPerHandoff = 100_000_000
 
 // The policy comes first: clients cut long server instructions, and several servers share that budget.
 let instructions =
@@ -26,16 +33,30 @@ final class MCPServer: @unchecked Sendable {
   private let calls = DispatchQueue(label: "mcp-calls", attributes: .concurrent)
   private let lock = NSLock()
   private var clientName: String?
-  // Each call in progress, by its MCP id, with the ticket naming its helper request.
-  private var callsInProgress: [String: Ticket] = [:]
+  // Each call in progress, by its MCP id: the ticket naming its helper request, and the line it came in, which a
+  // handoff passes on while the call has not reached a helper.
+  private var callsInProgress: [String: (ticket: Ticket, line: String, order: Int)] = [:]
+  private var callsReceived = 0
   private let onOutputFailure: () -> Void
+  private let directories: Directories
+  private let handoff: HandoffState
 
-  init(directories: Directories, managesHelper: Bool, expectedBuild: String?, onOutputFailure: @escaping () -> Void) {
+  // The client's input. A handoff stops it between reads, so no byte is read and then lost.
+  private let inputLock = NSLock()
+  private var framer = LineFramer()
+  private var handingOff = false
+
+  init(directories: Directories, managesHelper: Bool, expectedBuild: String?, resumed: HandoffState?, onOutputFailure: @escaping () -> Void) {
     var server: MCPServer?
     self.onOutputFailure = onOutputFailure
+    self.directories = directories
+    handoff = resumed ?? HandoffState(clientName: nil, toolsDigest: toolsDigest(), generation: 0)
+    clientName = resumed?.clientName
     helper = HelperClient(directories: directories, managesHelper: managesHelper, expectedBuild: expectedBuild,
                           clientName: { server?.currentClientName })
     server = self
+    if handoff.generation > 0 { helper.firstElementNumber = handoff.generation * elementNumbersPerHandoff + 1 }
+    if managesHelper { helper.onOutdated = { server?.handOff() } }
   }
 
   private var currentClientName: String? { lock.withLock { clientName } }
@@ -43,6 +64,69 @@ final class MCPServer: @unchecked Sendable {
   func close() { helper.close() }
 
   // MARK: Input
+
+  // MARK: Input
+
+  // Reads the client's input until it ends. A read happens only once input is waiting and no handoff has begun,
+  // so a handoff leaves every byte it did not handle either in its state or still in stdin.
+  func readInput(after resumed: Data) {
+    inputLock.withLock { for line in framer.lines(in: resumed) { handle(line: line) } }
+    var buffer = [UInt8](repeating: 0, count: 65536)
+    while true {
+      var ready = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
+      if poll(&ready, 1, -1) < 0, errno != EINTR { return }
+      let ended: Bool = inputLock.withLock {
+        // While a handoff runs, input stays where it is; one that gives up lets reading go on.
+        if handingOff { return false }
+        let count = Darwin.read(STDIN_FILENO, &buffer, buffer.count)
+        if count < 0 { return errno != EINTR && errno != EAGAIN }
+        guard count > 0 else { return true }
+        for line in framer.lines(in: Data(buffer[0..<count])) { handle(line: line) }
+        return false
+      }
+      if ended { return }
+      if inputLock.withLock({ handingOff }) { Thread.sleep(forTimeInterval: handoffPollSeconds) }
+    }
+  }
+
+  // Replaces this process with the installed command when the helper connection finds this one outdated.
+  // Runs holding the helper client's connection lock, so no request reaches a helper meanwhile: the calls still in
+  // progress either wait for that lock, unsent, and cross over, or are finishing with the old helper's failure.
+  func handOff() {
+    guard installedCommandTakesHandoff() else { return }
+    inputLock.withLock { handingOff = true }
+    let deadline = Date().addingTimeInterval(handoffDrainSeconds)
+    var unsent: [(ticket: Ticket, line: String, order: Int)] = []
+    while true {
+      let calls = lock.withLock { Array(callsInProgress.values) }
+      if calls.allSatisfy({ helper.isAwaitingConnection($0.ticket) }) {
+        unsent = calls
+        break
+      }
+      guard Date() < deadline else {
+        inputLock.withLock { handingOff = false }
+        return
+      }
+      Thread.sleep(forTimeInterval: handoffPollSeconds)
+    }
+    // A call the client cancelled is not run again.
+    var input = Data()
+    for call in unsent.filter({ !helper.isCancelled($0.ticket) }).sorted(by: { $0.order < $1.order }) {
+      input.append(Data(call.line.utf8))
+      input.append(0x0A)
+    }
+    input.append(inputLock.withLock { framer.remainder })
+    flush()
+    // The tools this process served are what the client knows now.
+    let state = HandoffState(clientName: currentClientName, toolsDigest: toolsDigest(), generation: handoff.generation + 1)
+    _ = execInstalledCommand(state: state, input: input, directories: directories)
+    inputLock.withLock { handingOff = false }
+  }
+
+  // After a handoff to a build with other tools, the client is told to list them again.
+  func announceToolChanges() {
+    if handoff.generation > 0, handoff.toolsDigest != toolsDigest() { send(["method": "notifications/tools/list_changed"]) }
+  }
 
   func handle(line: String) {
     let parsed: Any
@@ -59,9 +143,9 @@ final class MCPServer: @unchecked Sendable {
     let params = message["params"] as? JSON
     let metaValue = params?["_meta"]
     if message["id"] != nil, let fields = metaValue as? JSON, fields["\(meta)protocolVersion"] != nil {
-      handleStateless(message, fields)
+      handleStateless(message, fields, line: line)
     } else {
-      handleHandshake(message)
+      handleHandshake(message, line: line)
     }
   }
 
@@ -90,7 +174,7 @@ final class MCPServer: @unchecked Sendable {
   // MARK: Revisions
 
   // A request that names its revision in `_meta` is served on its own, without initialize.
-  private func handleStateless(_ message: JSON, _ fields: JSON) {
+  private func handleStateless(_ message: JSON, _ fields: JSON, line: String) {
     let id = message["id"]!
     let method = message["method"] as? String
     guard let requested = fields["\(meta)protocolVersion"] as? String else {
@@ -114,17 +198,17 @@ final class MCPServer: @unchecked Sendable {
     }
     switch method {
     case "server/discover":
-      reply(["supportedVersions": supportedProtocols, "capabilities": ["tools": [:] as JSON], "instructions": instructions].merging(cacheHint) { $1 })
+      reply(["supportedVersions": supportedProtocols, "capabilities": toolCapabilities, "instructions": instructions].merging(cacheHint) { $1 })
     case "tools/list":
       reply(["tools": tools.map(\.listed)].merging(cacheHint) { $1 })
     case "tools/call":
-      handleToolCall(message, reply: reply)
+      handleToolCall(message, line: line, reply: reply)
     default:
       send(["id": id, "error": ["code": -32601, "message": "Method not found: \(method ?? "undefined")"]])
     }
   }
 
-  private func handleHandshake(_ message: JSON) {
+  private func handleHandshake(_ message: JSON, line: String) {
     let id = message["id"]
     let method = message["method"] as? String
     let params = message["params"] as? JSON
@@ -135,17 +219,17 @@ final class MCPServer: @unchecked Sendable {
       // Unknown or stateless revisions get the newest one that opens with initialize.
       let requested = params?["protocolVersion"] as? String
       let version = requested.flatMap { handshakeProtocols.contains($0) ? $0 : nil } ?? handshakeProtocols[0]
-      send(["id": id ?? NSNull(), "result": ["protocolVersion": version, "capabilities": ["tools": [:] as JSON], "serverInfo": serverInfo, "instructions": instructions]])
+      send(["id": id ?? NSNull(), "result": ["protocolVersion": version, "capabilities": toolCapabilities, "serverInfo": serverInfo, "instructions": instructions]])
     case "ping":
       send(["id": id ?? NSNull(), "result": [:] as JSON])
     case "tools/list":
       send(["id": id ?? NSNull(), "result": ["tools": tools.map(\.listed)]])
     case "tools/call":
-      if let id { handleToolCall(message) { self.send(["id": id, "result": $0]) } }
+      if let id { handleToolCall(message, line: line) { self.send(["id": id, "result": $0]) } }
     case "notifications/cancelled":
       // Only the call it names; a late cancellation finds nothing and ends nothing.
       let key = params?["requestId"].map(idKey)
-      helper.cancel(lock.withLock { key.flatMap { callsInProgress[$0] } })
+      helper.cancel(lock.withLock { key.flatMap { callsInProgress[$0]?.ticket } })
     default:
       if let id, let method { send(["id": id, "error": ["code": -32601, "message": "Method not found: \(method)"]]) }
     }
@@ -159,7 +243,7 @@ final class MCPServer: @unchecked Sendable {
 
   // MARK: Tools
 
-  private func handleToolCall(_ message: JSON, reply: @escaping (JSON) -> Void) {
+  private func handleToolCall(_ message: JSON, line: String, reply: @escaping (JSON) -> Void) {
     let id = message["id"]!
     let params = message["params"] as? JSON
     guard let name = params?["name"] as? String, toolsByName[name] != nil else {
@@ -176,7 +260,10 @@ final class MCPServer: @unchecked Sendable {
     }
     let ticket = Ticket()
     let key = idKey(id)
-    lock.withLock { callsInProgress[key] = ticket }
+    lock.withLock {
+      callsReceived += 1
+      callsInProgress[key] = (ticket, line, callsReceived)
+    }
     calls.async {
       defer { self.lock.withLock { _ = self.callsInProgress.removeValue(forKey: key) } }
       do {
@@ -209,7 +296,7 @@ final class MCPServer: @unchecked Sendable {
 }
 
 // Runs the server until the client closes stdin, its output fails, or a signal asks it to stop.
-func runMCPServer() -> Never {
+func runMCPServer(arguments: [String]) -> Never {
   let testHome = ProcessInfo.processInfo.environment["HELPER_TEST_HOME"]
   let directories = Directories(testHome: testHome)
   let managesHelper = ProcessInfo.processInfo.environment["HELPER_NO_START"] == nil
@@ -226,7 +313,8 @@ func runMCPServer() -> Never {
     server.flush()
     exit(0)
   }
-  server = MCPServer(directories: directories, managesHelper: managesHelper, expectedBuild: appBuildOfOwnBundle(),
+  let resumed = readResume(arguments: arguments)
+  server = MCPServer(directories: directories, managesHelper: managesHelper, expectedBuild: appBuildOfOwnBundle(), resumed: resumed?.0,
                      // The output queue itself reports the failure, so the shutdown, which waits for that queue, runs elsewhere.
                      onOutputFailure: { DispatchQueue.global().async { shutdown() } })
   for signalNumber in [SIGINT, SIGTERM, SIGHUP] {
@@ -236,15 +324,9 @@ func runMCPServer() -> Never {
     source.resume()
     retainedSignalSources.append(source)
   }
+  server.announceToolChanges()
   let reader = Thread {
-    var framer = LineFramer()
-    var buffer = [UInt8](repeating: 0, count: 65536)
-    while true {
-      let count = Darwin.read(STDIN_FILENO, &buffer, buffer.count)
-      if count < 0, errno == EINTR { continue }
-      guard count > 0 else { break }
-      for line in framer.lines(in: Data(buffer[0..<count])) { server.handle(line: line) }
-    }
+    server.readInput(after: resumed?.1 ?? Data())
     shutdown()
   }
   reader.start()

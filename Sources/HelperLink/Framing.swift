@@ -8,6 +8,9 @@ public struct LineFramer: Sendable {
 
   public init() {}
 
+  // What arrived after the last complete line, kept for whoever reads on.
+  public var remainder: Data { pending }
+
   // The complete lines in `chunk` and those before it, without the newline and a trailing `\r`; blank lines are
   // skipped. A frame without its newline waits for the next chunk.
   public mutating func lines(in chunk: Data) -> [String] {
