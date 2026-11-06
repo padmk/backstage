@@ -4,15 +4,28 @@
 import AppKit
 import ApplicationServices
 
-// An app that has not changed within this time after an action is taken to have ignored it.
-private let firstChangeSeconds = 1.0
-// After a change, the app counts as settled once it has stayed the same for this long.
-private let quietSeconds = 0.3
 // The longest an action waits for the app to settle, for example while it shows a spinner.
 private let settleLimitSeconds = 5.0
-private let pollSeconds = 0.1
 // Each read while waiting gets at most this long, so a slow app cannot hold the reply for the full read limit.
 private let pollReadSeconds = 2.0
+
+// An app that has not changed within this time after an action is taken to have ignored it.
+private let firstChangeSeconds = 1.0
+
+// For an app that reports its changes through Accessibility notifications, reads follow them: a read once they
+// pause, and a last one to confirm. An action can take effect later than the app's first answer, so the wait for a
+// first change stays firstChangeSeconds.
+private let noticePauseSeconds = 0.05
+// While notifications keep coming, a read at least this often, so a busy app is still compared.
+private let readEverySeconds = 0.25
+// After a change, the app counts as settled when a read this much later shows the same.
+private let confirmSeconds = 0.1
+// Before a first change, a read at least this often, also when the app reports nothing.
+private let silentSeconds = 0.25
+
+// For an app that has never sent one, and when notifications cannot be watched, reads on a fixed beat instead.
+private let pollSeconds = 0.1
+private let quietSeconds = 0.3
 // The last reads a session keeps for change reports, across the apps it works in.
 private let maxRememberedReads = 32
 
@@ -34,6 +47,66 @@ enum AppLocks {
     while !lock.lock(before: Date().addingTimeInterval(0.1)) { try connection.throwIfCancelled() }
     defer { lock.unlock() }
     return try body()
+  }
+}
+
+private let watchedNotifications = [
+  kAXValueChangedNotification, kAXUIElementDestroyedNotification, kAXCreatedNotification, kAXTitleChangedNotification,
+  kAXFocusedUIElementChangedNotification, kAXFocusedWindowChangedNotification, kAXMainWindowChangedNotification,
+  kAXWindowCreatedNotification, kAXSheetCreatedNotification, kAXLayoutChangedNotification, kAXResizedNotification,
+  kAXSelectedChildrenChangedNotification, kAXSelectedRowsChangedNotification, kAXSelectedTextChangedNotification,
+  kAXRowCountChangedNotification, kAXMenuOpenedNotification, kAXMenuClosedNotification,
+]
+
+// The Accessibility notifications an app sends while an action takes effect, delivered on the thread that made the
+// watch, in a run loop mode of its own, so nothing else runs while it waits.
+final class ChangeWatch {
+  private static let lock = NSLock()
+  // Apps seen sending a notification, whose silence therefore means nothing changed.
+  private static var notifying: Set<String> = []
+
+  let bundleId: String
+  private let observer: AXObserver
+  private let application: AXUIElement
+  private let runLoop = CFRunLoopGetCurrent()!
+  private let mode = CFRunLoopMode("backstage.change-watch" as CFString)
+  private(set) var count = 0
+  private(set) var lastAt = Date.distantPast
+
+  init?(app: AppIdentity) {
+    var made: AXObserver?
+    let callback: AXObserverCallback = { _, _, _, context in
+      guard let context else { return }
+      Unmanaged<ChangeWatch>.fromOpaque(context).takeUnretainedValue().noticed()
+    }
+    guard AXObserverCreate(app.pid, callback, &made) == .success, let made else { return nil }
+    bundleId = app.bundleId
+    observer = made
+    application = AXUIElementCreateApplication(app.pid)
+    let context = Unmanaged.passUnretained(self).toOpaque()
+    let added = watchedNotifications.filter { AXObserverAddNotification(observer, application, $0 as CFString, context) == .success }
+    guard !added.isEmpty else { return nil }
+    CFRunLoopAddSource(runLoop, AXObserverGetRunLoopSource(observer), mode)
+  }
+
+  deinit {
+    for name in watchedNotifications { AXObserverRemoveNotification(observer, application, name as CFString) }
+    CFRunLoopRemoveSource(runLoop, AXObserverGetRunLoopSource(observer), mode)
+  }
+
+  private func noticed() {
+    if count == 0 { _ = Self.lock.withLock { Self.notifying.insert(bundleId) } }
+    count += 1
+    lastAt = Date()
+  }
+
+  // Whether the app's notifications can be relied on: it sent one now or before.
+  var appNotifies: Bool { count > 0 || Self.lock.withLock { Self.notifying.contains(bundleId) } }
+
+  // Waits until `deadline`, or less when a notification arrives.
+  func wait(until deadline: Date) {
+    let seconds = deadline.timeIntervalSinceNow
+    if seconds > 0 { _ = CFRunLoopRunInMode(mode, seconds, true) }
   }
 }
 
@@ -104,6 +177,7 @@ private func showsNewBusyIndicator(_ lines: [String], comparedTo before: Set<Str
 // for a moment, so a spinner or a half-drawn view is not reported as the result.
 func acting(app: AppIdentity, session: ApprovalSession, _ action: () throws -> JSON) throws -> JSON {
   let frontBefore = onMain { NSWorkspace.shared.frontmostApplication }
+  let watch = ChangeWatch(app: app)
   var result: JSON
   do {
     result = try action()
@@ -113,11 +187,12 @@ func acting(app: AppIdentity, session: ApprovalSession, _ action: () throws -> J
   }
   defer { _ = returnFocus(to: frontBefore, from: app.pid) }
   if returnFocus(to: frontBefore, from: app.pid) { result["focus_returned"] = true }
-  result["state"] = observeChange(app: app, session: session)
+  result["state"] = observeChange(app: app, session: session, watch: watch)
   return result
 }
 
-func observeChange(app: AppIdentity, session: ApprovalSession) -> JSON {
+// `watch` was made before the action, so it holds what the app reported while the action ran.
+func observeChange(app: AppIdentity, session: ApprovalSession, watch: ChangeWatch?) -> JSON {
   guard let last = session.lock.withLock({ session.lastReads[app.pid] }) else {
     return ["unknown": true, "reason": "Nothing was read before this action, so changes cannot be reported."] as JSON
   }
@@ -130,8 +205,29 @@ func observeChange(app: AppIdentity, session: ApprovalSession) -> JSON {
   var afterFingerprints: [Int: [String?]] = [:]
   var lastChange: Date?
   var settled = true
+  var lastRead = started
+  var noticesAtRead = 0
   while true {
-    sleep(seconds: pollSeconds)
+    let followsNotices = watch?.appNotifies == true
+    if let watch, followsNotices {
+      // The next read: once notifications pause, or after a quiet stretch that confirms or ends the wait.
+      while true {
+        let pending = watch.count != noticesAtRead
+        let next = pending
+          ? min(watch.lastAt.addingTimeInterval(noticePauseSeconds), lastRead.addingTimeInterval(readEverySeconds))
+          : lastRead.addingTimeInterval(lastChange == nil ? silentSeconds : confirmSeconds)
+        let due = min(next, started.addingTimeInterval(settleLimitSeconds))
+        if Date() >= due { break }
+        watch.wait(until: due)
+      }
+    } else if let watch {
+      // Still delivers notifications, which show whether this app sends them.
+      let due = Date().addingTimeInterval(pollSeconds)
+      while Date() < due { watch.wait(until: due) }
+    } else {
+      sleep(seconds: pollSeconds)
+    }
+    noticesAtRead = watch?.count ?? 0
     let elapsed = Date().timeIntervalSince(started)
     let read: WindowRead
     do {
@@ -145,6 +241,7 @@ func observeChange(app: AppIdentity, session: ApprovalSession) -> JSON {
       return ["unknown": true, "reason": "The app answered only in part: \(partial)"] as JSON
     }
     let now = Date()
+    lastRead = now
     if read.tree.lines != after {
       after = read.tree.lines
       lastChange = now
@@ -155,7 +252,8 @@ func observeChange(app: AppIdentity, session: ApprovalSession) -> JSON {
       if waited >= firstChangeSeconds { break }
       continue
     }
-    if now.timeIntervalSince(changedAt) >= quietSeconds, !showsNewBusyIndicator(after, comparedTo: before) { break }
+    let quiet = followsNotices ? confirmSeconds : quietSeconds
+    if now.timeIntervalSince(changedAt) >= quiet, !showsNewBusyIndicator(after, comparedTo: before) { break }
     if waited >= settleLimitSeconds {
       settled = false
       break

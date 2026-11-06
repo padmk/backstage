@@ -3,8 +3,8 @@
 // state nobody has seen. Nothing is retried. The effect of all of them is reported once, at the end.
 
 import AppKit
+import HelperLink
 
-let maxSteps = 20
 // Gives the app a moment to take each step in before the next one arrives.
 private let stepPauseSeconds = 0.15
 
@@ -13,6 +13,7 @@ func runActions(app: AppIdentity, params: JSON, session: ApprovalSession) throws
     throw HelperError(code: "invalid_request", message: "steps must list 1 to \(maxSteps) actions.")
   }
   let frontBefore = onMain { NSWorkspace.shared.frontmostApplication }
+  let watch = ChangeWatch(app: app)
   // Also when a cancel ends the steps early.
   defer { _ = returnFocus(to: frontBefore, from: app.pid) }
   var done: [JSON] = []
@@ -49,6 +50,6 @@ func runActions(app: AppIdentity, params: JSON, session: ApprovalSession) throws
     result["failed"] = failure
     result["note"] = "Steps after the failed one did not run. Read the state before going on."
   }
-  result["state"] = observeChange(app: app, session: session)
+  result["state"] = observeChange(app: app, session: session, watch: watch)
   return result
 }

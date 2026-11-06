@@ -5,11 +5,16 @@
 import Foundation
 
 private let maxWaitSeconds = 30.0
+// An app that reports its changes is read again as soon as it reports one (those that arrive during a read lead to
+// one more), and otherwise this often in case it changed without saying so; one that never has is read every
+// pollSeconds.
 private let pollSeconds = 0.25
+private let notifyingPollSeconds = 1.0
+// An app that never stops notifying, for example while it animates, is read at most this often.
+private let minReadGapSeconds = 0.05
 
 func waitFor(app: AppIdentity, params: JSON, connection: Connection) throws -> JSON {
-  let text = try string(params, "text")
-  guard !text.isEmpty else { throw HelperError(code: "invalid_request", message: "text is empty.") }
+  let text = try nonEmptyString(params, "text")
   let role = params["role"] as? String
   let gone = params["gone"] as? Bool == true
   let timeout = min(max((params["timeout"] as? NSNumber)?.doubleValue ?? 10, 0.5), maxWaitSeconds)
@@ -17,8 +22,10 @@ func waitFor(app: AppIdentity, params: JSON, connection: Connection) throws -> J
   var read = params
   for key in ["text", "role", "gone", "timeout"] { read[key] = nil }
   let started = Date()
+  let watch = ChangeWatch(app: app)
   while true {
     try connection.throwIfCancelled()
+    let readAt = Date()
     let (line, complete): (String?, Bool) = try AppLocks.with(app.bundleId, connection: connection) {
       try ApprovalGate.require(app, session: session)
       try requireSameProcess(app)
@@ -41,6 +48,19 @@ func waitFor(app: AppIdentity, params: JSON, connection: Connection) throws -> J
       if !complete { result["note"] = "The app answered only in part, so whether the text is there is not certain. Read a smaller area with root." }
       return result
     }
-    sleep(seconds: pollSeconds)
+    guard let watch else {
+      sleep(seconds: pollSeconds)
+      continue
+    }
+    let deadline = min(Date().addingTimeInterval(watch.appNotifies ? notifyingPollSeconds : pollSeconds),
+                       started.addingTimeInterval(timeout))
+    let seen = watch.count
+    // In steps of pollSeconds at most, so a cancel is noticed.
+    while watch.count == seen, Date() < deadline {
+      try connection.throwIfCancelled()
+      watch.wait(until: min(Date().addingTimeInterval(pollSeconds), deadline))
+    }
+    let earliest = min(readAt.addingTimeInterval(minReadGapSeconds), deadline)
+    while Date() < earliest { watch.wait(until: earliest) }
   }
 }
