@@ -190,6 +190,30 @@ final class ElementTable {
   private var nextNumber = 1
   private var reads = 0
 
+  // The number the next new element gets, so a read can tell the numbers it gave out.
+  var nextFreeNumber: Int { lock.withLock { nextNumber } }
+
+  // Gives an element the number another one had, for an app that handed out a new element for an unchanged one.
+  // Only when the old element no longer answers, and keeping what the agent was shown of it, so an element whose
+  // content changed is still refused as stale.
+  func carryNumber(_ old: Int, over new: Int, pid: pid_t) -> Bool {
+    lock.withLock {
+      // The whole of what the element is must match, not only its line, which can hide part of a label.
+      guard old != new, let previous = entries[old], let current = entries[new], previous.pid == pid, current.pid == pid,
+        previous.fingerprint == current.fingerprint else { return false }
+      var role: CFTypeRef?
+      guard AXUIElementCopyAttributeValue(previous.element, kAXRoleAttribute as CFString, &role) == .invalidUIElement else { return false }
+      entries[new] = nil
+      entries[old] = Entry(pid: pid, element: current.element, fingerprint: previous.fingerprint, seenAt: current.seenAt)
+      for (hash, number) in [(CFHash(previous.element), old), (CFHash(current.element), new)] {
+        numbersByHash[hash]?.removeAll { $0.number == number }
+        if numbersByHash[hash]?.isEmpty == true { numbersByHash[hash] = nil }
+      }
+      numbersByHash[CFHash(current.element), default: []].append((current.element, old))
+      return true
+    }
+  }
+
   // Only before the first element is numbered, so a number already given never changes meaning.
   func startNumbering(at first: Int) {
     lock.withLock { if entries.isEmpty, nextNumber == 1, first > 0 { nextNumber = first } }

@@ -106,6 +106,64 @@ func renderTree(roots: [AXUIElement], pid: pid_t, table: ElementTable, maxElemen
   return tree
 }
 
+// MARK: Numbers that last
+
+private struct NumberedLine {
+  let depth: Int
+  let number: Int
+  let content: String
+}
+
+private func parse(_ line: String) -> NumberedLine? {
+  let indent = line.prefix { $0 == " " }.count
+  let rest = line.dropFirst(indent)
+  guard let space = rest.firstIndex(of: " "), let number = Int(rest[..<space]) else { return nil }
+  return NumberedLine(depth: indent / 2, number: number, content: String(rest[rest.index(after: space)...]))
+}
+
+// Each line's parent, as a line index, from the indentation.
+private func parents(_ lines: [NumberedLine]) -> [Int?] {
+  var stack: [(depth: Int, index: Int)] = []
+  return lines.enumerated().map { index, line in
+    while let top = stack.last, top.depth >= line.depth { stack.removeLast() }
+    defer { stack.append((line.depth, index)) }
+    return stack.last?.index
+  }
+}
+
+// Some apps, such as System Settings, hand out new elements for unchanged ones on every read, so the elements an
+// agent was shown got new numbers and the old ones went stale. A newly numbered element takes back the number of
+// the one it replaces, when nothing else could be meant: it has an identifier, its line and its parent are the
+// same as in the last complete read of the same place, no other line there or among its new siblings says the
+// same, and the old element no longer answers. Anything less certain keeps its new number.
+func carryNumbers(_ tree: inout RenderedTree, previous: [String], mintedFrom: Int, table: ElementTable, pid: pid_t) {
+  guard tree.partialReason == nil else { return }
+  let before = previous.compactMap(parse)
+  let beforeParents = parents(before)
+  var earlier: [String: [Int]] = [:]
+  for (index, line) in before.enumerated() where line.content.contains(" id=\"") {
+    let parent = beforeParents[index].map { before[$0].number } ?? 0
+    earlier["\(parent)|\(line.content)", default: []].append(line.number)
+  }
+  var lines = tree.lines.compactMap(parse)
+  guard lines.count == tree.lines.count else { return }
+  let lineParents = parents(lines)
+  var siblings: [String: Int] = [:]
+  for (index, line) in lines.enumerated() { siblings["\(lineParents[index] ?? -1)|\(line.content)", default: 0] += 1 }
+  var used = Set(lines.map(\.number))
+  for index in lines.indices {
+    let line = lines[index]
+    guard line.number >= mintedFrom, line.content.contains(" id=\""), siblings["\(lineParents[index] ?? -1)|\(line.content)"] == 1 else { continue }
+    let parent = lineParents[index].map { lines[$0].number } ?? 0
+    guard let candidates = earlier["\(parent)|\(line.content)"], candidates.count == 1, let old = candidates.first,
+      !used.contains(old), table.carryNumber(old, over: line.number, pid: pid) else { continue }
+    used.insert(old)
+    tree.fingerprints[old] = tree.fingerprints.removeValue(forKey: line.number)
+    lines[index] = NumberedLine(depth: line.depth, number: old, content: line.content)
+    tree.lines[index] = String(repeating: "  ", count: line.depth) + "\(old) \(line.content)"
+  }
+}
+
 // Open context menus are children of the app rather than of a window.
 func openMenus(of application: AXUIElement) -> [AXUIElement] {
   ((attribute(application, kAXChildrenAttribute) as? [AXUIElement]) ?? []).filter {
