@@ -61,7 +61,7 @@ private func register() -> Bool {
 }
 
 private func openPane(_ pane: String) {
-  _ = try? runProcess("/usr/bin/open", ["x-apple.systempreferences:com.apple.preference.security?\(pane)"], timeout: 15, allowFailure: true)
+  _ = try? runProcess("/usr/bin/open", [Product.privacyPaneURL(pane)], timeout: 15, allowFailure: true)
 }
 
 private func status(_ helper: HelperClient) throws -> JSON {
@@ -143,7 +143,7 @@ private func setup(register shouldRegister: Bool) throws -> Int32 {
     _ = try? helper.request("quit")
     helper.close()
     Thread.sleep(forTimeInterval: 0.5)
-    _ = try? runProcess("/usr/bin/open", [Product.installedAppPath, "--args", "--tab", "apps"], timeout: 15, allowFailure: true)
+    _ = try? runProcess("/usr/bin/open", [Product.installedAppPath, "--args", Product.tabArgument, "apps"], timeout: 15, allowFailure: true)
     printLine("\(Product.appName) is open: on the Apps tab, add the apps agents may use, or turn on Allow every app. macOS asks once for what an added app's ready operations need. Screen Recording, for screenshots, is optional, on the Setup tab.")
   }
   printLine("For another MCP client, use this stdio server:")
@@ -239,7 +239,7 @@ private func uninstall(reset: Bool) throws -> Int32 {
     }
     _ = try? runProcess("/usr/bin/defaults", ["delete", Product.bundleIdentifier], timeout: 15, allowFailure: true)
     _ = try? runProcess("/usr/bin/tccutil", ["reset", "All", Product.bundleIdentifier], timeout: 30, allowFailure: true)
-    printLine("Removed the settings and the macOS permissions of \(Product.appName).")
+    printLine("Removed the macOS permissions of \(Product.appName) and what macOS keeps for it, such as window sizes.")
   } else {
     printLine("The app list, the settings and the signing identity stay, so a later setup keeps the permissions. To remove them too, run: \(Product.commandName) uninstall --reset")
   }

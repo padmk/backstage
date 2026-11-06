@@ -28,11 +28,10 @@ private func selectedRange(of element: AXUIElement) -> CFRange? {
 
 func selectText(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
   let element = try session.table.element(integer(params, "element"), pid: app.pid)
-  let text = try string(params, "text")
+  let text = try nonEmptyString(params, "text")
   let prefix = params["prefix"] as? String ?? ""
   let suffix = params["suffix"] as? String ?? ""
   let place = params["place"] as? String ?? "select"
-  guard !text.isEmpty else { throw HelperError(code: "invalid_request", message: "text is empty.") }
   guard ["select", "before", "after"].contains(place) else {
     throw HelperError(code: "invalid_request", message: "place must be select, before or after.")
   }

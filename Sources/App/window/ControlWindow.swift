@@ -3,6 +3,7 @@
 
 import AppKit
 import SwiftUI
+import HelperLink
 
 enum ControlTab: String, CaseIterable, Identifiable {
   case apps, setup, activity
@@ -246,7 +247,7 @@ func appImage(bundleId: String) -> Image {
 }
 
 func openPrivacyPane(_ pane: String) {
-  if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { NSWorkspace.shared.open(url) }
+  if let url = URL(string: Product.privacyPaneURL(pane)) { NSWorkspace.shared.open(url) }
 }
 
 // MARK: The window

@@ -1,4 +1,4 @@
-// The settings people change in the Backstage window, kept in the helper's own defaults.
+// The settings people change in the Backstage window, in settings.json next to the app list.
 
 import Foundation
 import HelperLink
@@ -9,33 +9,53 @@ enum Preferences {
   private static let tabKey = "controlTab"
   private static let lockedWindowsKey = "worksInWindowsWhileLocked"
 
+  private static let lock = NSLock()
+  private static var path: String { Configuration.directories.settingsPath }
+
+  // Read on every use, so an edit to the file applies to the next request as the switches in the window do.
+  private static func read() -> JSON {
+    guard let data = FileManager.default.contents(atPath: path),
+      let settings = try? JSONSerialization.jsonObject(with: data) as? JSON else { return [:] }
+    return settings
+  }
+
+  private static func value<T>(_ key: String) -> T? { lock.withLock { read()[key] as? T } }
+
+  private static func set(_ key: String, _ value: Any) {
+    lock.withLock {
+      var settings = read()
+      settings[key] = value
+      guard let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) else { return }
+      try? writePrivateFile(data, to: path)
+    }
+  }
+
   // Only the copy in Applications keeps running, shows a menu bar item or starts at login, so test and
   // development copies elsewhere never do.
   static var isInstalledCopy: Bool { Product.appLocations.contains(Bundle.main.bundlePath) }
 
   static var showsMenuBarItem: Bool {
-    get { UserDefaults.standard.bool(forKey: menuBarKey) }
-    set { UserDefaults.standard.set(newValue, forKey: menuBarKey) }
+    get { value(menuBarKey) ?? false }
+    set { set(menuBarKey, newValue) }
   }
 
   // Every app except those never available, without the list. Off by default.
   static var allowsEveryApp: Bool {
-    get { UserDefaults.standard.bool(forKey: everyAppKey) }
-    set { UserDefaults.standard.set(newValue, forKey: everyAppKey) }
+    get { value(everyAppKey) ?? false }
+    set { set(everyAppKey, newValue) }
   }
 
   // Screenshots and input by coordinates while the screen is locked, through private window server calls and
   // without verification. Off by default.
   static var worksInWindowsWhileLocked: Bool {
-    get { UserDefaults.standard.bool(forKey: lockedWindowsKey) }
-    set { UserDefaults.standard.set(newValue, forKey: lockedWindowsKey) }
+    get { value(lockedWindowsKey) ?? false }
+    set { set(lockedWindowsKey, newValue) }
   }
 
   static var lastTab: String? {
-    get { UserDefaults.standard.string(forKey: tabKey) }
-    set { UserDefaults.standard.set(newValue, forKey: tabKey) }
+    get { value(tabKey) }
+    set { set(tabKey, newValue ?? NSNull()) }
   }
-
   // With either on, the helper stays running instead of stopping when no agent has used it for a while.
   static var keepsRunning: Bool {
     guard isInstalledCopy else { return false }

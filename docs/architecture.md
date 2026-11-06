@@ -111,6 +111,6 @@ Adding an app over the socket, from the command line or by an agent, only asks: 
 | `~/.config/backstage/approvals.json` | The app list (`0600`) |
 | `~/.local/share/backstage/` | The signing keychain and its certificate hash |
 | `~/.local/state/backstage/` | The socket, the start lock and the activity log `decisions.jsonl` |
-| `~/Library/Preferences/app.foreverbeta.backstage.plist` | The window's switches: Allow every app, Windows while locked, Open at login and the menu bar item |
+| `~/.config/backstage/settings.json` | The window's switches: Allow every app, Windows while locked and the menu bar item, and the last tab (`0600`) |
 
-The directories are `0700`. The `XDG_*` variables are not read, because the helper also starts from launchd, at login or from the Finder, without the shell's environment, and must find the same files. The bundle id, `app.foreverbeta.backstage`, stays fixed: macOS ties the permissions to it, so changing it would ask every user to grant everything again.
+The directories are `0700`. Outside them, macOS keeps what it owns: the permissions, the login item (Open at login) and the app's defaults, where AppKit alone stores things such as the size of the open panel. The `XDG_*` variables are not read, because the helper also starts from launchd, at login or from the Finder, without the shell's environment, and must find the same files. The bundle id, `app.foreverbeta.backstage`, stays fixed: macOS ties the permissions to it, so changing it would ask every user to grant everything again.

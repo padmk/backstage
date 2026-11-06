@@ -17,6 +17,12 @@ func string(_ params: JSON, _ key: String) throws -> String {
   return value
 }
 
+func nonEmptyString(_ params: JSON, _ key: String) throws -> String {
+  let value = try string(params, key)
+  guard !value.isEmpty else { throw HelperError(code: "invalid_request", message: "\(key) is empty.") }
+  return value
+}
+
 func integer(_ params: JSON, _ key: String) throws -> Int {
   guard let value = params[key] as? Int else {
     throw HelperError(code: "invalid_request", message: "\(key) must be a whole number.")
@@ -33,6 +39,18 @@ func number(_ params: JSON, _ key: String) throws -> Double {
 
 func sleep(seconds: Double) {
   Thread.sleep(forTimeInterval: seconds)
+}
+
+// Replaces the file at `path` with `data` in one step, readable only by its owner.
+func writePrivateFile(_ data: Data, to path: String) throws {
+  let temporary = path + ".\(getpid())"
+  guard FileManager.default.createFile(atPath: temporary, contents: data, attributes: [.posixPermissions: 0o600]) else {
+    throw HelperError(code: "store_failed", message: "Could not write \(temporary).")
+  }
+  guard rename(temporary, path) == 0 else {
+    unlink(temporary)
+    throw HelperError(code: "store_failed", message: "Could not replace \(path).")
+  }
 }
 
 // The product's name and directories come from HelperLink, which the command shares.
