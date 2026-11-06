@@ -98,10 +98,10 @@ final class FakeHelper: @unchecked Sendable {
       $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
     }
     guard bound == 0, listen(listener, 8) == 0 else { throw TestFailure("Could not listen on \(home.socketPath)") }
-    let listener = self.listener
+    let listening = self.listener
     Thread { [weak self] in
       while true {
-        let client = accept(listener, nil, nil)
+        let client = accept(listening, nil, nil)
         guard client >= 0, let self else { return }
         self.lock.withLock { self.clients.append(client) }
         readLines(client) { text in
