@@ -8,23 +8,37 @@ import ApplicationServices
 
 private let maxMenuDepth = 12
 
-// The Share menu's title in English and in the language AppKit shows, since it has no identifier of its own.
-private let shareTitles: Set<String> = {
-  var titles: Set<String> = ["Share"]
+// The Services and Share menus' titles in English and in the language AppKit shows, since they have no identifier
+// of their own; a context menu carries them too, away from the menu bar.
+private let handOffTitles: Set<String> = {
+  var titles: Set<String> = ["Share", "Services"]
   if let appKit = Bundle(identifier: "com.apple.AppKit") {
-    for table in ["MenuCommands", "SharingServices", "Localizable"] {
-      let localized = appKit.localizedString(forKey: "Share", value: "", table: table)
-      if !localized.isEmpty, localized != "Share" { titles.insert(localized) }
+    for key in ["Share", "Services"] {
+      for table in ["MenuCommands", "SharingServices", "Localizable", "ServicesMenu"] {
+        let localized = appKit.localizedString(forKey: key, value: "", table: table)
+        if !localized.isEmpty, localized != key { titles.insert(localized) }
+      }
     }
   }
   return titles
 }()
 
-// Why `element` may not be acted on, or nil. It belongs to the app's menu bar when one of its ancestors is.
+// Why `element` may not be acted on, or nil: an item in the Apple menu, or under a Services or Share submenu,
+// whether in the menu bar or in a context menu.
 func restrictedMenu(_ element: AXUIElement, in application: AXUIElement) -> String? {
-  guard let bar = attribute(application, kAXMenuBarAttribute).map({ $0 as! AXUIElement }) else { return nil }
   var chain = [element]
   var current = element
+  while chain.count < maxMenuDepth, let parent = attribute(current, kAXParentAttribute).map({ $0 as! AXUIElement }) {
+    chain.append(parent)
+    current = parent
+  }
+  let items = chain.filter { stringAttribute($0, kAXRoleAttribute) == kAXMenuItemRole && hasSubmenu($0) }
+  if let handOff = items.first(where: { handOffTitles.contains(stringAttribute($0, kAXTitleAttribute) ?? "") }) {
+    return stringAttribute(handOff, kAXTitleAttribute) == "Share" ? "the Share menu" : "a Services or Share menu"
+  }
+  guard let bar = attribute(application, kAXMenuBarAttribute).map({ $0 as! AXUIElement }) else { return nil }
+  chain = [element]
+  current = element
   while chain.count < maxMenuDepth, let parent = attribute(current, kAXParentAttribute).map({ $0 as! AXUIElement }) {
     if CFEqual(parent, bar) {
       let tops = (attribute(bar, kAXChildrenAttribute) as? [AXUIElement]) ?? []
@@ -34,9 +48,6 @@ func restrictedMenu(_ element: AXUIElement, in application: AXUIElement) -> Stri
       // The app menu's only submenu is Services; an item inside it is a service.
       if index == 1, items.contains(where: hasSubmenu) {
         return "the Services menu"
-      }
-      if items.contains(where: { shareTitles.contains(stringAttribute($0, kAXTitleAttribute) ?? "") && hasSubmenu($0) }) {
-        return "the Share menu"
       }
       return nil
     }

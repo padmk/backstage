@@ -277,6 +277,10 @@ private func serve(_ descriptor: Int32) {
     while let newline = pending.firstIndex(of: 0x0a) {
       let line = Data(pending[pending.startIndex..<newline])
       pending = Data(pending[(newline + 1)...])
+      guard line.count <= maxFrameBytes else {
+        write(["id": NSNull(), "error": ["code": "request_too_large", "message": "A request is larger than \(maxFrameBytes >> 20) MB."]], to: connection)
+        continue
+      }
       guard let request = try? JSONSerialization.jsonObject(with: line) as? JSON else {
         write(["id": NSNull(), "error": ["code": "invalid_request", "message": "Not a JSON object."]], to: connection)
         continue
