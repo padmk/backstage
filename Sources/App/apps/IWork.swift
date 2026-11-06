@@ -19,12 +19,17 @@ private let prelude = #"""
     if (count > 1) fail('ambiguous', 'Several open documents are named ' + query + '. Give its id.');
     return reachable(App.documents.byId(matches[0].id()));
   }
-  // A document already open from elsewhere, such as /tmp, is outside what operations may touch.
+  // A document already open from elsewhere, such as /tmp or Library, is outside what operations may touch; the
+  // rule is UserPaths.swift's, given as its prefixes.
   function reachable(document) {
     let path = '';
     try { path = document.file().toString(); } catch (error) {}
-    if (path !== '' && !(path.startsWith(args.home_dir + '/') || path.startsWith('/Volumes/'))) {
-      fail('not_allowed', 'This document is not in your home folder or on an external volume, so operations cannot reach it.');
+    const library = args.library_dir;
+    const inLibrary = path === library || path.startsWith(library + '/');
+    const allowed = inLibrary ? args.library_reachable.some((prefix) => path.startsWith(prefix))
+      : path.startsWith(args.home_dir + '/') || path.startsWith('/Volumes/');
+    if (path !== '' && !allowed) {
+      fail('not_allowed', 'This document is not in your home folder outside Library, in iCloud Drive or on an external volume, so operations cannot reach it.');
     }
     return document;
   }
@@ -37,7 +42,7 @@ private let prelude = #"""
 
 // The app is the one runOperation chose, passed as app_id; the definition's own id is the fallback.
 private func run(_ body: String, app: String, _ arguments: JSON, name: String, timeout: TimeInterval = 60) throws -> JSON {
-  try dictionary(runScript(prelude + body, arguments: arguments.merging(["app_id": app]) { current, _ in current }.merging(["home_dir": resolvedHome]) { _, home in home }, target: name, timeout: timeout), from: name)
+  try dictionary(runScript(prelude + body, arguments: arguments.merging(["app_id": app]) { current, _ in current }.merging(["home_dir": resolvedHome, "library_dir": libraryFolder, "library_reachable": reachableInLibrary]) { _, rule in rule }, target: name, timeout: timeout), from: name)
 }
 
 private let documentArgument = Argument(name: "document", kind: .string, required: true, description: "Document id or name from list_documents")

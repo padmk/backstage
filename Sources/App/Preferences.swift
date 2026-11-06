@@ -8,6 +8,7 @@ enum Preferences {
   private static let everyAppKey = "allowsEveryApp"
   private static let tabKey = "controlTab"
   private static let lockedWindowsKey = "worksInWindowsWhileLocked"
+  private static let askedAppDataKey = "askedAppData"
 
   private static let lock = NSLock()
   private static var path: String { Configuration.directories.settingsPath }
@@ -50,6 +51,12 @@ enum Preferences {
   static var worksInWindowsWhileLocked: Bool {
     get { value(lockedWindowsKey) ?? false }
     set { set(lockedWindowsKey, newValue) }
+  }
+
+  // The apps whose data macOS has been asked about, by bundle id; see appDataState.
+  static var askedAppData: Set<String> {
+    get { Set(value(askedAppDataKey) ?? [String]()) }
+    set { set(askedAppDataKey, newValue.sorted()) }
   }
 
   static var lastTab: String? {

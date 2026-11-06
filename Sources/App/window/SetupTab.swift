@@ -22,6 +22,20 @@ private struct OffInSettings: View {
   }
 }
 
+// macOS shows no prompt for another app's data, so the row leads to Full Disk Access, with a panel to drag
+// Backstage from into the list there.
+private struct AppDataAccess: View {
+  let grant: AppGrant
+  @ObservedObject var model: ControlModel
+
+  var body: some View {
+    Button(ControlTexts.addInSettings) {
+      model.request([grant])
+      showDragIntoSettings(for: grant)
+    }.buttonStyle(ChoiceStyle(kind: .primary, compact: true))
+  }
+}
+
 // Asking macOS is the only thing this row can do: once macOS has an answer, only System Settings changes it.
 private struct GrantRow: View {
   let grant: AppGrant
@@ -29,9 +43,13 @@ private struct GrantRow: View {
 
   var body: some View {
     let state = model.grants[grant.id] ?? .unknown
-    ControlRow(icon: .app(grant.appBundleId), title: grant.name,
-               detail: state == .unknown ? "\(grant.purpose) · \(ControlTexts.unknownUntilOpen)" : grant.purpose) {
-      if model.asking.contains(grant.id) {
+    let isAppData = if case .appData = grant.kind { true } else { false }
+    let detail = isAppData && state != .granted ? "\(grant.purpose) · \(ControlTexts.needsFullDiskAccess)"
+      : state == .unknown ? "\(grant.purpose) · \(ControlTexts.unknownUntilOpen)" : grant.purpose
+    ControlRow(icon: .app(grant.appBundleId), title: grant.name, detail: detail) {
+      if isAppData, state != .granted {
+        AppDataAccess(grant: grant, model: model)
+      } else if model.asking.contains(grant.id) {
         Text(ControlTexts.asking).font(.system(size: 12, weight: .semibold)).foregroundStyle(Palette.secondary)
       } else {
         switch state {
