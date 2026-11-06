@@ -129,14 +129,14 @@ private func setup(register shouldRegister: Bool) throws -> Int32 {
     throw HelperFailure(code: nil, message: "Run setup from \(Product.appName).app: build it with make app, then run build/\(Product.appName).app/\(Product.commandRelativePath) setup.")
   }
   let installer = Installer(directories: directories)
-  printLine("Installing \(Product.appName) into /Applications...")
+  printLine("Installing \(Product.appName) into \((installer.installTarget() as NSString).deletingLastPathComponent)...")
   _ = try installer.install(from: source)
   let (granted, already) = try grantPermissions(signingChanged: installer.takeSigningChange())
   var status: Int32 = granted ? 0 : 1
   if shouldRegister, !register() { status = 1 }
   if granted, already {
     // An update: the user is working in another app, so nothing comes forward.
-    printLine("\(Product.appName) is up to date. Its window, opened from /Applications, shows the apps agents may use and its settings.")
+    printLine("\(Product.appName) is up to date. Its window, opened from \(Product.installedAppPath), shows the apps agents may use and its settings.")
   } else if granted {
     // A running helper would only bring back its last tab, so a fresh one is opened on Apps.
     let helper = client()
@@ -166,6 +166,7 @@ private func doctor() -> Int32 {
   checks.append(("App", installed && current, appDetail))
   var screenRecording: Bool?
   var appAccess: [JSON] = []
+  var privateCalls: [String: Bool] = [:]
   if installed && current {
     let helper = client()
     do {
@@ -174,6 +175,7 @@ private func doctor() -> Int32 {
       checks.append(("Accessibility", accessibility, accessibility ? "granted" : "missing; run: \(commandHint()) setup"))
       screenRecording = reply["screen_recording"] as? Bool
       appAccess = reply["app_access"] as? [JSON] ?? []
+      privateCalls = reply["private_calls"] as? [String: Bool] ?? [:]
     } catch {
       checks.append(("App running", false, describe(error)))
     }
@@ -190,7 +192,58 @@ private func doctor() -> Int32 {
     let state = entry["state"] as? String ?? ""
     printLine("\(state == "granted" ? "ok  " : "--  ") \(entry["name"] as? String ?? ""): \(meaning[state] ?? state)")
   }
+  // Background delivery and capture while locked use private macOS calls; a missing one degrades, it does not fail.
+  let missing = privateCalls.filter { !$0.value }.keys.sorted()
+  if !privateCalls.isEmpty {
+    printLine("\(missing.isEmpty ? "ok  " : "--  ") Private macOS calls: \(missing.isEmpty ? "all found" : "missing \(missing.joined(separator: ", ")); the actions that use them fall back or report it")")
+  }
   return checks.allSatisfy(\.1) ? 0 : 1
+}
+
+// MARK: uninstall
+
+// Takes the app out: no login item, no MCP registrations, the app in the Trash. Settings, the app list and the
+// signing identity stay, so a later setup keeps the permissions; --reset removes them too, after a confirmation.
+private func uninstall(reset: Bool) throws -> Int32 {
+  if reset {
+    print("This also removes the app list, the activity log, the settings, the signing identity and the macOS permissions of \(Product.appName). Type yes to go on: ", terminator: "")
+    fflush(stdout)
+    guard readLine()?.trimmingCharacters(in: .whitespaces).lowercased() == "yes" else {
+      printLine("Nothing was removed.")
+      return 1
+    }
+  }
+  let helper = HelperClient(directories: directories, managesHelper: false, expectedBuild: nil)
+  _ = try? helper.request("prepare_uninstall")
+  helper.close()
+  Thread.sleep(forTimeInterval: 0.5)
+  for client in mcpClients {
+    guard let command = findCommand(client.command) else { continue }
+    if (try? runProcess(command, client.remove(Product.commandName), timeout: 60)) != nil {
+      printLine("Removed the \"\(Product.commandName)\" MCP server from \(client.name).")
+    }
+  }
+  for location in Product.appLocations where FileManager.default.fileExists(atPath: location) {
+    let installer = Installer(directories: directories)
+    guard installer.isOurApp(location) else {
+      printLine("\(location) is another app, so it stays.")
+      continue
+    }
+    try FileManager.default.trashItem(at: URL(fileURLWithPath: location), resultingItemURL: nil)
+    printLine("Moved \(location) to the Trash.")
+  }
+  if reset {
+    for directory in Set([directories.config, directories.data, directories.state]) where FileManager.default.fileExists(atPath: directory) {
+      try FileManager.default.trashItem(at: URL(fileURLWithPath: directory), resultingItemURL: nil)
+      printLine("Moved \(directory) to the Trash.")
+    }
+    _ = try? runProcess("/usr/bin/defaults", ["delete", Product.bundleIdentifier], timeout: 15, allowFailure: true)
+    _ = try? runProcess("/usr/bin/tccutil", ["reset", "All", Product.bundleIdentifier], timeout: 30, allowFailure: true)
+    printLine("Removed the settings and the macOS permissions of \(Product.appName).")
+  } else {
+    printLine("The app list, the settings and the signing identity stay, so a later setup keeps the permissions. To remove them too, run: \(Product.commandName) uninstall --reset")
+  }
+  return 0
 }
 
 // MARK: approvals
@@ -209,6 +262,11 @@ private func approvals(_ arguments: [String]) throws -> Int32 {
   case ("add", let app?):
     do {
       let added = try helper.request("approvals_add", ["app": app]) as? JSON ?? [:]
+      // Asked for from here, an app waits until the user adds it in the window, where the request now shows.
+      if let pending = added["pending"] as? String {
+        printLine("\(added["name"] as? String ?? app) (\(pending)) waits for you: add it in the \(Product.appName) window, on the Apps tab.")
+        return 0
+      }
       printLine("Added \(added["name"] as? String ?? app) (\(added["added"] as? String ?? "")).")
       return 0
     } catch let failure as HelperFailure where failure.code != nil {
@@ -235,6 +293,7 @@ private func usage() -> Int32 {
     \(name) approvals [list]          List the apps agents may use
     \(name) approvals add <app>       Add an app by name or bundle id
     \(name) approvals revoke <bundle-id> Remove an app from the list
+    \(name) uninstall [--reset]       Remove the app, its login item and MCP registrations; --reset also its data
     \(name) mcp                       Serve MCP over stdio (MCP clients run this)
     \(name) version
 
@@ -252,6 +311,7 @@ func runCommand(_ arguments: [String]) -> Int32 {
     switch arguments.first {
     case "setup": return try setup(register: !arguments.contains("--no-register"))
     case "doctor": return doctor()
+    case "uninstall": return try uninstall(reset: arguments.contains("--reset"))
     case "approvals": return try approvals(Array(arguments.dropFirst()))
     case "version":
       printLine(Product.version)

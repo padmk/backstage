@@ -1,5 +1,5 @@
 // Measures the real command and the installed app against the fixture app, with BENCH=1 (and BENCH_ROUNDS, 30 by
-// default). It needs the app installed with Accessibility, and puts the fixture on the app list for the run.
+// default). It needs the app installed with Accessibility and the fixture app on the list, as the live test does.
 
 import Foundation
 import Testing
@@ -13,9 +13,8 @@ struct BenchTests {
     let rounds = Int(ProcessInfo.processInfo.environment["BENCH_ROUNDS"] ?? "") ?? 30
     try #require(rounds >= 1, "BENCH_ROUNDS must be a whole number of at least 1")
     let fixture = try Fixture()
-    try realCli("approvals", "add", fixtureBundleId)
-    defer { try? realCli("approvals", "revoke", fixtureBundleId) }
     let server = try LiveServer()
+    try requireFixtureOnList(server)
 
     // A refusal answers in milliseconds, so a round that failed stops the run rather than count as a timing.
     func call(_ name: String, _ arguments: Object = [:], app: String? = fixtureBundleId) throws {

@@ -19,6 +19,12 @@ private let postToPid = lookUp("SLEventPostToPid", as: PostToPid.self, in: skyLi
 let setEventWindowLocation: ((CGEvent, CGPoint) -> Void)? = lookUp("CGEventSetWindowLocation", as: SetWindowLocation.self, in: skyLight)
 private let windowOfElement = lookUp("_AXUIElementGetWindow", as: WindowOfElement.self, in: dlopen(nil, RTLD_NOW))
 
+// Which private calls this macOS still has; each missing one falls back to a public call or a clear error.
+func privateCallAvailability() -> JSON {
+  ["post_to_pid": postToPid != nil, "set_window_location": setEventWindowLocation != nil, "window_of_element": windowOfElement != nil,
+   "post_event_record": postEventRecord != nil, "capture_locked_window": lockedCaptureAvailable]
+}
+
 let pointerEventGap = 0.03
 // The event subtype background windows accept for clicks: with it, a click reaches a window that is not key.
 let touchSubtype: Int64 = 3

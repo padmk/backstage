@@ -9,11 +9,14 @@ public enum Product {
   public static let commandName = appName.lowercased()
   // The release version, also the app's CFBundleShortVersionString (`make app` reads it from here).
   public static let version = "0.2.0"
-  // Persisted: macOS ties the Accessibility, Screen Recording and other grants to this id.
-  public static let bundleIdentifier = "local.cua-mcp.helper"
+  // Persisted: macOS ties the Accessibility, Screen Recording and other grants to this id, and the settings live
+  // in its defaults domain. Changing it costs every user those grants once.
+  public static let bundleIdentifier = "app.foreverbeta.backstage"
   // The two latest macOS versions, on Apple silicon only.
   public static let minimumMacOS = 26
-  public static let installedAppPath = "/Applications/\(appName).app"
+  // Where the app is installed: /Applications, or ~/Applications for an account that cannot write there.
+  public static let appLocations = ["/Applications/\(appName).app", NSHomeDirectory() + "/Applications/\(appName).app"]
+  public static var installedAppPath: String { appLocations.first { FileManager.default.fileExists(atPath: $0) } ?? appLocations[0] }
   // Inside the bundle: the app's own executable, and the command next to it.
   public static let appExecutableName = appName
   public static let commandRelativePath = "Contents/Helpers/\(commandName)"

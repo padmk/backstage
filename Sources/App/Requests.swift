@@ -16,7 +16,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   case "status":
     return [
       "accessibility": AXIsProcessTrusted(), "screen_recording": CGPreflightScreenCaptureAccess(), "version": Configuration.version, "build": Configuration.build,
-      "screen_locked": isScreenLocked(),
+      "screen_locked": isScreenLocked(), "private_calls": privateCallAvailability(),
       // The same grants as the Setup tab: those of the listed apps.
       "app_access": appGrants(forListed: Set(ApprovalStore.list().compactMap { $0["bundle_id"] }), everyApp: Preferences.allowsEveryApp)
         .map { ["name": $0.name, "state": grantState($0).rawValue] as JSON },
@@ -30,6 +30,16 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
 
   case "quit":
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+      unlink(Configuration.socketPath)
+      exit(0)
+    }
+    return [:] as JSON
+
+  // Before the app goes to the Trash: it no longer starts at login or shows in the menu bar, and it quits.
+  case "prepare_uninstall":
+    if Preferences.isInstalledCopy, LaunchAtLogin.state != .off { try? LaunchAtLogin.set(false) }
+    Preferences.showsMenuBarItem = false
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
       unlink(Configuration.socketPath)
       exit(0)
     }

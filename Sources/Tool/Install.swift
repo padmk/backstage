@@ -53,7 +53,7 @@ struct Installer {
     try ensurePrivateDirectory(directories.data)
     return try withSetupLock {
       if source == Product.installedAppPath ? isSignedHere(source) : installedMatches(source) { return false }
-      let target = Product.installedAppPath
+      let target = installTarget()
       let folder = (target as NSString).deletingLastPathComponent
       let staging = "\(folder)/.\(Product.appName).app.incoming-\(getpid())"
       try? FileManager.default.removeItem(atPath: staging)
@@ -75,6 +75,15 @@ struct Installer {
       }
       return true
     }
+  }
+
+  // Where the app already is, else /Applications, else ~/Applications for an account that cannot write there.
+  func installTarget() -> String {
+    if let existing = Product.appLocations.first(where: { FileManager.default.fileExists(atPath: $0) }) { return existing }
+    let system = Product.appLocations[0], user = Product.appLocations[1]
+    if FileManager.default.isWritableFile(atPath: (system as NSString).deletingLastPathComponent) { return system }
+    try? FileManager.default.createDirectory(atPath: (user as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+    return user
   }
 
   private func installFailure(_ folder: String) -> HelperFailure {

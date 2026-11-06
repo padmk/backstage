@@ -68,7 +68,7 @@ func appBuildOfOwnBundle() -> String? {
   ownBundlePath().flatMap { buildIdentity(ofExecutableAt: $0 + "/Contents/MacOS/" + Product.appExecutableName) }
 }
 
-let installedCommandPath = Product.installedAppPath + "/" + Product.commandRelativePath
+var installedCommandPath: String { Product.installedAppPath + "/" + Product.commandRelativePath }
 
 // How to run this command in a message: its name when that finds the installed one, otherwise its full path.
 func commandHint() -> String {

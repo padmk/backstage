@@ -1,6 +1,7 @@
 // The settings people change in the Backstage window, kept in the helper's own defaults.
 
 import Foundation
+import HelperLink
 
 enum Preferences {
   private static let menuBarKey = "showsMenuBarItem"
@@ -10,7 +11,7 @@ enum Preferences {
 
   // Only the copy in Applications keeps running, shows a menu bar item or starts at login, so test and
   // development copies elsewhere never do.
-  static var isInstalledCopy: Bool { Bundle.main.bundlePath == "/Applications/\(Configuration.appName).app" }
+  static var isInstalledCopy: Bool { Product.appLocations.contains(Bundle.main.bundlePath) }
 
   static var showsMenuBarItem: Bool {
     get { UserDefaults.standard.bool(forKey: menuBarKey) }

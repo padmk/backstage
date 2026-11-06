@@ -63,7 +63,13 @@ Chromium and Electron apps take pointer and key input only in their key window. 
 
 An app can still bring itself forward, for example when it shows a dialog. The helper records the front app before each action and gives it the focus back, reporting `focus_returned`.
 
-**Why private calls.** The public `CGEventPostToPid` routes a click by what is under the real cursor, so it cannot click a window behind another one. The private SkyLight calls `SLEventPostToPid` and `CGEventSetWindowLocation` let an event name its window and the point in it, and `SLPSPostEventRecordTo` makes a Chromium window key inside its app. Each is looked up at run time; when one is missing, the helper falls back to the public call instead of crashing, and the behavior degrades rather than breaks. The full list is in `src/helper/BackgroundEvents.swift` and `src/helper/LockedWindows.swift`.
+**Why private calls.** The public `CGEventPostToPid` routes a click by what is under the real cursor, so it cannot click a window behind another one. The private SkyLight calls `SLEventPostToPid` and `CGEventSetWindowLocation` let an event name its window and the point in it, and `SLPSPostEventRecordTo` makes a Chromium window key inside its app. Each is looked up at run time; when one is missing, the helper falls back to the public call instead of crashing, and the behavior degrades rather than breaks. The full list is in `Sources/App/BackgroundEvents.swift` and `Sources/App/LockedWindows.swift`; `status` and `backstage doctor` report which of them this macOS has.
+
+## Windows and menus
+
+**Windows.** `list_windows` takes the windows from the window server, which knows every app's windows on every display and Space, and adds what Accessibility knows for the apps on the user's list: title, minimized, full screen, modal, movable and resizable. Accessibility makes every change (`set_window`, `close`), since it is the public way to move another app's window, and reads the frame back: an app may clamp a window to its minimum size, so the reply says `adjusted` rather than claiming the frame asked for. Accessibility reaches only the current Space, so a window elsewhere is listed but not changed, and nothing moves windows between Spaces (that needs private calls macOS has closed to other processes). Bringing a window back from the Dock and full screen put it in front, so they need `foreground: true`. A window id is the window server's number, checked against the app that owns it before any change.
+
+**Menus as commands.** Almost everything an app can do is in its menus, with its keyboard shortcut, and Accessibility exposes the whole menu bar without opening a menu. `list_menu_commands` turns that into a list an agent can search, and `run_menu_command` presses one item by its path or shortcut. This is per-app knowledge that needs no upkeep: it works in apps nobody described and follows an app's own updates. Its limits are AppKit's: items an app fills only while a menu is open can be missing, and commands on the current document are disabled while the app has no key window in the background. Items in the Apple menu (Restart, Log Out) and the Services and Share menus are refused on every route, since they act on the whole Mac or hand content to other apps past the list.
 
 ## Verifying what happened
 
@@ -91,7 +97,7 @@ Agents may use an app only when the user put it on the list, or turned on Allow 
 
 **Why a list and not prompts.** Prompts during a task block unattended sessions, train people to click Allow, and show up on whatever screen the user is looking at. A list decided in advance works the same at 3 a.m. as at noon. The cost is setup: the user adds apps once.
 
-List entries are bound to the app's signer, never-available apps (Passwords, Keychain Access, login and authentication windows, Backstage itself) are refused whatever the settings, and the server instructions ask agents to respect the list by every route. The limits of that are in [SECURITY.md](../SECURITY.md).
+Adding an app over the socket, from the command line or by an agent, only asks: the request waits on the Apps tab until the user adds it, because the socket cannot tell an agent from the user running the same command. Removing an app narrows access and takes effect at once. List entries are bound to the app's signer (its team, or its certificate when it has none), never-available apps (Passwords, Keychain Access, login and authentication windows, Backstage itself) are refused whatever the settings, and the server instructions ask agents to respect the list by every route. The limits of that are in [SECURITY.md](../SECURITY.md).
 
 ## Signing and permissions
 
@@ -101,10 +107,10 @@ List entries are bound to the app's signer, never-available apps (Passwords, Key
 
 | Path | Holds |
 |---|---|
-| `/Applications/Backstage.app` | The helper app, and the command in `Contents/Helpers/backstage` |
+| `/Applications/Backstage.app` (or `~/Applications`) | The helper app, and the command in `Contents/Helpers/backstage` |
 | `~/.config/backstage/approvals.json` | The app list (`0600`) |
 | `~/.local/share/backstage/` | The signing keychain and its certificate hash |
 | `~/.local/state/backstage/` | The socket, the start lock and the activity log `decisions.jsonl` |
-| `~/Library/Preferences/local.cua-mcp.helper.plist` | The window's switches: Allow every app, Windows while locked, Open at login and the menu bar item |
+| `~/Library/Preferences/app.foreverbeta.backstage.plist` | The window's switches: Allow every app, Windows while locked, Open at login and the menu bar item |
 
-The directories are `0700`. The `XDG_*` variables are not read, because the helper also starts from launchd, at login or from the Finder, without the shell's environment, and must find the same files. The `cua-mcp` identifiers are kept because macOS ties the permissions to the bundle id; changing them would ask the user to grant everything again.
+The directories are `0700`. The `XDG_*` variables are not read, because the helper also starts from launchd, at login or from the Finder, without the shell's environment, and must find the same files. The bundle id, `app.foreverbeta.backstage`, stays fixed: macOS ties the permissions to it, so changing it would ask every user to grant everything again.

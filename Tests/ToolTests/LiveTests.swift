@@ -1,14 +1,15 @@
 // The real command and the installed app operating a real app in the background, with LIVE=1. They need the app
-// installed with Accessibility (`make install`), and put the freshly built fixture app on the app list for the run,
-// since its signature changes with every build. Results come from the fixture's own log, never from the reply.
+// installed with Accessibility (`make install`) and the fixture app on the list: the fixture is signed with this
+// Mac's Backstage certificate, so the list keeps it across builds once the user has added it in the Backstage
+// window, which the first run asks for. Results come from the fixture's own log, never from the reply.
 // The steps share one fixture and run in order, as one test. BENCH=1 measures latency instead (see bench/README.md).
 
 import Darwin
 import Foundation
 import Testing
 
-let fixtureBundleId = "local.cua-mcp.fixture"
-let fixtureName = "CUA Fixture"
+let fixtureBundleId = "app.foreverbeta.backstage.fixture"
+let fixtureName = "Test Fixture"
 private let fixtureSource = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
   .appendingPathComponent("Fixtures/target/main.swift").path
 
@@ -32,7 +33,7 @@ final class Fixture {
     <key>CFBundlePackageType</key><string>APPL</string>
     </dict></plist>
     """.write(toFile: bundle + "/Contents/Info.plist", atomically: true, encoding: .utf8)
-    try run("/usr/bin/codesign", ["--force", "--sign", "-", bundle])
+    try sign(bundle)
     try run("/usr/bin/open", ["-g", "-j", "-n", bundle, "--args", logPath])
     _ = try until(timeout: 15) { events("ready").count == 1 ? true : nil }
   }
@@ -47,6 +48,27 @@ final class Fixture {
   deinit {
     _ = try? run("/usr/bin/pkill", ["-f", bundle + "/Contents/MacOS/fixture"])
   }
+}
+
+// With this Mac's Backstage signing identity when there is one, so the app list knows the fixture by that
+// certificate across builds; ad hoc otherwise.
+private func sign(_ bundle: String) throws {
+  let data = NSHomeDirectory() + "/.local/share/backstage"
+  if let hash = try? String(contentsOfFile: data + "/signing.identity", encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+     FileManager.default.fileExists(atPath: data + "/signing.keychain-db") {
+    try run("/usr/bin/security", ["unlock-keychain", "-p", "", data + "/signing.keychain-db"])
+    try run("/usr/bin/codesign", ["--force", "--sign", hash, "--keychain", data + "/signing.keychain-db", bundle])
+  } else {
+    try run("/usr/bin/codesign", ["--force", "--sign", "-", bundle])
+  }
+}
+
+// The fixture on the list, or a request for the user to add it, which the run then stops for.
+func requireFixtureOnList(_ server: LiveServer) throws {
+  let state = parseLine(textOf(try server.call("list_apps", ["app": fixtureBundleId], app: nil))) ?? [:]
+  guard ((state["app"] as? Object)?["access"] as? String) != "allowed" else { return }
+  try realCli("approvals", "add", fixtureBundleId)
+  throw TestFailure("Add \(fixtureName) in the Backstage window, on the Apps tab, then run this again. Once added, it stays.")
 }
 
 @discardableResult
@@ -166,9 +188,8 @@ struct LiveTests {
   @Test(.timeLimit(.minutes(5)))
   func operatesTheFixtureInTheBackground() throws {
     let fixture = try Fixture()
-    try realCli("approvals", "add", fixtureBundleId)
-    defer { try? realCli("approvals", "revoke", fixtureBundleId) }
     let server = try LiveServer()
+    try requireFixtureOnList(server)
     let state = parseLine(textOf(try server.call("list_apps", app: nil))) ?? [:]
     try #require(state["screen_locked"] as? Bool != true, "The screen is locked: unlock it to run the live test.")
     let frontBefore = try frontApp()
