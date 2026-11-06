@@ -16,7 +16,7 @@ CI (macOS) runs `make app`, type-checks the fixture app and runs `swift test`. m
 
 ## Constraints
 
-- Never move the pointer, activate a window or bring an app forward while testing, unless the user agrees. Use background reads, the fixture's log (`Tests/Fixtures/target`), screenshots and logs instead. `setup` opens the Backstage window at its end, so say so before running it on the user's Mac.
+- Never move the pointer, activate a window or bring an app forward while testing, unless the user agrees. Use background reads, the fixture's log (`Tests/Fixtures/target`), screenshots and logs instead. A first `setup` opens the Backstage window at its end (an update does not), so say so before running it on a Mac without the app.
 - Clients run the command inside the installed app. Changes in the checkout reach them only after `make install` and a new client session.
 - The command never uses Accessibility or other grants itself: it starts the app through LaunchServices (`open -g -j`) and talks to it over the socket, so macOS attributes the grants to the app.
 - Builds are told apart by the linker's UUID of the app executable (`Sources/HelperLink/BuildIdentity.swift`), which signing does not change. A command from another build than the installed app must refuse rather than stop a helper others use.

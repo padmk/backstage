@@ -33,8 +33,19 @@ public func buildIdentity(ofExecutableAt path: String) -> String? {
   return nil
 }
 
-// The running executable's identity, read at first use.
+// The running executable's identity, read from its image in memory, so it is the code that runs even when a setup
+// has since replaced the file.
 public let ownBuildIdentity: String = {
-  let path = Bundle.main.executablePath ?? CommandLine.arguments[0]
-  return buildIdentity(ofExecutableAt: (path as NSString).resolvingSymlinksInPath) ?? "unknown"
+  guard let header = _dyld_get_image_header(0) else { return "unknown" }
+  return header.withMemoryRebound(to: mach_header_64.self, capacity: 1) { image -> String in
+    var command = UnsafeRawPointer(image).advanced(by: MemoryLayout<mach_header_64>.size)
+    for _ in 0..<image.pointee.ncmds {
+      let load = command.load(as: load_command.self)
+      if load.cmd == loadCommandUUID {
+        return (0..<16).map { String(format: "%02x", command.load(fromByteOffset: 8 + $0, as: UInt8.self)) }.joined()
+      }
+      command = command.advanced(by: Int(load.cmdsize))
+    }
+    return "unknown"
+  }
 }()

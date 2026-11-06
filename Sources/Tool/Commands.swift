@@ -103,13 +103,14 @@ private func resetGrant(_ service: String) {
 
 // Accessibility is the one permission setup needs. Screen Recording is optional, for screenshots, and is turned on
 // later in the window, so setup shows no second prompt.
-private func grantPermissions(signingChanged: Bool) throws -> Bool {
+// Returns whether Accessibility is granted, and whether it already was, as on an update.
+private func grantPermissions(signingChanged: Bool) throws -> (granted: Bool, already: Bool) {
   let helper = client()
   defer { helper.close() }
   let current = try status(helper)
   // Entries for an earlier signature can still look enabled while they no longer apply.
   if signingChanged, current["screen_recording"] as? Bool != true { resetGrant("ScreenCapture") }
-  if current["accessibility"] as? Bool == true { return true }
+  if current["accessibility"] as? Bool == true { return (true, true) }
   if signingChanged { resetGrant("Accessibility") }
   printLine("Grant Accessibility to \(Product.appName) in the macOS window that opens, so it can read windows, click and type.")
   do {
@@ -119,7 +120,7 @@ private func grantPermissions(signingChanged: Bool) throws -> Bool {
   }
   let granted = waitForAccessibility(helper)
   if !granted { printLine("Accessibility is still missing. Run this command again after granting it.") }
-  return granted
+  return (granted, false)
 }
 
 private func setup(register shouldRegister: Bool) throws -> Int32 {
@@ -130,10 +131,13 @@ private func setup(register shouldRegister: Bool) throws -> Int32 {
   let installer = Installer(directories: directories)
   printLine("Installing \(Product.appName) into /Applications...")
   _ = try installer.install(from: source)
-  let granted = try grantPermissions(signingChanged: installer.takeSigningChange())
+  let (granted, already) = try grantPermissions(signingChanged: installer.takeSigningChange())
   var status: Int32 = granted ? 0 : 1
   if shouldRegister, !register() { status = 1 }
-  if granted {
+  if granted, already {
+    // An update: the user is working in another app, so nothing comes forward.
+    printLine("\(Product.appName) is up to date. Its window, opened from /Applications, shows the apps agents may use and its settings.")
+  } else if granted {
     // A running helper would only bring back its last tab, so a fresh one is opened on Apps.
     let helper = client()
     _ = try? helper.request("quit")

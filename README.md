@@ -55,7 +55,7 @@ make install
 1. Installs the app into `/Applications`, signed with a certificate of this Mac (see below).
 2. Opens System Settings and waits up to 3 minutes for you to enable Backstage under **Accessibility**, the one permission it needs. If it is not listed, drag it there from the Finder window setup opens.
 3. Registers `/Applications/Backstage.app/Contents/Helpers/backstage mcp` as the `backstage` MCP server with Claude Code and Codex, when they are installed, and prints the configuration for other clients.
-4. Opens the Backstage window on the Apps tab, where you choose the apps agents may use.
+4. On the first install, opens the Backstage window on the Apps tab, where you choose the apps agents may use. An update opens nothing.
 
 | Command | Effect |
 |---|---|
