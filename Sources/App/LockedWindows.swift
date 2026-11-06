@@ -70,8 +70,7 @@ func lockedWindowRequest(_ method: String, app: AppIdentity, params: JSON) throw
     try postKey(key, pid: app.pid)
     return lockedReply(["delivery": "key_events"])
   case "type_text":
-    let text = try string(params, "text")
-    guard !text.isEmpty else { throw HelperError(code: "invalid_request", message: "text is empty.") }
+    let text = try nonEmptyString(params, "text")
     try requireTextForKeys(text)
     try postText(text, pid: app.pid)
     return lockedReply(["delivery": "key_events"])

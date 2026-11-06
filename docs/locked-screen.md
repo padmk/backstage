@@ -144,7 +144,7 @@ Unlocked, Backstage prefers accessibility: it reads elements, acts on them by nu
 
 ### Turning it on and off
 
-On the Setup tab, under Background, switch **Windows while locked**. The setting is stored in the app's defaults as `worksInWindowsWhileLocked` in `~/Library/Preferences/app.foreverbeta.backstage.plist` and applies to the next request. The Activity tab records each change under Windows while locked, with On or Off, by You. Agents are told never to change Backstage's settings; like the app list, this relies on their cooperation (see [SECURITY.md](../SECURITY.md)).
+On the Setup tab, under Background, switch **Windows while locked**. The setting is stored as `worksInWindowsWhileLocked` in `~/.config/backstage/settings.json` and applies to the next request. The Activity tab records each change under Windows while locked, with On or Off, by You. Agents are told never to change Backstage's settings; like the app list, this relies on their cooperation (see [SECURITY.md](../SECURITY.md)).
 
 ## What Backstage does not do
 

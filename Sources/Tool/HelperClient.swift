@@ -282,7 +282,7 @@ final class HelperClient: @unchecked Sendable {
     if installedBuild() != expectedBuild, expectedBuild != nil { throw differsFromInstalled() }
     let launch = { () throws -> SocketConnection in
       if let descriptor = connectSocket(self.directories.socketPath) { return self.attach(descriptor) }
-      try runProcess("/usr/bin/open", ["-g", "-j", Product.installedAppPath, "--args", "--background"], timeout: 15)
+      try runProcess("/usr/bin/open", ["-g", "-j", Product.installedAppPath, "--args", Product.backgroundArgument], timeout: 15)
       let started = Date()
       while Date().timeIntervalSince(started) < startTimeout {
         if let descriptor = connectSocket(self.directories.socketPath) { return self.attach(descriptor) }

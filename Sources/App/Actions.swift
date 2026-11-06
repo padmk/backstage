@@ -3,6 +3,7 @@
 
 import AppKit
 import ApplicationServices
+import HelperLink
 
 private let pressActions = ["AXPress", "AXConfirm", "AXPick", "AXOpen"]
 private let singleLineRoles: Set<String> = [kAXTextFieldRole, kAXComboBoxRole, "AXSearchField"]
@@ -90,7 +91,7 @@ func returnFocus(to previous: NSRunningApplication?, from pid: pid_t) -> Bool {
 }
 
 // The requests that act on an app, alone or as steps of run_actions.
-let actionMethods: Set<String> = ["press", "set_value", "type_text", "select_text", "press_key", "scroll", "click_at", "drag"]
+let actionMethods = Set(actionToolNames)
 
 // Runs one action without reporting its effect, which the caller does once for one action or a sequence.
 func performAction(_ method: String, app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
@@ -218,8 +219,7 @@ func requireTextForKeys(_ text: String) throws {
 
 // Once text may have arrived, no later route runs, so nothing is inserted twice.
 func typeText(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
-  let text = try string(params, "text")
-  guard !text.isEmpty else { throw HelperError(code: "invalid_request", message: "text is empty.") }
+  let text = try nonEmptyString(params, "text")
   guard let number = params["element"] as? Int else {
     try requireTextForKeys(text)
     prepareInput(app: app, window: nil)

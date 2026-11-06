@@ -9,8 +9,8 @@ public enum Product {
   public static let commandName = appName.lowercased()
   // The release version, also the app's CFBundleShortVersionString (`make app` reads it from here).
   public static let version = "0.2.0"
-  // Persisted: macOS ties the Accessibility, Screen Recording and other grants to this id, and the settings live
-  // in its defaults domain. Changing it costs every user those grants once.
+  // Persisted: macOS ties the Accessibility, Screen Recording and other grants to this id. Changing it costs every
+  // user those grants once.
   public static let bundleIdentifier = "app.foreverbeta.backstage"
   // The two latest macOS versions, on Apple silicon only.
   public static let minimumMacOS = 26
@@ -20,7 +20,19 @@ public enum Product {
   // Inside the bundle: the app's own executable, and the command next to it.
   public static let appExecutableName = appName
   public static let commandRelativePath = "Contents/Helpers/\(commandName)"
+  // Arguments the command opens the app with: started for a client, without its window, or with its window on a tab.
+  public static let backgroundArgument = "--background"
+  public static let tabArgument = "--tab"
+
+  // The pane of Privacy & Security in System Settings for one permission, such as Privacy_Accessibility.
+  public static func privacyPaneURL(_ pane: String) -> String {
+    "x-apple.systempreferences:com.apple.preference.security?\(pane)"
+  }
 }
+
+// The tools run_actions takes as steps, in the order the tool list shows them, and how many it takes at once.
+public let actionToolNames = ["press", "set_value", "type_text", "select_text", "press_key", "scroll", "drag", "click_at"]
+public let maxSteps = 20
 
 // The XDG base directories at their default places. The XDG_* variables are not read: the app also starts from
 // launchd, at login or from the Finder, without the shell's environment, and has to find the same files. A test
@@ -44,6 +56,7 @@ public struct Directories: Sendable {
 
   public var socketPath: String { state + "/helper.sock" }
   public var approvalsPath: String { config + "/approvals.json" }
+  public var settingsPath: String { config + "/settings.json" }
   public var decisionLogPath: String { state + "/decisions.jsonl" }
 }
 

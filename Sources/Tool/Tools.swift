@@ -1,6 +1,7 @@
 // The MCP tools and their argument checks. Bad arguments stop here, before any request reaches an app.
 
 import Foundation
+import HelperLink
 
 typealias JSON = [String: Any]
 
@@ -39,8 +40,7 @@ struct ToolDefinition {
 private let appsWithOperations = "Notes, Reminders, Calendar, Contacts, Mail, Messages, Finder, Pages, Numbers, Music, Shortcuts and System Settings"
 
 // The tools run_actions can run as steps, with their own arguments except app.
-let stepTools = ["press", "set_value", "type_text", "select_text", "press_key", "scroll", "drag", "click_at"]
-let maxSteps = 20
+let stepTools = actionToolNames
 
 let tools: [ToolDefinition] = [
   ToolDefinition(
