@@ -53,7 +53,7 @@ The goal is that the user can keep working in another app while an agent works. 
 
 | Action | Route |
 |---|---|
-| `set_value`, `select_text`, `type_text` with an element | Accessibility: an action or an attribute set on the element, which needs no focus |
+| `set_value`, `select_text`, `type_text` with an element | Accessibility: an action or an attribute set on the element, which needs no focus from the app. A one-line text field is first focused inside its window and given the text as a selection, through its editor as typing would: many apps, SwiftUI's among them, ignore a value set around the editor while the field still shows it |
 | `click_at`, `drag`, clicks on elements without an action | Pointer events posted to the app's process and addressed to its window and a point in it, through private window server calls, so the real cursor does not move |
 | `press_key`, `type_text` without an element | Key events posted to the app's process, which reach its focused element |
 | `scroll` | Accessibility: the value of the nearest scroll bar around the element, else the scroll-by-page action of the element or an ancestor; otherwise a posted scroll event |
