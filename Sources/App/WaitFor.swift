@@ -31,9 +31,13 @@ func waitFor(app: AppIdentity, params: JSON, connection: Connection) throws -> J
       try requireSameProcess(app)
       try requireScreenUnlocked("get_window_state", params: read, app: app, session: session)
       let tree = try readTree(app: app, params: read, session: session, shownToAgent: false).tree
-      let match = tree.lines.first { line in
-        line.localizedCaseInsensitiveContains(text) && (role.map { line.localizedCaseInsensitiveContains($0) } ?? true)
+      let candidates = tree.lines.filter { line in
+        line.localizedCaseInsensitiveContains(text) && (role.map { hasRole(line, $0) } ?? true)
       }
+      // A title or value that is the text itself wins over one that only contains it, so OK finds the OK button
+      // rather than a Look button above it.
+      let exact = "\"\(text)\""
+      let match = candidates.first { $0.localizedCaseInsensitiveContains(exact) } ?? candidates.first
       return (match, tree.partialReason == nil)
     }
     let waited = Int(Date().timeIntervalSince(started) * 1000)
@@ -63,4 +67,12 @@ func waitFor(app: AppIdentity, params: JSON, connection: Connection) throws -> J
     let earliest = min(readAt.addingTimeInterval(minReadGapSeconds), deadline)
     while Date() < earliest { watch.wait(until: earliest) }
   }
+}
+
+// Whether a tree line's element has this role or subrole: Button matches "Button" and "Row(Button)", not
+// "PopUpButton" or a title that mentions buttons.
+private func hasRole(_ line: String, _ role: String) -> Bool {
+  let words = line.split(separator: " ", maxSplits: 2)
+  guard words.count >= 2 else { return false }
+  return words[1].split(whereSeparator: { $0 == "(" || $0 == ")" }).contains { $0.caseInsensitiveCompare(role) == .orderedSame }
 }

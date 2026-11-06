@@ -170,6 +170,7 @@ func setValue(app: AppIdentity, params: JSON, session: ApprovalSession) throws -
     throw HelperError(code: "not_settable", message: "This element's value cannot be set. Try type_text.")
   }
   let before = attribute(element, kAXValueAttribute)
+  if let typed = try replaceThroughFieldEditor(element, with: text, before: before) { return typed }
   let value: CFTypeRef
   if before is NSNumber {
     guard let parsed = Double(text), parsed.isFinite else {
@@ -193,6 +194,37 @@ func setValue(app: AppIdentity, params: JSON, session: ApprovalSession) throws -
     return ["delivery": "accessibility", "verified": false]
   case .changed:
     // The app stored something else, for example by limiting a number.
+    return ["delivery": "accessibility", "verified": false, "value": describeValue(attribute(element, kAXValueAttribute)) ?? ""]
+  }
+}
+
+// A text field's own value is only what it shows: many apps, SwiftUI's among them, take text only through the
+// field's editor, as typing gives it, so a value set directly can show while the app keeps the old one. A one-line
+// field is therefore focused inside its window (the app stays in the background) and its whole text replaced as a
+// selection. Nil when the field cannot be reached that way, so the value is set directly instead.
+private func replaceThroughFieldEditor(_ element: AXUIElement, with text: String, before: AnyObject?) throws -> JSON? {
+  guard let current = before as? String, singleLineRoles.contains(stringAttribute(element, kAXRoleAttribute) ?? ""),
+    stringAttribute(element, kAXSubroleAttribute) != secureSubrole else { return nil }
+  if !boolAttribute(element, kAXFocusedAttribute) {
+    AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+    sleep(seconds: 0.05)
+  }
+  guard boolAttribute(element, kAXFocusedAttribute), isSettable(element, kAXSelectedTextRangeAttribute),
+    isSettable(element, kAXSelectedTextAttribute) else { return nil }
+  var everything = CFRange(location: 0, length: (current as NSString).length)
+  guard let range = AXValueCreate(.cfRange, &everything),
+    AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, range) == .success else { return nil }
+  if current == text { return ["delivery": "accessibility", "verified": true] }
+  let outcome = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as NSString)
+  guard outcome == .success else { throw axFailure(outcome, "setting the value") }
+  switch watchValue(of: element, from: current as NSString, until: text as NSString) {
+  case .reached:
+    return ["delivery": "accessibility", "verified": true]
+  case .unreadable:
+    return ["delivery": "accessibility", "verified": false]
+  case .unchanged:
+    throw HelperError(code: "outcome_unknown", message: "The app accepted the value, but the element still shows the old one. Read the state before trying again.")
+  case .changed:
     return ["delivery": "accessibility", "verified": false, "value": describeValue(attribute(element, kAXValueAttribute)) ?? ""]
   }
 }
@@ -252,7 +284,21 @@ func typeText(app: AppIdentity, params: JSON, session: ApprovalSession) throws -
 
   let before = isSecure ? nil : textAttribute(element, kAXValueAttribute)
   if let before {
-    if isSettable(element, kAXSelectedTextAttribute) {
+    // An unfocused one-line field is focused and given the text at its end through its editor, since a value
+    // written around the editor may only show while the app keeps the old one.
+    // Focusing may select all of it, so the text goes in as a selection only once the cursor is at the end.
+    var cursorKnown = true
+    if isSingleLine, !boolAttribute(element, kAXFocusedAttribute) {
+      AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+      sleep(seconds: 0.05)
+      var end = CFRange(location: (before as NSString).length, length: 0)
+      if boolAttribute(element, kAXFocusedAttribute) {
+        cursorKnown = AXValueCreate(.cfRange, &end).map {
+          AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, $0) == .success
+        } ?? false
+      }
+    }
+    if cursorKnown, isSettable(element, kAXSelectedTextAttribute) {
       let selectedBefore = textAttribute(element, kAXSelectedTextAttribute)
       let outcome = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as NSString)
       if outcome == .cannotComplete { throw axFailure(outcome, "inserting the text") }

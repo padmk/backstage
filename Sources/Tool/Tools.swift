@@ -213,11 +213,11 @@ let tools: [ToolDefinition] = [
     required: ["app"], annotations: ["readOnlyHint": false, "destructiveHint": true, "openWorldHint": false]),
   ToolDefinition(
     name: "wait_for",
-    description: "Wait until text shows in a window (a dialog, a result, a label), or with gone: true until it stops showing, for up to timeout seconds (default 10, at most 30). It reads the same place get_window_state reads (window, menu_bar, root). The reply says whether it was found and the matching line.",
+    description: "Wait until text shows in a window (a dialog, a result, a label), or with gone: true until it stops showing, for up to timeout seconds (default 10, at most 30). It reads the same place get_window_state reads (window, menu_bar, root). The reply says whether it was found and the matching line, preferring one whose title or value is exactly the text.",
     properties: [
       ("app", app),
       ("text", ["type": "string", "maxLength": 1000]),
-      ("role", ["type": "string", "description": "Only lines of this role, such as Button or Sheet"]),
+      ("role", ["type": "string", "description": "Only elements of this role or subrole, such as Button or Sheet"]),
       ("gone", ["type": "boolean"]),
       ("timeout", ["type": "number", "minimum": 0.5, "maximum": 30]),
       ("window", window),
