@@ -17,6 +17,8 @@ struct AppGrant: Identifiable {
     case contacts, events(EKEntityType), automation(bundleId: String)
     // Another app's files, which macOS guards per app; the path is the file whose reading needs the grant.
     case appData(bundleId: String, path: String)
+    // The system photo library, through PhotoKit.
+    case photos
   }
 
   let id: String
@@ -35,6 +37,7 @@ struct AppGrant: Identifiable {
     case .contacts: "com.apple.AddressBook"
     case .events(let type): type == .reminder ? "com.apple.reminders" : "com.apple.iCal"
     case .automation(let bundleId), .appData(let bundleId, _): bundleId
+    case .photos: "com.apple.Photos"
     }
   }
 
@@ -52,6 +55,7 @@ struct AppGrant: Identifiable {
     case .automation: "Privacy_Automation"
     // macOS lists no per-app switch for another app's data; Full Disk Access covers it.
     case .appData: "Privacy_AllFiles"
+    case .photos: "Privacy_Photos"
     }
   }
 }
@@ -74,6 +78,8 @@ let appGrants: [AppGrant] = [
   + scriptedGrants("numbers", purpose: "Read and change spreadsheets", of: numbersKnowledge) + [
   AppGrant(id: "whatsapp", name: "WhatsApp", purpose: "Read chats and messages", kind: .appData(bundleId: whatsAppBundleId, path: whatsAppDatabasePath),
            listedApps: [whatsAppBundleId]),
+  // macOS grants PhotoKit read and write together; the operations only read and copy out.
+  AppGrant(id: "photos", name: "Photos", purpose: "Find and copy out photos and videos", kind: .photos, listedApps: ["com.apple.Photos"]),
   AppGrant(id: "music", name: "Music", purpose: "Control playback", kind: .automation(bundleId: "com.apple.Music"), listedApps: ["com.apple.Music"]),
   // Only the appearance operations of System Settings script System Events; the volume uses no other app.
   AppGrant(id: "system-events", name: "System Events", purpose: "Switch dark and light appearance", kind: .automation(bundleId: "com.apple.systemevents"),
@@ -112,6 +118,13 @@ func requireGrant(for operation: String, of appBundleId: String) throws {
   // An operation that more than one grant serves, such as Messages' list_chats, runs on whichever is given.
   if covering.count > 1, covering.contains(where: { grantState($0) == .granted }) { return }
   guard let grant = covering.first else { return }
+  if case .photos = grant.kind {
+    switch grantState(grant) {
+    case .granted: return
+    case .notAsked, .unknown: throw grantMissing(grant.name)
+    case .denied: throw grantDenied(grant.name)
+    }
+  }
   if case .appData = grant.kind {
     switch grantState(grant) {
     case .granted: return
@@ -149,6 +162,7 @@ func grantState(_ grant: AppGrant) -> GrantState {
   case .events(let type): return eventAccessState(type)
   case .automation(let bundleId): return automationState(bundleId, ask: false)
   case .appData(let bundleId, let path): return appDataState(bundleId, path: path)
+  case .photos: return photosAccessState()
   }
 }
 
@@ -164,6 +178,7 @@ func requestGrant(_ grant: AppGrant) {
       _ = try? startAppHidden(at: url.path, name: grant.name)
     }
     _ = automationState(bundleId, ask: true)
+  case .photos: requestPhotosAccess()
   case .appData(let bundleId, let path):
     // Marked first: reading is what makes macOS ask, and from then on a read gets its answer without a prompt.
     Preferences.askedAppData.insert(bundleId)
