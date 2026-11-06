@@ -83,11 +83,10 @@ func readTree(app: AppIdentity, params: JSON, session: ApprovalSession, shownToA
 // An app can bring itself forward in response to an action, for example when it shows or closes a dialog.
 // The user was working in another app, so that app gets the focus back. Returns whether it had to.
 func returnFocus(to previous: NSRunningApplication?, from pid: pid_t) -> Bool {
-  guard let previous, previous.processIdentifier != pid, !previous.isTerminated else { return false }
-  return onMain {
-    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return false }
-    return previous.activate()
-  }
+  guard let previous, previous.processIdentifier != pid, !previous.isTerminated,
+    onMain({ NSWorkspace.shared.frontmostApplication?.processIdentifier }) == pid
+  else { return false }
+  return bringForward(previous)
 }
 
 // The requests that act on an app, alone or as steps of run_actions.
@@ -133,8 +132,10 @@ func press(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> J
     guard outcome == .success else { throw axFailure(outcome, "pressing the element") }
     return ["delivery": "accessibility", "action": action]
   }
-  if isSettable(element, kAXSelectedAttribute) {
-    let outcome = AXUIElementSetAttributeValue(element, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+  // A list row, or the text in one, is selected the way a click would, since background clicks often miss
+  // lists such as System Settings' privacy lists.
+  if let selectable = selectableSelfOrRow(element) {
+    let outcome = AXUIElementSetAttributeValue(selectable, kAXSelectedAttribute as CFString, kCFBooleanTrue)
     guard outcome == .success else { throw axFailure(outcome, "selecting the element") }
     return ["delivery": "accessibility", "action": "select"]
   }
@@ -144,6 +145,20 @@ func press(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> J
   prepareInput(app: app, window: attribute(element, kAXWindowAttribute).map { $0 as! AXUIElement })
   try postClick(at: CGPoint(x: box.midX, y: box.midY), target: pointerTarget(for: element), pid: app.pid, count: 1)
   return ["delivery": "pointer_event", "verified": false]
+}
+
+private let rowSearchDepth = 4
+
+// The element when it can be selected, else the row it sits in when that can.
+private func selectableSelfOrRow(_ element: AXUIElement) -> AXUIElement? {
+  if isSettable(element, kAXSelectedAttribute) { return element }
+  var current = element
+  for _ in 0..<rowSearchDepth {
+    guard let parent = attribute(current, kAXParentAttribute).map({ $0 as! AXUIElement }) else { return nil }
+    if stringAttribute(parent, kAXRoleAttribute) == kAXRowRole { return isSettable(parent, kAXSelectedAttribute) ? parent : nil }
+    current = parent
+  }
+  return nil
 }
 
 func setValue(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {

@@ -136,7 +136,7 @@ The server repeats the essentials in its MCP instructions, so a client that load
 | `list_operations` | Lists the ready operations, hints and pitfalls known for well-known apps; with `app`, that app's operations and their arguments. Needs no approval |
 | `run_operation` | Runs one of them through the app's own automation surface, in the background, and reports whether its result was read back (`verified`) |
 | `get_window_state` | Reads a window, the menu bar (`menu_bar`), the app's items on the right of the menu bar (`menu_extras`) or a subtree (`root`) as numbered elements. Reading the same place again returns only what changed since the last read or action there; `full: true` returns everything, `screenshot: true` adds a screenshot of the window |
-| `press` | Presses an element or runs one of the actions it lists |
+| `press` | Presses an element or runs one of the actions it lists; a list row, or the text in one, is selected |
 | `set_value` | Replaces an element's value |
 | `type_text` | Inserts text at an element, or sends it as keys to the focused element |
 | `select_text` | Selects text in a field or document by what it says, or puts the cursor before or after it, so `type_text` replaces or inserts exactly there |
