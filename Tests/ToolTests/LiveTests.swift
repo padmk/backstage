@@ -169,6 +169,8 @@ struct LiveTests {
     try realCli("approvals", "add", fixtureBundleId)
     defer { try? realCli("approvals", "revoke", fixtureBundleId) }
     let server = try LiveServer()
+    let state = parseLine(textOf(try server.call("list_apps", app: nil))) ?? [:]
+    try #require(state["screen_locked"] as? Bool != true, "The screen is locked: unlock it to run the live test.")
     let frontBefore = try frontApp()
     var findings: [String] = []
     defer { print("Delivery findings:\n" + findings.joined(separator: "\n")) }

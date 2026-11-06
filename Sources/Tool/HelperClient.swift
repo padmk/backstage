@@ -32,7 +32,11 @@ private final class SocketConnection: @unchecked Sendable {
   // Set by the reader once the helper's side is gone; read and written on the client's queue.
   var closed = false
 
-  init(descriptor: Int32) { self.descriptor = descriptor }
+  // Nonblocking, so a write can give up at its deadline; the reader waits for data instead.
+  init(descriptor: Int32) {
+    self.descriptor = descriptor
+    _ = fcntl(descriptor, F_SETFL, fcntl(descriptor, F_GETFL) | O_NONBLOCK)
+  }
 
   // A write that the helper does not take by the deadline fails rather than hangs, however slowly it drains.
   func write(_ object: Any, deadline: Date = Date().addingTimeInterval(requestTimeout)) -> Bool {
@@ -186,8 +190,7 @@ final class HelperClient: @unchecked Sendable {
     var framer = LineFramer()
     var buffer = [UInt8](repeating: 0, count: 65536)
     while true {
-      let count = Darwin.read(socket.descriptor, &buffer, buffer.count)
-      if count < 0, errno == EINTR { continue }
+      let count = readAvailable(socket.descriptor, into: &buffer)
       guard count > 0 else { break }
       for line in framer.lines(in: Data(buffer[0..<count])) {
         guard let reply = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? JSON, let id = reply["id"] as? Int else { continue }
