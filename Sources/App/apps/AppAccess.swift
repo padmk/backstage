@@ -64,6 +64,9 @@ let appGrants: [AppGrant] = [
   AppGrant(id: "mail", name: "Mail", purpose: "Read mail and save drafts", kind: .automation(bundleId: "com.apple.mail"), listedApps: ["com.apple.mail"]),
   AppGrant(id: "messages", name: "Messages", purpose: "List chats and send messages", kind: .automation(bundleId: "com.apple.MobileSMS"), listedApps: ["com.apple.MobileSMS"],
            operations: ["list_chats", "send"]),
+  AppGrant(id: "messages-history", name: "Messages history", plainName: nil, purpose: "Read conversations and attachments",
+           kind: .appData(bundleId: "com.apple.MobileSMS", path: messagesDatabasePath), listedApps: ["com.apple.MobileSMS"],
+           operations: ["list_chats", "read_chat", "save_attachment"]),
   // Tags and the Trash of a symbolic link go through the file system, not Finder.
   AppGrant(id: "finder", name: "Finder", purpose: "Selection, reveal and Trash", kind: .automation(bundleId: "com.apple.finder"), listedApps: ["com.apple.finder"],
            operations: ["selection", "front_folder", "reveal", "trash"]),
@@ -105,7 +108,10 @@ func appGrants(forListed bundleIds: Set<String>, everyApp: Bool) -> [AppGrant] {
 // macOS can tell Automation only for a running app, so a target that is not running, such as System Events for
 // the appearance operations, starts hidden first; when macOS still cannot tell, the operation does not run.
 func requireGrant(for operation: String, of appBundleId: String) throws {
-  guard let grant = appGrants.first(where: { $0.listedApps.contains(appBundleId) && ($0.operations?.contains(operation) ?? true) }) else { return }
+  let covering = appGrants.filter { $0.listedApps.contains(appBundleId) && ($0.operations?.contains(operation) ?? true) }
+  // An operation that more than one grant serves, such as Messages' list_chats, runs on whichever is given.
+  if covering.count > 1, covering.contains(where: { grantState($0) == .granted }) { return }
+  guard let grant = covering.first else { return }
   if case .appData = grant.kind {
     switch grantState(grant) {
     case .granted: return

@@ -36,6 +36,8 @@ struct AppKnowledge {
   let name: String
   // Operations send Apple events to the app itself, so it has to run; it is started hidden when it does not.
   var scripted = false
+  // Whether an operation sends Apple events and so needs the app running; one that reads the app's data does not.
+  var usesScripting: (String) -> Bool = { _ in true }
   let summary: String
   // Shown under the app on the list when its operations reach the app's data without its window.
   var access: String? = nil
@@ -196,7 +198,8 @@ func runOperation(_ params: JSON, session: ApprovalSession, connection: Connecti
 private func execute(_ operation: Operation, of app: AppKnowledge, target: AppIdentity, arguments: JSON, connection: Connection) throws -> JSON {
   let frontBefore = onMain { NSWorkspace.shared.frontmostApplication }
   // An app started by the operation would show its windows above the user's other apps, so it starts hidden.
-  let started = app.scripted && target.pid == 0 ? try startHidden(app, at: target.path) : nil
+  let scripted = app.scripted && app.usesScripting(operation.name)
+  let started = scripted && target.pid == 0 ? try startHidden(app, at: target.path) : nil
   // Runs after the operation whether it worked or not, so a started app never stays visible.
   let tidyUp = { () -> Bool in
     let returned = returnFocus(to: frontBefore, fromBundleId: target.bundleId, wasRunning: target.pid > 0)
