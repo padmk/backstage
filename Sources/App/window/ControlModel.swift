@@ -21,6 +21,7 @@ final class ControlModel: ObservableObject {
   @Published var accessibility = false
   @Published var screenRecording = false
   @Published var rows: [AppRow] = []
+  @Published var requests: [ApprovalRequest] = []
   @Published var recent: [DecisionRecord] = []
   @Published var grants: [String: GrantState] = [:]
   @Published var asking: Set<String> = []
@@ -53,6 +54,8 @@ final class ControlModel: ObservableObject {
     if recording != screenRecording { screenRecording = recording }
     let all = approvedApps()
     if all != rows { rows = all }
+    let waiting = ApprovalRequests.all
+    if waiting != requests { requests = waiting }
     let latest = recentDecisions(limit: 50)
     if latest != recent { recent = latest }
     let states = Dictionary(uniqueKeysWithValues: appGrants.map { ($0.id, grantState($0)) })
@@ -106,6 +109,23 @@ final class ControlModel: ObservableObject {
       request(appGrants.filter { $0.listedApps.contains(bundleId) && [.notAsked, .unknown].contains(grantState($0)) })
     } catch {
       problem = (error as? HelperError)?.message ?? ControlTexts.saveFailed
+    }
+    refresh()
+  }
+
+  // The user's answer to a request that came over the socket.
+  func answer(_ asked: ApprovalRequest, add: Bool) {
+    ApprovalRequests.remove(asked.app.bundleId)
+    if add {
+      do {
+        try addToList(asked.app, by: settingsClient)
+        problem = nil
+        request(appGrants.filter { $0.listedApps.contains(asked.app.bundleId) && [.notAsked, .unknown].contains(grantState($0)) })
+      } catch {
+        problem = (error as? HelperError)?.message ?? ControlTexts.saveFailed
+      }
+    } else {
+      writeDecisionLog(client: settingsClient, bundleId: asked.app.bundleId, decision: "decline")
     }
     refresh()
   }

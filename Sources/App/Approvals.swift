@@ -5,6 +5,7 @@
 // control the Mac without Backstage or edit approvals.json, a file with file permissions only.
 
 import AppKit
+import CryptoKit
 import Security
 
 struct AppIdentity {
@@ -109,6 +110,10 @@ func signingIdentity(of app: AppIdentity) -> String? {
     let details = information as? [String: Any]
   else { return nil }
   if let team = details[kSecCodeInfoTeamIdentifier as String] as? String { return "team:\(team)" }
+  if let certificates = details[kSecCodeInfoCertificates as String] as? [SecCertificate], let leaf = certificates.first {
+    let data = SecCertificateCopyData(leaf) as Data
+    return "certificate:" + Insecure.SHA1.hash(data: data).map { String(format: "%02X", $0) }.joined()
+  }
   if let unique = details[kSecCodeInfoUnique as String] as? Data {
     return "cdhash:" + unique.map { String(format: "%02x", $0) }.joined()
   }

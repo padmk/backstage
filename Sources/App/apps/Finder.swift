@@ -9,14 +9,24 @@ private func paths(_ urls: Any) -> [String] {
   (urls as? [String] ?? []).compactMap { URL(string: $0)?.path }
 }
 
+// Only paths in the reachable set; the others are counted, not named.
+private func reported(_ all: [String]) -> JSON {
+  let shown = all.compactMap(reportablePath)
+  var result: JSON = ["paths": shown]
+  if shown.count < all.count { result["outside_reach"] = all.count - shown.count }
+  return result
+}
+
 private let selection = Operation(name: "selection", summary: "List the files selected in the front Finder window", effect: .reads, arguments: []) { _ in
   let urls = try runScript("return Application('Finder').selection().map((item) => item.url());", target: target)
-  return ["paths": paths(urls)]
+  return reported(paths(urls))
 }
 
 private let frontFolder = Operation(name: "front_folder", summary: "The folder shown in the front Finder window, or the Desktop", effect: .reads, arguments: []) { _ in
   let url = try runScript("return Application('Finder').insertionLocation().url();", target: target)
-  return ["path": paths([url]).first ?? ""]
+  let folder = paths([url]).first ?? ""
+  guard let shown = reportablePath(folder) else { return ["path": "", "outside_reach": true] }
+  return ["path": shown]
 }
 
 private let reveal = Operation(

@@ -4,6 +4,12 @@
 import AppKit
 
 private let idleExitSeconds: TimeInterval = 120
+// Bounds that keep one client from exhausting the helper: a frame no request needs (type_text takes 100,000
+// characters), requests waiting on one connection, connections at once, and sessions kept for reconnecting.
+private let maxFrameBytes = 4 << 20
+private let maxQueuedRequests = 64
+private let maxConnections = 64
+private let maxSessions = 256
 // Long enough for a client to reconnect and keep what the user decided.
 private let detachedSessionSeconds: TimeInterval = 600
 
@@ -12,7 +18,14 @@ final class Connections {
   private var count = 0
   private var lastClosed = Date()
 
-  func opened() { lock.withLock { count += 1 } }
+  // Takes a place for a new connection, or refuses one beyond the limit.
+  func open() -> Bool {
+    lock.withLock {
+      guard count < maxConnections else { return false }
+      count += 1
+      return true
+    }
+  }
 
   func closed() {
     lock.withLock {
@@ -41,6 +54,11 @@ func connectedClients() -> [String] {
 
 private func attachSession(id: String) -> ApprovalSession {
   sessionsLock.withLock {
+    // Past the limit, the sessions detached longest go first; attached ones stay.
+    if sessions[id] == nil, sessions.count >= maxSessions {
+      let detached = sessions.filter { $0.value.attachedConnections == 0 }.sorted { $0.value.detachedAt < $1.value.detachedAt }
+      for (key, _) in detached.prefix(sessions.count - maxSessions + 1) { sessions.removeValue(forKey: key) }
+    }
     let session = sessions[id] ?? ApprovalSession()
     sessions[id] = session
     session.attachedConnections += 1
@@ -75,6 +93,7 @@ final class Connection {
   private var outstandingIds = Set<String>()
   private var cancelledIds = Set<String>()
   private var runningId: String?
+  private var queued = 0
   private var currentSession: ApprovalSession
   private var adoptedSession: ApprovalSession?
   private var requestGeneration = 0
@@ -118,13 +137,19 @@ final class Connection {
     }
   }
 
-  func enqueue(id: String?) {
-    guard let id else { return }
-    lock.withLock { _ = outstandingIds.insert(id) }
+  // Takes a place in this connection's queue, or refuses one beyond the limit.
+  func enqueue(id: String?) -> Bool {
+    lock.withLock {
+      guard queued < maxQueuedRequests else { return false }
+      queued += 1
+      if let id { outstandingIds.insert(id) }
+      return true
+    }
   }
 
   func finish(id: String?) {
     lock.withLock {
+      queued -= 1
       if let id {
         cancelledIds.remove(id)
         outstandingIds.remove(id)
@@ -245,6 +270,10 @@ private func serve(_ descriptor: Int32) {
     let count = read(descriptor, &chunk, chunk.count)
     if count <= 0 { break }
     pending.append(contentsOf: chunk[0..<count])
+    if pending.count > maxFrameBytes, pending.firstIndex(of: 0x0a) == nil {
+      write(["id": NSNull(), "error": ["code": "request_too_large", "message": "A request is larger than \(maxFrameBytes >> 20) MB, so the connection is closed."]], to: connection)
+      break
+    }
     while let newline = pending.firstIndex(of: 0x0a) {
       let line = Data(pending[pending.startIndex..<newline])
       pending = Data(pending[(newline + 1)...])
@@ -262,7 +291,10 @@ private func serve(_ descriptor: Int32) {
         continue
       }
       let generation = connection.currentGeneration
-      connection.enqueue(id: request["id"].map { "\($0)" })
+      guard connection.enqueue(id: request["id"].map { "\($0)" }) else {
+        write(["id": request["id"] ?? NSNull(), "error": ["code": "busy", "message": "Too many requests are waiting on this connection. Wait for answers before sending more."]], to: connection)
+        continue
+      }
       worker.async { perform(request, generation: generation, connection: connection) }
     }
   }
@@ -326,7 +358,10 @@ func startServer() {
       }
       var enabled: Int32 = 1
       setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size))
-      connections.opened()
+      guard connections.open() else {
+        close(client)
+        continue
+      }
       Thread.detachNewThread { serve(client) }
     }
   }

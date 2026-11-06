@@ -158,6 +158,74 @@ let tools: [ToolDefinition] = [
     ],
     required: ["app"], annotations: acts),
   ToolDefinition(
+    name: "list_windows",
+    description: "List windows across apps and displays: each window's id, app, frame (global points, origin at the top left of the main display), display, whether it is on screen, and for apps on the user's list its title, window number, minimized, fullscreen, modal, movable and resizable. Displays come with their frame and visible area (without the menu bar and the Dock). Windows of apps not on the list show no title. space is current, other or unknown: Accessibility reaches only windows on the current Space.",
+    properties: [("app", ["type": "string", "description": "Only this app's windows"])],
+    required: [], annotations: reads),
+  ToolDefinition(
+    name: "set_window",
+    description: "Change one window in one way: frame, layout, minimized or fullscreen (exactly one). The reply reads the frame back: verified when it matches within 2 points, adjusted when the app kept it within its own limits. Bringing a window back from the Dock or into full screen puts it in front, so it needs foreground: true; tell the user. Windows on another Space cannot be changed.",
+    properties: [
+      ("app", app),
+      ("id", ["type": "integer", "minimum": 1, "description": "Window id from list_windows"]),
+      ("window", window),
+      ("frame", ["type": "object", "description": "{x, y, width, height} in global points"]),
+      ("layout", ["type": "string", "enum": ["maximize", "center", "left_half", "right_half", "top_half", "bottom_half", "top_left", "top_right", "bottom_left", "bottom_right", "left_third", "center_third", "right_third", "left_two_thirds", "right_two_thirds"], "description": "Place the window in a part of a display's visible area"]),
+      ("display", ["type": ["integer", "string"], "description": "With layout: a display id from list_windows, next or previous; default the window's own"]),
+      ("minimized", ["type": "boolean"]),
+      ("fullscreen", ["type": "boolean"]),
+      ("foreground", ["type": "boolean", "description": "Allow a change that brings the window in front (minimized: false, fullscreen)"]),
+    ],
+    required: ["app"], annotations: acts),
+  ToolDefinition(
+    name: "set_app_state",
+    description: "Hide an app's windows, or show them again without bringing the app forward.",
+    properties: [("app", app), ("state", ["type": "string", "enum": ["hidden", "shown"]])],
+    required: ["app", "state"], annotations: acts),
+  ToolDefinition(
+    name: "close",
+    description: "Close a window through its close button, or quit the app (quit: true) as if the user chose Quit. Nothing is forced: when the app asks about unsaved work the reply is outcome_unknown; read its window and answer, or tell the user.",
+    properties: [
+      ("app", app),
+      ("id", ["type": "integer", "minimum": 1, "description": "Window id from list_windows"]),
+      ("window", window),
+      ("quit", ["type": "boolean", "description": "Quit the app instead of closing one window"]),
+    ],
+    required: ["app"], annotations: ["readOnlyHint": false, "destructiveHint": true, "openWorldHint": false]),
+  ToolDefinition(
+    name: "list_menu_commands",
+    description: "List what an app can do from its menu bar: each command's path (such as File > Export…), keyboard shortcut, enabled state and element number, without opening a menu. Use it to find a command instead of exploring the window; query narrows it. Commands that act on the current document are disabled while the app is in the background. The Apple, Services and Share menus are never available.",
+    properties: [
+      ("app", app),
+      ("query", ["type": "string", "description": "Only commands whose path or shortcut contains this"]),
+      ("enabled_only", ["type": "boolean"]),
+      ("max", ["type": "integer", "minimum": 1, "maximum": 2000, "description": "Default 300"]),
+    ],
+    required: ["app"], annotations: reads),
+  ToolDefinition(
+    name: "run_menu_command",
+    description: "Run one menu command by its path (File > Export…; the last title alone when it is unique) or its shortcut (cmd+shift+s), in the background, without opening the menu or typing the shortcut. It is refused when disabled or ambiguous, with the matches. The reply's state reports what changed; a toggle is verified by its checkmark.",
+    properties: [
+      ("app", app),
+      ("command", ["type": "string", "maxLength": 500, "description": "Menu path, separated by >"]),
+      ("shortcut", ["type": "string", "maxLength": 64, "description": "Such as cmd+shift+s"]),
+    ],
+    required: ["app"], annotations: ["readOnlyHint": false, "destructiveHint": true, "openWorldHint": false]),
+  ToolDefinition(
+    name: "wait_for",
+    description: "Wait until text shows in a window (a dialog, a result, a label), or with gone: true until it stops showing, for up to timeout seconds (default 10, at most 30). It reads the same place get_window_state reads (window, menu_bar, root). The reply says whether it was found and the matching line.",
+    properties: [
+      ("app", app),
+      ("text", ["type": "string", "maxLength": 1000]),
+      ("role", ["type": "string", "description": "Only lines of this role, such as Button or Sheet"]),
+      ("gone", ["type": "boolean"]),
+      ("timeout", ["type": "number", "minimum": 0.5, "maximum": 30]),
+      ("window", window),
+      ("menu_bar", ["type": "boolean"]),
+      ("root", described(element, "Look only in this element's subtree")),
+    ],
+    required: ["app", "text"], annotations: reads),
+  ToolDefinition(
     name: "run_actions",
     description: "Run up to \(maxSteps) actions in one app in order, then report the combined change once, saving a round trip per step. Each step is {\"tool\": one of \(stepTools.joined(separator: ", ")), plus that tool's arguments without app}, such as {\"tool\":\"set_value\",\"element\":4,\"value\":\"Paris\"}. Use element numbers you have already read: elements a step makes appear have no number yet. Steps stop at the first that fails or may have worked (`failed` names it); a step that was delivered but cannot be confirmed, such as a click by position (`verified: false`), does not stop the others. Nothing is retried, so read the state before going on.",
     properties: [
