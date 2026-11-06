@@ -33,7 +33,7 @@
 - **Every app's commands, without exploring.** `list_menu_commands` shows what any app can do, with its keyboard shortcuts, and `run_menu_command` runs a command by its menu path. It works in apps Backstage has never seen and keeps working when an app changes its layout.
 - **Windows as objects.** List every window on every display, move, resize and arrange them in halves, quarters or thirds, minimize, hide, close and quit, each change read back.
 - **Ready operations for Apple's apps.** Notes, Reminders, Calendar, Contacts, Mail, Messages, Music, Finder, Pages, Numbers, Shortcuts and System Settings have typed operations that run while the app is hidden or closed, most of them also while the screen is locked, and that read their result back where the app allows it.
-- **You decide which apps.** Agents can use only the apps on your list. Nothing asks during a task, so unattended sessions stay within what you chose; Passwords, Keychain Access and login windows are never available.
+- **You decide which apps.** Agents can use only the apps on your list. Nothing asks during a task, so unattended sessions stay within what you chose; Passwords, Keychain Access, other password managers, authenticators and wallets, and login windows are never available.
 - **Local and independent.** No account, no telemetry, no dependency on any AI product. Everything is Swift: a small command speaks MCP, and a signed helper app does the work through Accessibility, the window server, Apple events, EventKit and the Contacts framework.
 
 ## Install
@@ -175,7 +175,7 @@ Requests for the same app run one at a time, also across agents, so two sessions
 | Code | Meaning | What to do |
 |---|---|---|
 | `not_approved` | The app is not on the user's list | Ask the user to add it on the Apps tab; do not reach it another way |
-| `not_allowed` | Never available: the app (Passwords, Keychain Access, login windows, Backstage), an item in the Apple, Services or Share menu, or what an operation's rules refuse (a read-only calendar, a recurring event, a file outside your home folder or in its Library, a locked note) | Change the arguments, or ask the user to do it |
+| `not_allowed` | Never available: the app (Passwords, Keychain Access, other password managers, authenticators and wallets, login windows, Backstage), an item in the Apple, Services or Share menu, or what an operation's rules refuse (a read-only calendar, a recurring event, a file outside your home folder or in its Library, a locked note) | Change the arguments, or ask the user to do it |
 | `permission_missing` | A macOS grant is missing (Accessibility, Screen Recording, or one a ready operation needs) | Ask the user to allow it on the Setup tab |
 | `access_denied` | The user declined that grant | The message names the pane in System Settings |
 | `screen_locked` | The screen is locked, so windows cannot be read | Use ready operations or the menu bar; see [Locked screen](#locked-screen) |
@@ -280,7 +280,7 @@ This keeps agents from using other apps through Backstage by mistake. It does no
 
 - List entries name the app's bundle id and signer, so another app claiming the same bundle id is not covered. An app without a valid signature cannot go on the list; Allow every app covers it.
 - Apps that give agents a shell or control of the system (terminals, Shortcuts, Finder, System Settings, Xcode and similar) carry a warning on the list.
-- Passwords, Keychain Access, login and authentication windows, and Backstage itself are never available, whatever the settings. Nor are the Apple menu (Restart, Log Out) and the Services and Share menus of any app, which act on the whole Mac or hand content to other apps.
+- Passwords, Keychain Access, login and authentication windows, and Backstage itself are never available, whatever the settings. Nor are password managers, authenticators and wallets from other makers: 1Password, Bitwarden, KeePassXC, MacPass, Proton Pass, Enpass, Yubico Authenticator, Ledger Live, Sparrow and Electrum, by the bundle ids their makers use. Nor are the Apple menu (Restart, Log Out) and the Services and Share menus of any app, which act on the whole Mac or hand content to other apps.
 
 ```sh
 backstage approvals add Notes          # asks you in the Backstage window; added once you click Add

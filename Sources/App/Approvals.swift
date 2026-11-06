@@ -19,6 +19,8 @@ struct AppIdentity {
 private let neverApproved: Set<String> = [
   "com.apple.SecurityAgent", "com.apple.loginwindow", "com.apple.LocalAuthentication.UIAgent",
   "com.apple.Passwords", "com.apple.keychainaccess",
+  // The Electrum wallet, whose bundle id is its bare name.
+  "Electrum",
   // The windows in which macOS asks for a permission.
   "com.apple.tcc.AuthorizationPromptService", "com.apple.UserNotificationCenter",
 ]
@@ -33,8 +35,14 @@ private let farReaching: Set<String> = [
 ]
 
 func isFarReaching(_ bundleId: String) -> Bool { farReaching.contains(bundleId) }
-// Whole families too: Passwords has helpers such as its menu bar extra under its own prefix.
-private let neverApprovedPrefixes = ["com.apple.Passwords.", "com.apple.keychainaccess."]
+// Whole families too: Passwords has helpers such as its menu bar extra under its own prefix. Password managers,
+// authenticators and wallets from other makers hold the same kind of secret, so no list or switch reaches them
+// either; their ids are the makers' own, as Homebrew's casks record them.
+private let neverApprovedPrefixes = [
+  "com.apple.Passwords.", "com.apple.keychainaccess.",
+  "com.1password.", "com.agilebits.", "com.bitwarden.", "org.keepassxc.", "com.hicknhacksoftware.MacPass", "me.proton.pass",
+  "in.sinew.Enpass", "com.yubico.", "com.ledger.", "com.sparrowwallet.",
+]
 
 func isNeverApproved(_ bundleId: String) -> Bool {
   neverApproved.contains(bundleId) || neverApprovedPrefixes.contains { bundleId.hasPrefix($0) } || bundleId == Bundle.main.bundleIdentifier
