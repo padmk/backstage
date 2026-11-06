@@ -74,10 +74,12 @@ func readTree(app: AppIdentity, params: JSON, session: ApprovalSession, shownToA
     selected = try selectWindow(application, params: params)
     roots = [selected!] + openMenus(of: application)
   }
-  return WindowRead(header: header(app: app, application: application, selected: selected),
-                    tree: renderTree(roots: roots, pid: app.pid, table: session.table, maxElements: maxElements,
-                                     shownToAgent: shownToAgent, seconds: seconds),
-                    root: roots.first)
+  let mintedFrom = session.table.nextFreeNumber
+  var tree = renderTree(roots: roots, pid: app.pid, table: session.table, maxElements: maxElements, shownToAgent: shownToAgent, seconds: seconds)
+  if let last = session.lock.withLock({ session.lastReads[app.pid] }), !last.isPartial, last.covers(params, root: roots.first) {
+    carryNumbers(&tree, previous: last.lines, mintedFrom: mintedFrom, table: session.table, pid: app.pid)
+  }
+  return WindowRead(header: header(app: app, application: application, selected: selected), tree: tree, root: roots.first)
 }
 
 // An app can bring itself forward in response to an action, for example when it shows or closes a dialog.
