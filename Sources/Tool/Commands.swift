@@ -101,8 +101,8 @@ private func resetGrant(_ service: String) {
   }
 }
 
-// Accessibility is the one permission setup needs. Screen Recording is optional, for screenshots, and is turned on
-// later in the window, so setup shows no second prompt.
+// Accessibility is the one permission setup needs. Screen Recording, for screenshots, and System Audio Recording, for
+// record_audio, are optional and turned on later in the window, so setup shows no second prompt.
 // Returns whether Accessibility is granted, and whether it already was, as on an update.
 private func grantPermissions(signingChanged: Bool) throws -> (granted: Bool, already: Bool) {
   let helper = client()
@@ -110,6 +110,7 @@ private func grantPermissions(signingChanged: Bool) throws -> (granted: Bool, al
   let current = try status(helper)
   // Entries for an earlier signature can still look enabled while they no longer apply.
   if signingChanged, current["screen_recording"] as? Bool != true { resetGrant("ScreenCapture") }
+  if signingChanged, current["audio_recording"] as? String == "denied" { resetGrant("AudioCapture") }
   if current["accessibility"] as? Bool == true { return (true, true) }
   if signingChanged { resetGrant("Accessibility") }
   printLine("Grant Accessibility to \(Product.appName) in the macOS window that opens, so it can read windows, click and type.")
@@ -165,6 +166,7 @@ private func doctor() -> Int32 {
     : !current ? "another build than this command; run: \(commandHint()) setup" : Product.installedAppPath
   checks.append(("App", installed && current, appDetail))
   var screenRecording: Bool?
+  var audioRecording: String?
   var appAccess: [JSON] = []
   var privateCalls: [String: Bool] = [:]
   if installed && current {
@@ -174,6 +176,7 @@ private func doctor() -> Int32 {
       let accessibility = reply["accessibility"] as? Bool == true
       checks.append(("Accessibility", accessibility, accessibility ? "granted" : "missing; run: \(commandHint()) setup"))
       screenRecording = reply["screen_recording"] as? Bool
+      audioRecording = reply["audio_recording"] as? String
       appAccess = reply["app_access"] as? [JSON] ?? []
       privateCalls = reply["private_calls"] as? [String: Bool] ?? [:]
     } catch {
@@ -187,6 +190,12 @@ private func doctor() -> Int32 {
   }
   // Optional: each only matters for the operations that use it, so a missing one is not a failure.
   let meaning = ["granted": "granted", "not_asked": "not asked yet", "denied": "off in System Settings", "unknown": "shown once the app runs"]
+  if let audioRecording {
+    let detail = audioRecording == "granted" ? "granted"
+      : audioRecording == "unknown" ? "cannot be checked on this Mac; record_audio tells when it hears nothing"
+      : "optional, for record_audio; allow it in the \(Product.appName) window, on the Setup tab (\(meaning[audioRecording] ?? audioRecording))"
+    printLine("\(audioRecording == "granted" ? "ok  " : "--  ") System Audio Recording: \(detail)")
+  }
   if !appAccess.isEmpty { printLine("App access for the listed apps (allow them in the \(Product.appName) window):") }
   for entry in appAccess {
     let state = entry["state"] as? String ?? ""

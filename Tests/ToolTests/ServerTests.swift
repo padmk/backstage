@@ -59,7 +59,7 @@ private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
   @Test func listsToolsWithSchemasThatRejectUnknownArguments() throws {
     let setup = try Setup()
     let tools = (try setup.server.request("tools/list")["result"] as! Object)["tools"] as! [Object]
-    #expect(tools.map { $0["name"] as! String } == ["list_apps", "launch_app", "list_operations", "run_operation", "get_window_state", "read_text", "screenshot", "press", "set_value", "type_text", "select_text", "press_key", "scroll", "drag", "click_at", "list_windows", "set_window", "set_app_state", "close", "list_menu_commands", "run_menu_command", "wait_for", "run_actions"])
+    #expect(tools.map { $0["name"] as! String } == ["list_apps", "launch_app", "list_operations", "run_operation", "get_window_state", "read_text", "screenshot", "press", "set_value", "type_text", "select_text", "press_key", "scroll", "drag", "click_at", "list_windows", "set_window", "set_app_state", "close", "list_menu_commands", "run_menu_command", "wait_for", "record_audio", "run_actions"])
     for tool in tools { #expect((tool["inputSchema"] as? Object)?["additionalProperties"] as? Bool == false) }
   }
 

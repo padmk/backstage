@@ -54,11 +54,19 @@ func userPath(_ arguments: JSON, key: String = "path", mustExist: Bool = true, f
   return url
 }
 
+// The kinds of copies Backstage hands agents, each under a folder of its own in the system's temporary folder.
+enum CopyFolder: String, CaseIterable {
+  case audioRecordings = "audio-recordings", messagesAttachments = "messages-attachments"
+  case whatsAppMedia = "whatsapp-media", photosExport = "photos-export"
+}
+
+private let resolvedTemporaryFolder = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path
+
 // A new private folder for one copy an operation hands the agent, such as an attachment it cannot read where the app
 // keeps it: under the system's temporary folder, readable only by the user, so nothing is replaced and no other copy
 // is reached through it. macOS clears the temporary folder over time.
-func newCopyFolder(_ kind: String) throws -> URL {
-  let folder = FileManager.default.temporaryDirectory.appendingPathComponent(kind, isDirectory: true)
+func newCopyFolder(_ kind: CopyFolder) throws -> URL {
+  let folder = FileManager.default.temporaryDirectory.appendingPathComponent(kind.rawValue, isDirectory: true)
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
   do {
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -66,4 +74,22 @@ func newCopyFolder(_ kind: String) throws -> URL {
     throw HelperError(code: "action_failed", message: "No folder for the copy could be made: \(error.localizedDescription)")
   }
   return folder
+}
+
+// A file an allowed app may be handed: one of the user's own reachable files, or a copy Backstage made, such as a
+// recording, with links resolved.
+func openableFile(_ text: String) throws -> URL {
+  let expanded = (text as NSString).expandingTildeInPath
+  guard expanded.hasPrefix("/") else { throw HelperError(code: "invalid_arguments", message: "Each file must be absolute or start with ~.") }
+  let url = URL(fileURLWithPath: expanded).standardizedFileURL.resolvingSymlinksInPath()
+  let path = url.path
+  let isCopy = CopyFolder.allCases.contains { path.hasPrefix("\(resolvedTemporaryFolder)/\($0.rawValue)/") }
+  guard isReachablePath(path) || isCopy else {
+    throw HelperError(code: "not_allowed", message: "\(text) is not reachable: only files in your home folder, outside Library except iCloud Drive and cloud storage, on external volumes, or copies Backstage made can be opened.")
+  }
+  var isFolder: ObjCBool = false
+  guard FileManager.default.fileExists(atPath: path, isDirectory: &isFolder), !isFolder.boolValue else {
+    throw HelperError(code: "not_found", message: "\(text) is not a file.")
+  }
+  return url
 }

@@ -209,7 +209,7 @@ private let saveMedia = Operation(
   guard FileManager.default.fileExists(atPath: source.path) else {
     throw HelperError(code: "not_found", message: "Message \(id)'s attachment is not on this Mac; WhatsApp downloads it when the user opens it.")
   }
-  let destination = try newCopyFolder("whatsapp-media").appendingPathComponent(source.lastPathComponent)
+  let destination = try newCopyFolder(.whatsAppMedia).appendingPathComponent(source.lastPathComponent)
   do {
     try FileManager.default.copyItem(at: source, to: destination)
   } catch {

@@ -18,5 +18,6 @@
 <key>NSRemindersFullAccessUsageDescription</key><string>@APP_NAME@ reads and changes reminders when an agent you approved asks.</string>
 <key>NSContactsUsageDescription</key><string>@APP_NAME@ reads and adds contacts when an agent you approved asks.</string>
 <key>NSPhotoLibraryUsageDescription</key><string>@APP_NAME@ finds photos and videos and copies them out when an agent you approved asks. It never changes your library.</string>
+<key>NSAudioCaptureUsageDescription</key><string>@APP_NAME@ records what an app you allow plays, muted for you, when an agent asks.</string>
 <key>NSCalendarsFullAccessUsageDescription</key><string>@APP_NAME@ reads and changes calendar events when an agent you approved asks.</string>
 </dict></plist>

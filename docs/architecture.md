@@ -18,7 +18,7 @@ Accessibility · window server events · ScreenCaptureKit · Apple events · Eve
 ```
 
 - **The command** (`backstage`, inside the app bundle) serves MCP over stdio when a client runs it with `mcp`: it validates arguments against the tool schemas, starts the helper when needed and forwards each call over the socket. It keeps nothing about the user. Its instructions to clients put the access policy first, because clients cut long server instructions. The same command installs the app (`setup`), checks this Mac (`doctor`) and edits the list (`approvals`). It uses Foundation only, never AppKit or a privacy-protected API.
-- **The helper** is a signed macOS app in `/Applications`. It holds Accessibility, the optional Screen Recording, the Automation, Reminders, Calendars, Contacts and Photos grants, and Full Disk Access when the user turns it on for WhatsApp. It also holds the app list and checks every request against it, so a process that talks to the socket directly meets the same rules as an agent. It shows the Backstage window, and stops 2 minutes after the last client disconnects unless Open at login or the menu bar item is on.
+- **The helper** is a signed macOS app in `/Applications`. It holds Accessibility, the optional Screen Recording and System Audio Recording, the Automation, Reminders, Calendars, Contacts and Photos grants, and Full Disk Access when the user turns it on for WhatsApp. It also holds the app list and checks every request against it, so a process that talks to the socket directly meets the same rules as an agent. It shows the Backstage window, and stops 2 minutes after the last client disconnects unless Open at login or the menu bar item is on.
 - **HelperLink** is the code both share: the product's name, version and bundle id, the directories, line framing and the build identity.
 
 **Why two processes.** macOS attributes privacy permissions to the process responsible for a request. A program an MCP client starts directly runs on the client's behalf, so its Accessibility would be the terminal's or the client's, and would change with whatever runs it. The helper is started through LaunchServices (`open -g -j`), so macOS treats it as its own app: its grants stay stable across updates, in one place the user can see and revoke. The command only forwards requests and needs no grant.
@@ -49,7 +49,7 @@ A cancelled request stops between steps, between typed characters, or by stoppin
 
 ## Acting in the background
 
-The goal is that the user can keep working in another app while an agent works. No tool brings an app forward, except `click_at` with `foreground: true` as a last resort, which gives the focus back afterwards.
+The goal is that the user can keep working in another app while an agent works. When a request needs something only the user can give (an app on the list, Screen Recording, System Audio Recording), the helper leaves it under Waiting for you at the top of the window and brings the window forward once; the window takes the first click, so one click on Add or Allow acts. macOS keeps the permission answer it gave a process, so the window reads the current one in a short-lived copy of the app, and the helper restarts itself, once no request is running, for a grant only a new process gets. No tool brings an app forward, except `click_at` with `foreground: true` as a last resort, which gives the focus back afterwards.
 
 | Action | Route |
 |---|---|

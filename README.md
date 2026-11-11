@@ -73,7 +73,7 @@ Homebrew builds the app from source; `make install` builds `build/Backstage.app`
 | `make app` | Build `build/Backstage.app` only, signed ad hoc |
 | `build/Backstage.app/Contents/Helpers/backstage setup --no-register` | Install without registering with Claude Code or Codex |
 
-**Screen Recording** is optional. Only `screenshot` (and `get_window_state` with `screenshot: true`) uses it, for web pages and apps that show no elements. Turn it on later on the Setup tab.
+**Screen Recording** and **System Audio Recording** are optional. Only `screenshot` (and `get_window_state` with `screenshot: true`) uses Screen Recording, for web pages and apps that show no elements; only `record_audio` uses System Audio Recording, to record what an allowed app plays, such as a voice message that cannot be downloaded. You do not need to set them up in advance: the first time an agent needs one, the Backstage window opens with an Allow button for it under Waiting for you. Allow either at any time on the Setup tab.
 
 **The `backstage` command** lives inside the app, at `/Applications/Backstage.app/Contents/Helpers/backstage`; MCP clients run it with `mcp`. To use it from a shell by name, link it onto your `PATH`, for example `ln -s /Applications/Backstage.app/Contents/Helpers/backstage ~/.local/bin/backstage`.
 
@@ -132,7 +132,7 @@ The server repeats the essentials in its MCP instructions, so a client that load
 | Tool | What it does |
 |---|---|
 | `list_apps` | Lists running apps with whether agents may use each one (`allowed`, `not_approved`, `never_available`); with `app`, checks one app without starting it. Also reports `screen_locked` and `windows_while_locked` |
-| `launch_app` | Starts an app by name or bundle id in the background, giving the focus back if it takes it while starting; leaves an app that is already running as it is |
+| `launch_app` | Starts an app by name or bundle id in the background, giving the focus back if it takes it while starting; leaves an app that is already running as it is. With `files`, hands the app files to open (your own files, or copies Backstage made such as `record_audio`'s recordings) and gives the focus back if the app comes forward to show them |
 | `list_operations` | Lists the ready operations, hints and pitfalls known for well-known apps; with `app`, that app's operations and their arguments. Needs no approval |
 | `run_operation` | Runs one of them through the app's own automation surface, in the background, and reports whether its result was read back (`verified`) |
 | `get_window_state` | Reads a window, the menu bar (`menu_bar`), the app's items on the right of the menu bar (`menu_extras`) or a subtree (`root`) as numbered elements. Reading the same place again returns only what changed since the last read or action there; `full: true` returns everything, `screenshot: true` adds a screenshot of the window |
@@ -153,6 +153,7 @@ The server repeats the essentials in its MCP instructions, so a client that load
 | `list_menu_commands` | Lists an app's menu commands with their path, shortcut, enabled state and element number, without opening a menu |
 | `run_menu_command` | Runs one menu command by its path (`File > Export…`) or shortcut (`cmd+shift+s`), without opening the menu or typing the keys |
 | `wait_for` | Waits until text shows in a window, or until it is gone, up to 30 s |
+| `record_audio` | Records what an app and its helper processes play into an `.m4a` file, muted for you, up to 180 s; can press the element that starts playback once the recording runs, and ends after a pause in the sound (`until_silent`, default 3 s) |
 | `run_actions` | Runs up to 20 of the actions above in one app in order and reports the combined change once; stops at the first step that fails or may have worked, while a step delivered but not confirmable (`verified: false`) does not stop the others |
 
 ### Action replies
@@ -176,7 +177,7 @@ Requests for the same app run one at a time, also across agents, so two sessions
 |---|---|---|
 | `not_approved` | The app is not on the user's list | Ask the user to add it on the Apps tab; do not reach it another way |
 | `not_allowed` | Never available: the app (Passwords, Keychain Access, other password managers, authenticators and wallets, login windows, Backstage), an item in the Apple, Services or Share menu, or what an operation's rules refuse (a read-only calendar, a recurring event, a file outside your home folder or in its Library, a locked note) | Change the arguments, or ask the user to do it |
-| `permission_missing` | A macOS grant is missing (Accessibility, Screen Recording, or one a ready operation needs) | Ask the user to allow it on the Setup tab |
+| `permission_missing` | A macOS grant is missing (Accessibility, Screen Recording, System Audio Recording, or one a ready operation needs) | Tell the user what to allow; for Screen Recording and System Audio Recording the window already shows them an Allow button |
 | `access_denied` | The user declined that grant | The message names the pane in System Settings |
 | `screen_locked` | The screen is locked, so windows cannot be read | Use ready operations or the menu bar; see [Locked screen](#locked-screen) |
 | `user_active` | The app is in front and the user typed or clicked in the last 2 s, or moved the pointer or scrolled over its windows | Try again in a few seconds |
@@ -219,6 +220,7 @@ For well-known apps Backstage carries ready operations, so an agent does not wor
 | Home | Hints and pitfalls for its window |
 | Bear | Hints: its own `bearcli` and MCP server read and write notes |
 | Telegram | Hints and pitfalls for its window, whose lists show no rows to Accessibility |
+| Discord | Hints: where messages are in its window, `record_audio` for voice messages, which cannot be downloaded, and `launch_app` with `files` to hand a recording to a speech-to-text app |
 | Chrome, Brave, Edge, Arc, Vivaldi, Helium | Hints: Bruse works their pages in background tabs |
 
 `get_window_state` shows an app's hints and pitfalls under its first line. Operations need the app to be allowed, like the other tools, and some need a macOS grant: Automation of the app, or Reminders, Calendars, Contacts or Photos. macOS asks once, when you add the app on the Apps tab, and never for an app that is not on the list. WhatsApp's operations and reading Messages need Full Disk Access, which macOS never asks for: the Setup tab opens its pane with a panel to drag Backstage into the list. An operation never shows that prompt during a task: without the grant it fails with `permission_missing`. `outcome_unknown` means a change may have been made: read before trying again. Contracts (ids, dates, paths, limits), the reasoning behind them and the measurements are in [docs/app-knowledge.md](docs/app-knowledge.md).
@@ -252,6 +254,7 @@ While the Mac's screen is locked, macOS keeps windows out of Accessibility and S
 | `list_windows` | Lists windows from the window server, without titles or states |
 | `set_app_state` (hide, show) | Works |
 | Window trees, element actions, `set_window`, `close`, `wait_for` on a window | Stop with `screen_locked` |
+| `record_audio` | Records; its `press` stops with `screen_locked` unless it presses a menu item |
 | Messages `send` | Sends, but cannot confirm it (`verified: false`); do not send again |
 | `screenshot`, `click_at` with `x` and `y`, `press_key`, `type_text` without an element | Only with **Windows while locked** on, from screenshots and never verified |
 
@@ -266,10 +269,11 @@ Open **Backstage** from `/Applications` to see and change everything in one wind
   <img src="docs/images/window-activity.png" width="420" alt="The Activity tab: which agent first used which app, and changes to the list and the switches, with relative times">
 </p>
 
-- **Apps:** apps asked for from the command line or by an agent, waiting for you to add or decline them; Allow every app, and otherwise the list of apps agents may use, with Add App… and Remove. Far-reaching apps carry their warning. While Allow every app is on, the list folds away and is kept for when it goes off. While an app's ready operations wait for a macOS grant, a line here leads to Setup, and the Setup tab carries a dot.
+- **Waiting for you**, above every tab while something waits: apps asked for from the command line or by an agent, with Add and Decline, and permissions an agent needed, with Allow and Not Now. Nothing changes until you choose.
+- **Apps:** Allow every app, and otherwise the list of apps agents may use, with Add App… and Remove. Far-reaching apps carry their warning. While Allow every app is on, the list folds away and is kept for when it goes off. While an app's ready operations wait for a macOS grant, a line here leads to Setup, and the Setup tab carries a dot.
 - **Setup:**
   - Under Background: Open at login and Show in menu bar (off by default; its menu shows whether Backstage is ready, which agents are connected and the apps on the list), both available in the copy in `/Applications`; and Windows while locked (off by default, see above).
-  - Under macOS permissions: Accessibility, which Backstage needs, and Screen Recording, which is optional and only for screenshots, each with a button for the right pane of System Settings. A new Screen Recording grant needs a restart, which the tab offers.
+  - Under macOS permissions: Accessibility, which Backstage needs, Screen Recording, which is optional and only for screenshots, and System Audio Recording, which is optional and only for `record_audio`, each with one Allow button: it shows macOS's prompt, or opens the right pane of System Settings and says what to turn on there. Backstage notices the change by itself; for a grant that macOS gives only to a new process, it restarts itself once no request is running and opens the window again.
   - Under App access: an Allow button for each macOS grant that the listed apps' ready operations use (Calendars, Reminders, Contacts, Photos, and Automation of Notes, Mail, Messages, Finder, Pages, Numbers, Music and System Events); all of them while Allow every app is on. The WhatsApp and Messages history rows instead offer Add in Settings…, which opens Full Disk Access with a panel holding a large Backstage icon to drag into the list; the panel closes once the grant is on.
   - The window opens here while Accessibility is missing.
 - **Activity:** which agent first used which app in each session, changes to the list, and changes to Allow every app and Windows while locked, from the log `SECURITY.md` describes.
@@ -296,7 +300,7 @@ backstage approvals revoke com.apple.Notes
 
 ## Troubleshooting
 
-`backstage doctor` checks macOS, the installed app and its signature, Accessibility, Screen Recording, the grants of the listed apps and the private macOS calls background delivery uses.
+`backstage doctor` checks macOS, the installed app and its signature, Accessibility, Screen Recording, System Audio Recording, the grants of the listed apps and the private macOS calls background delivery uses.
 
 | Symptom | Fix |
 |---|---|
@@ -335,6 +339,7 @@ CI runs on macOS: it builds and assembles the app (`make app`), type-checks the 
 | `Sources/App/WindowManagement.swift` | `list_windows`, `set_window`, `set_app_state`, `close`: displays, frames, layouts |
 | `Sources/App/MenuCommands.swift`, `MenuSafety.swift` | Menu commands with their shortcuts; the Apple, Services and Share menus refused on every route |
 | `Sources/App/WaitFor.swift` | `wait_for` |
+| `Sources/App/AudioRecording.swift` | `record_audio`: a muted Core Audio tap of an app and its helper processes, and the System Audio Recording grant |
 | `Sources/App/ApprovalRequests.swift` | Apps asked for over the socket, waiting for the user in the window |
 | `packaging/homebrew/backstage.rb` | The formula for the tap, filled in at each release |
 | `Sources/App/apps/` | App knowledge: the catalog (`Catalog.swift`), the script runner and event store, one file per app |

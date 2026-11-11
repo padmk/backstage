@@ -222,7 +222,7 @@ private let export = Operation(
   guard let resource = preferred.lazy.compactMap({ type in resources.first { $0.type == type } }).first else {
     throw HelperError(code: "not_found", message: "This item has no photo or video to copy.")
   }
-  let folder = try newCopyFolder("photos-export")
+  let folder = try newCopyFolder(.photosExport)
   let name = safeName(resource.originalFilename, fallback: "item")
   let original = folder.appendingPathComponent(jpeg ? ".source-" + name : name)
   // Without the network first, so an item that is only in iCloud is reported as downloaded.

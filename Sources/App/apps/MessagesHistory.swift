@@ -187,7 +187,7 @@ let messagesSaveAttachment = Operation(
   guard (try? source.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else {
     throw HelperError(code: "not_found", message: "Message \(id)'s attachment is not on this Mac; Messages downloads it when the user opens it.")
   }
-  let destination = try newCopyFolder("messages-attachments").appendingPathComponent(source.lastPathComponent)
+  let destination = try newCopyFolder(.messagesAttachments).appendingPathComponent(source.lastPathComponent)
   do {
     try FileManager.default.copyItem(at: source, to: destination)
   } catch {
