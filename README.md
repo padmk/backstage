@@ -179,7 +179,7 @@ Requests for the same app run one at a time, also across agents, so two sessions
 | `permission_missing` | A macOS grant is missing (Accessibility, Screen Recording, or one a ready operation needs) | Ask the user to allow it on the Setup tab |
 | `access_denied` | The user declined that grant | The message names the pane in System Settings |
 | `screen_locked` | The screen is locked, so windows cannot be read | Use ready operations or the menu bar; see [Locked screen](#locked-screen) |
-| `user_active` | The app is in front and the user typed or clicked in the last 2 s | Try again in a few seconds |
+| `user_active` | The app is in front and the user typed or clicked in the last 2 s, or moved the pointer or scrolled over its windows | Try again in a few seconds |
 | `outcome_unknown` | The action or operation may have worked, for example it opened a blocking dialog or was cancelled midway | Read the state before trying again; never retry blindly |
 | `stale_element`, `unknown_element` | The element number no longer names what was read | Read the window again |
 | `stale_window` | A window id from `list_windows` now belongs to another app | List the windows again |
