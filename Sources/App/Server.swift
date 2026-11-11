@@ -229,14 +229,38 @@ private func write(_ reply: JSON, to connection: Connection) {
   }
 }
 
-// How many requests run now, so a restart for a new grant can wait until none does.
+// How many requests run now, so a restart for a new grant waits until none does and none starts once it goes ahead.
 enum RequestActivity {
   private static let lock = NSLock()
   private static var count = 0
+  private static var restartPlanned = false
+  private static var closed = false
 
-  static var running: Int { lock.withLock { count } }
-  static func started() { lock.withLock { count += 1 } }
+  // False once the app is about to restart: the request is not run.
+  static func started() -> Bool {
+    lock.withLock {
+      if closed { return false }
+      count += 1
+      return true
+    }
+  }
+
   static func ended() { lock.withLock { count -= 1 } }
+
+  // True for the first caller only, so one restart waits however often it is asked for.
+  static func planRestart() -> Bool {
+    lock.withLock {
+      defer { restartPlanned = true }
+      return !restartPlanned
+    }
+  }
+
+  static func closeIfIdle() -> Bool {
+    lock.withLock {
+      if count == 0 { closed = true }
+      return closed
+    }
+  }
 }
 
 private let connectionKey = "connection"
@@ -250,13 +274,16 @@ private func perform(_ request: JSON, generation: Int, connection: Connection) {
   let key = request["id"].map { "\($0)" }
   connection.begin(generation: generation, id: key)
   Thread.current.threadDictionary[connectionKey] = connection
-  RequestActivity.started()
+  let admitted = RequestActivity.started()
   defer {
-    RequestActivity.ended()
+    if admitted { RequestActivity.ended() }
     Thread.current.threadDictionary.removeObject(forKey: connectionKey)
     connection.finish(id: key)
   }
   do {
+    guard admitted else {
+      throw HelperError(code: "restarting", message: "Backstage is restarting to pick up a permission the user just allowed. Try again in a few seconds.")
+    }
     try connection.throwIfCancelled()
     if let deadline = request["deadline"] as? Double, Date().timeIntervalSince1970 * 1000 > deadline {
       throw HelperError(code: "expired", message: "The request waited too long and was not run.")
