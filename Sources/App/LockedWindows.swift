@@ -106,9 +106,7 @@ private func lockedWindow(app: AppIdentity, params: JSON) throws -> LockedWindow
 
 // One image pixel per window point, as unlocked screenshots, so the coordinates work with click_at.
 private func captureLockedWindow(_ window: LockedWindow) throws -> JSON {
-  guard CGPreflightScreenCaptureAccess() else {
-    throw HelperError(code: "permission_missing", message: "Screenshots need Screen Recording, which is optional and off. Ask the user to turn it on in Backstage, on the Setup tab.")
-  }
+  try requirePermission(.screenRecording, for: "A screenshot")
   guard let mainConnection, let captureWindowList else {
     throw HelperError(code: "action_failed", message: "This macOS cannot capture windows while the screen is locked.")
   }

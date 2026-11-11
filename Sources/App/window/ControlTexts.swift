@@ -17,9 +17,12 @@ enum ControlTexts {
   static let windowsWhileLockedConfirm = "Turn On", cancel = "Cancel"
   static let add = "Add App…"
   static let requestsHeading = "Waiting for you"
-  static let requestsNote = "Asked for from the command line or by an agent. An app goes on the list only when you add it here."
-  static let addRequested = "Add", decline = "Decline"
-  static func askedBy(_ client: String) -> String { "Asked for by \(client)" }
+  static let requestsNote = "Agents and the command line ask here. Nothing changes until you choose."
+  static let addRequested = "Add", decline = "Decline", notNow = "Not Now"
+  static func askedToUse(_ client: String) -> String { "\(client) wants to use this app" }
+  static func askedFor(_ client: String, _ purpose: String) -> String { "\(client) asked for this. \(purpose)" }
+  static let waitingForMacOS = "Waiting for macOS…", openSettings = "Open Settings…"
+  static let turnOnInSettings = "In System Settings, turn on Backstage. This updates by itself."
   static let noApps = "No apps yet", noAppsDetail = "Add the apps agents may use with Add App…\nAn app that is not here is refused, without asking."
   static let remove = "Remove"
   static func listKept(_ count: Int) -> String {
@@ -30,14 +33,11 @@ enum ControlTexts {
 
   static let macOSPermissions = "macOS permissions"
   static let accessibility = "Accessibility", accessibilityPurpose = "Read windows, click and type"
-  static let screenRecording = "Screen Recording", screenRecordingPurpose = "Screenshots of app windows"
-  static let screenRecordingOptional = "Optional: screenshots, for web pages and apps that show no elements"
-  static let granted = "Granted", missing = "Missing", openSettings = "Open Settings…", restart = "Restart"
-  static let restartHint = "A new Screen Recording grant applies after Backstage restarts."
+  static let accessibilityNeeded = "Needed: without it, agents can do nothing through Backstage"
   static let appAccess = "App access"
   static let appAccessHint = "Ready operations of some apps need a macOS grant. macOS asks once, when you add the app; apps that are not on your list are never asked."
   static let noGrants = "Nothing to allow", noGrantsDetail = "Apps on your list that need a macOS grant appear here."
-  static let allow = "Allow", allowed = "Allowed", off = "Off", unknownUntilOpen = "Unknown until the app is open"
+  static let allow = "Allow", allowed = "Allowed", unknownUntilOpen = "Unknown until the app is open"
   static let asking = "Waiting…"
   static let needsFullDiskAccess = "Needs Full Disk Access, which macOS does not ask for"
   static let addInSettings = "Add in Settings…"

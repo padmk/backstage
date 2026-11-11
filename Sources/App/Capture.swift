@@ -8,9 +8,7 @@ private let captureTimeoutSeconds = 15
 private let maxFrameDifference: CGFloat = 24
 
 func captureWindow(pid: pid_t, window: AXUIElement) throws -> JSON {
-  guard CGPreflightScreenCaptureAccess() else {
-    throw HelperError(code: "permission_missing", message: "Screenshots need Screen Recording, which is optional and off. Ask the user to turn it on in Backstage, on the Setup tab, or work from get_window_state.")
-  }
+  try requirePermission(.screenRecording, for: "A screenshot")
   guard let target = frame(of: window) else {
     throw HelperError(code: "action_failed", message: "The window has no position.")
   }

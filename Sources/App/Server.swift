@@ -229,6 +229,16 @@ private func write(_ reply: JSON, to connection: Connection) {
   }
 }
 
+// How many requests run now, so a restart for a new grant can wait until none does.
+enum RequestActivity {
+  private static let lock = NSLock()
+  private static var count = 0
+
+  static var running: Int { lock.withLock { count } }
+  static func started() { lock.withLock { count += 1 } }
+  static func ended() { lock.withLock { count -= 1 } }
+}
+
 private let connectionKey = "connection"
 
 // The connection whose request runs on this thread, so deep waits such as a script child can end when the
@@ -240,7 +250,9 @@ private func perform(_ request: JSON, generation: Int, connection: Connection) {
   let key = request["id"].map { "\($0)" }
   connection.begin(generation: generation, id: key)
   Thread.current.threadDictionary[connectionKey] = connection
+  RequestActivity.started()
   defer {
+    RequestActivity.ended()
     Thread.current.threadDictionary.removeObject(forKey: connectionKey)
     connection.finish(id: key)
   }

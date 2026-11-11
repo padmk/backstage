@@ -18,6 +18,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   case "status":
     return [
       "accessibility": AXIsProcessTrusted(), "screen_recording": CGPreflightScreenCaptureAccess(), "version": Configuration.version, "build": Configuration.build,
+      "audio_recording": permissionState(.audioRecording).rawValue,
       "screen_locked": isScreenLocked(), "private_calls": privateCallAvailability(),
       // The same grants as the Setup tab: those of the listed apps.
       "app_access": appGrants(forListed: Set(ApprovalStore.list().compactMap { $0["bundle_id"] }), everyApp: Preferences.allowsEveryApp)
@@ -27,7 +28,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   case "request_permissions":
     let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
     let accessibility = AXIsProcessTrustedWithOptions(options)
-    // Screen Recording is optional and asked for only from the Setup tab, by the user, never over the socket.
+    // Screen Recording is optional and asked for only when the user chooses Allow in the window, never over the socket.
     return ["accessibility": accessibility, "screen_recording": CGPreflightScreenCaptureAccess()] as JSON
 
   case "quit":
@@ -84,8 +85,19 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     try requireAccessibility()
     return try waitFor(app: app, params: params, connection: connection)
 
+  // The recording waits outside the app's lock, which it takes only for its press.
+  case "record_audio":
+    let app = try resolve(string(params, "app"))
+    try ApprovalGate.require(app, session: session)
+    try requireSameProcess(app)
+    return try recordAudio(app: app, params: params, session: session, connection: connection)
+
   case "launch_app":
-    return try launch(string(params, "app"), session: session, connection: connection)
+    guard params["files"] == nil || params["files"] is [String] else {
+      throw HelperError(code: "invalid_arguments", message: "files must be a list of paths.")
+    }
+    let files = try (params["files"] as? [String] ?? []).map(openableFile)
+    return try launch(string(params, "app"), files: files, session: session, connection: connection)
 
   case "list_operations":
     return try listOperations(params)

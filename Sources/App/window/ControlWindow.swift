@@ -90,6 +90,7 @@ struct ControlView: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
+        WaitingSection(model: model)
         switch selection.tab {
         case .apps: AppsTab(model: model, showSetup: { selection.tab = .setup })
         case .setup: SetupTab(model: model)
@@ -314,6 +315,12 @@ private final class OwnInputIgnoringWindow: NSWindow {
   }
 }
 
+// The window comes up with a request while the user works in another app, so the first click on a button acts
+// instead of only bringing the window forward. Clicks the helper posts itself are still ignored by the window.
+private final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 // The window's frame: an opaque title bar band in the gradient's top color, holding the traffic lights and the
 // tabs, with the content below it.
 private func makeControlWindow(content: NSView, toolbar: TabsToolbar) -> NSWindow {
@@ -353,8 +360,8 @@ func showControlWindow(tab: ControlTab? = nil) {
   } else {
     let selection = ControlSelection(chosen)
     let model = ControlModel()
-    let toolbar = TabsToolbar(tabs: NSHostingView(rootView: ToolbarTabs(model: model, selection: selection)))
-    let window = makeControlWindow(content: NSHostingView(rootView: ControlView(model: model, selection: selection)), toolbar: toolbar)
+    let toolbar = TabsToolbar(tabs: FirstClickHostingView(rootView: ToolbarTabs(model: model, selection: selection)))
+    let window = makeControlWindow(content: FirstClickHostingView(rootView: ControlView(model: model, selection: selection)), toolbar: toolbar)
     window.isReleasedWhenClosed = false
     window.delegate = closer
     window.center()

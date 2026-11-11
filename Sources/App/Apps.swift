@@ -1,4 +1,4 @@
-// Finding the app a request names, running or installed, and starting one in the background.
+// Finding the app a request names, running or installed, and starting one in the background or handing it files.
 
 import AppKit
 import ApplicationServices
@@ -81,7 +81,9 @@ func installedIdentity(_ url: URL) throws -> AppIdentity {
   return AppIdentity(pid: 0, bundleId: bundleId, name: url.deletingPathExtension().lastPathComponent, launchDate: nil, path: url.path)
 }
 
-func launch(_ query: String, session: ApprovalSession, connection: Connection) throws -> JSON {
+// With files, the app opens them, started if it is not running. Apps often come forward to show a file they were
+// handed, so the app the user was in gets the focus back then too.
+func launch(_ query: String, files: [URL] = [], session: ApprovalSession, connection: Connection) throws -> JSON {
   let url = try installedApp(query)
   guard let bundle = Bundle(url: url), let bundleId = bundle.bundleIdentifier else {
     throw HelperError(code: "app_not_found", message: "\(query) has no bundle identifier.")
@@ -92,11 +94,14 @@ func launch(_ query: String, session: ApprovalSession, connection: Connection) t
     AppIdentity(pid: 0, bundleId: bundleId, name: name, launchDate: nil, path: url.path), session: session)
 
   // Opening a running app sends it a reopen event, which can show a window and take the focus, so it is left as it is.
-  if let running = onMain({ NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first { !$0.isTerminated } }) {
+  let running = onMain { NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first { !$0.isTerminated } }
+  if let running, files.isEmpty {
     var result = describe(running)
     result["already_running"] = true
     return result
   }
+  // Files arriving while the user works in the app would mix with what they do there.
+  if let running { try requireUserNotWorking(in: identity(of: running)) }
   let frontBefore = onMain { NSWorkspace.shared.frontmostApplication }
   let configuration = NSWorkspace.OpenConfiguration()
   configuration.activates = false
@@ -104,10 +109,15 @@ func launch(_ query: String, session: ApprovalSession, connection: Connection) t
   let done = DispatchSemaphore(value: 0)
   var launched: NSRunningApplication?
   var failure: Error?
-  NSWorkspace.shared.openApplication(at: url, configuration: configuration) { app, error in
+  let opened: (NSRunningApplication?, Error?) -> Void = { app, error in
     launched = app
     failure = error
     done.signal()
+  }
+  if files.isEmpty {
+    NSWorkspace.shared.openApplication(at: url, configuration: configuration, completionHandler: opened)
+  } else {
+    NSWorkspace.shared.open(files, withApplicationAt: url, configuration: configuration, completionHandler: opened)
   }
   // The app can take the focus before the launch is reported, so it is watched while waiting too.
   let launchDeadline = Date().addingTimeInterval(TimeInterval(launchTimeoutSeconds))
@@ -124,6 +134,7 @@ func launch(_ query: String, session: ApprovalSession, connection: Connection) t
   let focusReturned = keepFocusWhileStarting(launched, previous: frontBefore) || returnedEarly
   var result = describe(launched)
   if focusReturned { result["focus_returned"] = true }
+  if !files.isEmpty { result["opened"] = files.map(\.path) }
   return result
 }
 

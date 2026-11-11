@@ -10,6 +10,10 @@ import HelperLink
 enum HelperMain {
   static func main() {
     let arguments = CommandLine.arguments
+    if arguments.contains(permissionStatesArgument) {
+      printPermissionStates()
+      return
+    }
     // Only a bare test build takes a home of its own. A copy of the app bundle carries the app's identity and
     // grants wherever it lies, so any bundled copy ignores --home and always uses the user's real files.
     if Bundle.main.bundleIdentifier == nil, let index = arguments.firstIndex(of: "--home"), arguments.indices.contains(index + 1) {

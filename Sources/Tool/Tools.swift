@@ -50,8 +50,11 @@ let tools: [ToolDefinition] = [
     required: [], annotations: reads),
   ToolDefinition(
     name: "launch_app",
-    description: "Start an app in the background. Needs the app on the list. If it takes the focus while starting, the app you were in gets it back and the new app stays behind it. An app that is already running is left as it is.",
-    properties: [("app", ["type": "string", "description": "App name or bundle id, not a path"])],
+    description: "Start an app in the background, or with files hand it files to open, such as a recording for a speech-to-text app. Needs the app on the list. If it takes the focus while starting or opening the files, the app you were in gets it back and the app stays behind it. An app that is already running and gets no files is left as it is.",
+    properties: [
+      ("app", ["type": "string", "description": "App name or bundle id, not a path"]),
+      ("files", ["type": "array", "minItems": 1, "maxItems": 20, "items": ["type": "string"] as JSON, "description": "Absolute paths of files to open in the app: your own files, or copies Backstage made, such as record_audio's recordings"]),
+    ],
     required: ["app"], annotations: acts),
   ToolDefinition(
     name: "list_operations",
@@ -88,7 +91,7 @@ let tools: [ToolDefinition] = [
     required: ["app", "element"], annotations: reads),
   ToolDefinition(
     name: "screenshot",
-    description: "Capture a window as a PNG, one image pixel per window point, so its coordinates work with click_at. Needs Screen Recording, which is optional; without it, work from get_window_state.",
+    description: "Capture a window as a PNG, one image pixel per window point, so its coordinates work with click_at. Needs Screen Recording, which is optional: without it the reply is permission_missing and the Backstage window shows the user an Allow button; meanwhile, work from get_window_state.",
     properties: [("app", app), ("window", window)],
     required: ["app"], annotations: reads),
   ToolDefinition(
@@ -226,6 +229,16 @@ let tools: [ToolDefinition] = [
     ],
     required: ["app", "text"], annotations: reads),
   ToolDefinition(
+    name: "record_audio",
+    description: "Record what an app plays into an .m4a file, muted for the user so they do not hear it, for example to transcribe a voice message that cannot be downloaded. Give press with the element that starts playback (such as a Play button): it is pressed once the recording runs, so the start is not missed. The recording ends after until_silent seconds without sound once sound was heard, or at seconds. The reply gives the file's path, its length, heard_sound and how it ended. Needs System Audio Recording: without it the reply is permission_missing and the Backstage window shows the user an Allow button. A playback speed set in the app applies to the recording.",
+    properties: [
+      ("app", app),
+      ("press", described(element, "Element to press once the recording runs, such as a Play button")),
+      ("seconds", ["type": "number", "minimum": 1, "maximum": 180, "description": "Longest recording; default 60"]),
+      ("until_silent", ["type": "number", "minimum": 0.5, "maximum": 30, "description": "End after this long without sound once sound was heard; default 3"]),
+    ],
+    required: ["app"], annotations: acts),
+  ToolDefinition(
     name: "run_actions",
     description: "Run up to \(maxSteps) actions in one app in order, then report the combined change once, saving a round trip per step. Each step is {\"tool\": one of \(stepTools.joined(separator: ", ")), plus that tool's arguments without app}, such as {\"tool\":\"set_value\",\"element\":4,\"value\":\"Paris\"}. Use element numbers you have already read: elements a step makes appear have no number yet. Steps stop at the first that fails or may have worked (`failed` names it); a step that was delivered but cannot be confirmed, such as a click by position (`verified: false`), does not stop the others. Nothing is retried, so read the state before going on.",
     properties: [
@@ -276,6 +289,10 @@ private func problem(_ key: String, _ value: Any, _ rule: JSON) -> String? {
   if type == "array", let items = rule["items"] as? JSON, let allowed = items["enum"] as? [String], let list = value as? [Any],
      !list.allSatisfy({ ($0 as? String).map(allowed.contains) ?? false }) {
     return "\(key) items must be among \(allowed.joined(separator: ", "))"
+  }
+  if type == "array", let items = rule["items"] as? JSON, items["type"] as? String == "string", let list = value as? [Any],
+     !list.allSatisfy({ $0 is String }) {
+    return "\(key) items must be strings"
   }
   if type == "integer" {
     guard let number = numberValue(value), number.isFinite, number == number.rounded(), abs(number) <= maxSafeInteger else { return "\(key) must be a whole number" }

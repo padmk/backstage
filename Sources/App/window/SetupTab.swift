@@ -10,14 +10,26 @@ private struct Allowed: View {
   }
 }
 
-private struct OffInSettings: View {
-  let pane: String
-  var label = ControlTexts.off
+// One of Backstage's own optional permissions. Off is not a problem, so it shows only what it is for and Allow;
+// once the user is in System Settings for it, the row says what to turn on there.
+private struct PermissionRow: View {
+  let permission: SystemPermission
+  @ObservedObject var model: ControlModel
 
   var body: some View {
-    HStack(spacing: 8) {
-      Text(label).font(.system(size: 12, weight: .semibold)).foregroundStyle(Palette.amber)
-      Button(ControlTexts.openSettings) { openPrivacyPane(pane) }.buttonStyle(ChoiceStyle(kind: .plain, compact: true))
+    let opened = model.inSettings.contains(permission.rawValue)
+    ControlRow(icon: .symbol(permissionSymbol(permission)), title: permission.name,
+               detail: opened ? ControlTexts.turnOnInSettings : permission.purpose,
+               detailColor: opened ? Palette.sky : Palette.secondary) {
+      if model.state(of: permission) == .granted {
+        Allowed()
+      } else if model.prompting.contains(permission) {
+        Text(ControlTexts.waitingForMacOS).font(.system(size: 12, weight: .semibold)).foregroundStyle(Palette.secondary)
+      } else {
+        Button(opened ? ControlTexts.openSettings : ControlTexts.allow) {
+            if opened { model.openSettings(for: permission) } else { model.allow(permission) }
+          }.buttonStyle(ChoiceStyle(kind: .plain, compact: true))
+      }
     }
   }
 }
@@ -44,9 +56,11 @@ private struct GrantRow: View {
   var body: some View {
     let state = model.grants[grant.id] ?? .unknown
     let isAppData = if case .appData = grant.kind { true } else { false }
-    let detail = isAppData && state != .granted ? "\(grant.purpose) · \(ControlTexts.needsFullDiskAccess)"
+    let opened = model.inSettings.contains(grant.id) && state != .granted
+    let detail = opened && !isAppData ? ControlTexts.turnOnInSettings
+      : isAppData && state != .granted ? "\(grant.purpose) · \(ControlTexts.needsFullDiskAccess)"
       : state == .unknown ? "\(grant.purpose) · \(ControlTexts.unknownUntilOpen)" : grant.purpose
-    ControlRow(icon: .app(grant.appBundleId), title: grant.name, detail: detail) {
+    ControlRow(icon: .app(grant.appBundleId), title: grant.name, detail: detail, detailColor: opened && !isAppData ? Palette.sky : Palette.secondary) {
       if isAppData, state != .granted {
         AppDataAccess(grant: grant, model: model)
       } else if model.asking.contains(grant.id) {
@@ -54,7 +68,8 @@ private struct GrantRow: View {
       } else {
         switch state {
         case .granted: Allowed()
-        case .denied: OffInSettings(pane: grant.pane)
+        case .denied:
+          Button(ControlTexts.allow) { model.allowInSettings(grant) }.buttonStyle(ChoiceStyle(kind: .plain, compact: true))
         case .notAsked, .unknown:
           Button(ControlTexts.allow) { model.request([grant]) }.buttonStyle(ChoiceStyle(kind: .plain, compact: true))
         }
@@ -103,21 +118,19 @@ struct SetupTab: View {
     }
 
     ListSection(heading: ControlTexts.macOSPermissions) {
-      ControlRow(icon: .symbol("accessibility"), title: ControlTexts.accessibility, detail: ControlTexts.accessibilityPurpose) {
-        if model.accessibility { Allowed() } else { OffInSettings(pane: "Privacy_Accessibility", label: ControlTexts.missing) }
-      }
-      RowDivider()
-      ControlRow(icon: .symbol("record.circle"), title: ControlTexts.screenRecording,
-                 detail: model.screenRecording ? ControlTexts.screenRecordingPurpose : ControlTexts.screenRecordingOptional) {
-        if model.screenRecording {
+      let accessibilityOpened = model.inSettings.contains(accessibilityId) && !model.accessibility
+      ControlRow(icon: .symbol("accessibility"), title: ControlTexts.accessibility,
+                 detail: model.accessibility ? ControlTexts.accessibilityPurpose : accessibilityOpened ? ControlTexts.turnOnInSettings : ControlTexts.accessibilityNeeded,
+                 detailColor: model.accessibility ? Palette.secondary : accessibilityOpened ? Palette.sky : Palette.amber) {
+        if model.accessibility {
           Allowed()
         } else {
-          HStack(spacing: 6) {
-            Button(ControlTexts.openSettings) { openPrivacyPane("Privacy_ScreenCapture") }.buttonStyle(ChoiceStyle(kind: .plain, compact: true))
-            Button(ControlTexts.restart, action: restartApp).buttonStyle(ChoiceStyle(kind: .primary, compact: true))
-              .help(ControlTexts.restartHint)
-          }
+          Button(ControlTexts.allow, action: model.allowAccessibility).buttonStyle(ChoiceStyle(kind: .primary, compact: true))
         }
+      }
+      ForEach(SystemPermission.allCases) { permission in
+        RowDivider()
+        PermissionRow(permission: permission, model: model)
       }
     }
 

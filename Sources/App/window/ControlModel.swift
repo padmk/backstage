@@ -17,9 +17,19 @@ func approvedApps() -> [AppRow] {
     .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 }
 
+let accessibilityId = "accessibility"
+
 final class ControlModel: ObservableObject {
   @Published var accessibility = false
-  @Published var screenRecording = false
+  // What macOS answers this process, which is what agents get.
+  @Published var permissions: [SystemPermission: PermissionState] = [:]
+  @Published var permissionRequests: [PermissionRequest] = []
+  // Permissions and grants the user was sent to System Settings for, which their rows explain until they are on.
+  @Published var inSettings: Set<String> = []
+  // Permissions whose macOS prompt is up.
+  @Published var prompting: Set<SystemPermission> = []
+  private var lastSettingsCheck = Date.distantPast
+  private var checkingSettings = false
   @Published var rows: [AppRow] = []
   @Published var requests: [ApprovalRequest] = []
   @Published var recent: [DecisionRecord] = []
@@ -53,8 +63,18 @@ final class ControlModel: ObservableObject {
   func refresh() {
     let trusted = AXIsProcessTrusted()
     if trusted != accessibility { accessibility = trusted }
-    let recording = CGPreflightScreenCaptureAccess()
-    if recording != screenRecording { screenRecording = recording }
+    let current = Dictionary(uniqueKeysWithValues: SystemPermission.allCases.map { ($0, permissionState($0)) })
+    if current != permissions { permissions = current }
+    for (permission, state) in current where state == .granted { PermissionRequests.remove(permission) }
+    let asked = PermissionRequests.all
+    if asked != permissionRequests { permissionRequests = asked }
+    let done = inSettings.filter { id in
+      if id == accessibilityId { return trusted }
+      if let permission = SystemPermission(rawValue: id) { return current[permission] == .granted }
+      return grants[id] == .granted
+    }
+    if !done.isEmpty { inSettings.subtract(done) }
+    checkSettingsIfWaiting()
     let all = approvedApps()
     if all != rows { rows = all }
     let waiting = ApprovalRequests.all
@@ -84,6 +104,61 @@ final class ControlModel: ObservableObject {
           self.asking.remove(grant.id)
           self.refresh()
         }
+      }
+    }
+  }
+
+  func state(of permission: SystemPermission) -> PermissionState { permissions[permission] ?? .unknown }
+
+  // The user chose Allow for one of Backstage's own permissions: macOS's prompt, or its pane in System Settings.
+  // When the prompt ends without the grant, or macOS shows none, the row says what to turn on in System Settings
+  // and offers to open it, so Allow never leaves the user without a next step. The answer is still watched.
+  func allow(_ permission: SystemPermission) {
+    prompting.insert(permission)
+    askForPermission(permission) { [weak self] granted in
+      guard let self else { return }
+      self.prompting.remove(permission)
+      if !granted { self.inSettings.insert(permission.rawValue) }
+      self.refresh()
+    }
+  }
+
+  func openSettings(for permission: SystemPermission) {
+    openPrivacyPane(permission.pane)
+    inSettings.insert(permission.rawValue)
+  }
+
+  func notNow(_ request: PermissionRequest) {
+    PermissionRequests.remove(request.permission)
+    refresh()
+  }
+
+  func allowAccessibility() {
+    let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+    if !AXIsProcessTrustedWithOptions(options) {
+      openPrivacyPane("Privacy_Accessibility")
+      inSettings.insert(accessibilityId)
+    }
+  }
+
+  // A grant macOS has already answered changes only in System Settings.
+  func allowInSettings(_ grant: AppGrant) {
+    openPrivacyPane(grant.pane)
+    inSettings.insert(grant.id)
+  }
+
+  // A permission turned on in System Settings reaches this process only after a restart, so while the user is there
+  // a new process reads the answer every few seconds, and the app restarts once it is on.
+  private func checkSettingsIfWaiting() {
+    let waiting = SystemPermission.allCases.filter { inSettings.contains($0.rawValue) && permissions[$0] != .granted }
+    guard !waiting.isEmpty, !checkingSettings, Date().timeIntervalSince(lastSettingsCheck) >= 2 else { return }
+    checkingSettings = true
+    lastSettingsCheck = Date()
+    DispatchQueue.global().async {
+      let now = permissionStatesNow()
+      DispatchQueue.main.async {
+        self.checkingSettings = false
+        if waiting.contains(where: { now?[$0] == .granted }) { restartWhenIdleForNewGrant() }
       }
     }
   }

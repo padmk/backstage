@@ -50,7 +50,7 @@ struct AppKnowledge {
 
 let appCatalog: [AppKnowledge] = [
   notesKnowledge, remindersKnowledge, calendarKnowledge, contactsKnowledge, mailKnowledge, messagesKnowledge, settingsKnowledge,
-  shortcutsKnowledge, musicKnowledge, finderKnowledge, pagesKnowledge, numbersKnowledge, photosKnowledge, homeKnowledge, whatsAppKnowledge, bearKnowledge, telegramKnowledge,
+  shortcutsKnowledge, musicKnowledge, finderKnowledge, pagesKnowledge, numbersKnowledge, photosKnowledge, homeKnowledge, whatsAppKnowledge, bearKnowledge, telegramKnowledge, discordKnowledge,
 ] + chromiumKnowledge
 
 func knowledge(forBundleId bundleId: String) -> AppKnowledge? {

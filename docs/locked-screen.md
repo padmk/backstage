@@ -17,6 +17,7 @@ All measurements here are from 5 November 2026, on macOS 27.2 (build 26B123) on 
 | `set_app_state` (hide, show) | Works | Works |
 | `press` on a menu bar item or menu item, alone or as every step of `run_actions` | Works, and reports what changed in the menu bar | Same |
 | `get_window_state` of a window, `read_text`, `set_value`, `select_text`, `scroll`, `drag`, `press` on other elements, `click_at` with `element`, `set_window`, `close`, `wait_for` on a window | `screen_locked` | `screen_locked` |
+| `record_audio` | Records; `press` stops with `screen_locked` unless it presses a menu item | Same |
 | `screenshot` | `screen_locked` | Works, through a private window server call |
 | `click_at` with `x` and `y` | `screen_locked` | Works, unverified |
 | `press_key`, `type_text` without `element` | `screen_locked` | Works, unverified |
