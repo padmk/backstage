@@ -85,13 +85,6 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     try requireAccessibility()
     return try waitFor(app: app, params: params, connection: connection)
 
-  // The recording waits outside the app's lock, which it takes only for its press.
-  case "record_audio":
-    let app = try resolve(string(params, "app"))
-    try ApprovalGate.require(app, session: session)
-    try requireSameProcess(app)
-    return try recordAudio(app: app, params: params, session: session, connection: connection)
-
   case "launch_app":
     guard params["files"] == nil || params["files"] is [String] else {
       throw HelperError(code: "invalid_arguments", message: "files must be a list of paths.")
@@ -109,7 +102,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     break
   }
 
-  guard ["get_window_state", "screenshot", "read_text", "run_actions"].contains(method) || actionMethods.contains(method)
+  guard ["get_window_state", "screenshot", "read_text", "run_actions", "record_audio"].contains(method) || actionMethods.contains(method)
     || windowMethods.contains(method) || ["list_menu_commands", "run_menu_command"].contains(method) else {
     throw HelperError(code: "unknown_method", message: "Unknown method \(method).")
   }
@@ -124,7 +117,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     try ApprovalGate.require(app, session: session)
     try requireSameProcess(app)
     try requireScreenUnlocked(method, params: params, app: app, session: session)
-    if method == "run_actions" || method == "run_menu_command" || actionMethods.contains(method) || windowMethods.contains(method) {
+    if ["run_actions", "run_menu_command", "record_audio"].contains(method) || actionMethods.contains(method) || windowMethods.contains(method) {
       try requireUserNotWorking(in: app)
     }
     try connection.throwIfCancelled()
@@ -132,12 +125,15 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
       if method != "screenshot" { try requireAccessibility() }
       return try lockedWindowRequest(method, app: app, params: params)
     }
-    return try performAppRequest(method, app: app, params: params, session: session)
+    return try performAppRequest(method, app: app, params: params, session: session, connection: connection)
   }
 }
 
-private func performAppRequest(_ method: String, app: AppIdentity, params: JSON, session: ApprovalSession) throws -> Any {
+private func performAppRequest(_ method: String, app: AppIdentity, params: JSON, session: ApprovalSession, connection: Connection) throws -> Any {
   switch method {
+  case "record_audio":
+    return try recordAudio(app: app, params: params, session: session, connection: connection)
+
   case "get_window_state":
     return try windowState(app: app, params: params, session: session)
 

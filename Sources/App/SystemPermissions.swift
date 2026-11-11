@@ -50,7 +50,8 @@ private typealias Preflight = @convention(c) (CFString, CFDictionary?) -> Int
 private let preflight = lookUp("TCCAccessPreflight", as: Preflight.self, in: tcc)
 
 // What macOS answers this process. Without the private call, Screen Recording falls back to the public check, and
-// System Audio Recording is unknown: a recording then finds out by what it hears.
+// System Audio Recording is unknown: recording is then refused, since a tap started to find out would make macOS
+// show its prompt for a request from the socket.
 func permissionState(_ permission: SystemPermission) -> PermissionState {
   if let preflight {
     switch preflight(permission.service, nil) {
@@ -147,7 +148,10 @@ enum PermissionRequests {
 // Backstage window. `use` says what for, in the agent's terms.
 func requirePermission(_ permission: SystemPermission, for use: String) throws {
   let state = permissionState(permission)
-  if state == .granted || (state == .unknown && permission == .audioRecording) { return }
+  if state == .granted { return }
+  guard state != .unknown else {
+    throw HelperError(code: "permission_missing", message: "\(use) needs \(permission.name), and this version of macOS does not let Backstage tell whether it is on, so it is not available.")
+  }
   // A test build outside a bundle holds no permissions and has no window to ask in.
   guard Bundle.main.bundleIdentifier != nil else {
     throw HelperError(code: "permission_missing", message: "\(use) needs \(permission.name), which this build cannot get.")
@@ -167,8 +171,10 @@ func requirePermission(_ permission: SystemPermission, for use: String) throws {
 // A grant made in System Settings reaches this process only after a restart. It waits until no request is running,
 // so no agent loses one, and the window opens again where it was.
 func restartWhenIdleForNewGrant() {
+  guard RequestActivity.planRestart() else { return }
   DispatchQueue.global().async {
-    while RequestActivity.running > 0 { Thread.sleep(forTimeInterval: 0.2) }
+    // From the moment none runs, new requests are turned away until the app has restarted.
+    while !RequestActivity.closeIfIdle() { Thread.sleep(forTimeInterval: 0.2) }
     DispatchQueue.main.async { restartApp() }
   }
 }

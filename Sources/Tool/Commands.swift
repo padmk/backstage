@@ -192,7 +192,7 @@ private func doctor() -> Int32 {
   let meaning = ["granted": "granted", "not_asked": "not asked yet", "denied": "off in System Settings", "unknown": "shown once the app runs"]
   if let audioRecording {
     let detail = audioRecording == "granted" ? "granted"
-      : audioRecording == "unknown" ? "cannot be checked on this Mac; record_audio tells when it hears nothing"
+      : audioRecording == "unknown" ? "cannot be checked on this version of macOS, so record_audio is not available"
       : "optional, for record_audio; allow it in the \(Product.appName) window, on the Setup tab (\(meaning[audioRecording] ?? audioRecording))"
     printLine("\(audioRecording == "granted" ? "ok  " : "--  ") System Audio Recording: \(detail)")
   }

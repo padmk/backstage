@@ -153,7 +153,7 @@ The server repeats the essentials in its MCP instructions, so a client that load
 | `list_menu_commands` | Lists an app's menu commands with their path, shortcut, enabled state and element number, without opening a menu |
 | `run_menu_command` | Runs one menu command by its path (`File > Export…`) or shortcut (`cmd+shift+s`), without opening the menu or typing the keys |
 | `wait_for` | Waits until text shows in a window, or until it is gone, up to 30 s |
-| `record_audio` | Records what an app and its helper processes play into an `.m4a` file, muted for you, up to 180 s; can press the element that starts playback once the recording runs, and ends after a pause in the sound (`until_silent`, default 3 s) |
+| `record_audio` | Records what an app and its helper processes play into an `.m4a` file, muted for you, up to 180 s; can press the element that starts playback once the recording runs, and ends after a pause in the sound (`until_silent`, default 3 s). Other requests for the app wait until it ends, and it is refused with `user_active` while you work in the app |
 | `run_actions` | Runs up to 20 of the actions above in one app in order and reports the combined change once; stops at the first step that fails or may have worked, while a step delivered but not confirmable (`verified: false`) does not stop the others |
 
 ### Action replies
@@ -180,6 +180,7 @@ Requests for the same app run one at a time, also across agents, so two sessions
 | `permission_missing` | A macOS grant is missing (Accessibility, Screen Recording, System Audio Recording, or one a ready operation needs) | Tell the user what to allow; for Screen Recording and System Audio Recording the window already shows them an Allow button |
 | `access_denied` | The user declined that grant | The message names the pane in System Settings |
 | `screen_locked` | The screen is locked, so windows cannot be read | Use ready operations or the menu bar; see [Locked screen](#locked-screen) |
+| `restarting` | Backstage is restarting to pick up a permission you just allowed | Try again in a few seconds |
 | `user_active` | The app is in front and the user typed or clicked in the last 2 s, or moved the pointer or scrolled over its windows | Try again in a few seconds |
 | `outcome_unknown` | The action or operation may have worked, for example it opened a blocking dialog or was cancelled midway | Read the state before trying again; never retry blindly |
 | `stale_element`, `unknown_element` | The element number no longer names what was read | Read the window again |

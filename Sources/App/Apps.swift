@@ -90,18 +90,33 @@ func launch(_ query: String, files: [URL] = [], session: ApprovalSession, connec
   }
   let name = (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
     ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? url.deletingPathExtension().lastPathComponent
-  try ApprovalGate.require(
-    AppIdentity(pid: 0, bundleId: bundleId, name: name, launchDate: nil, path: url.path), session: session)
-
-  // Opening a running app sends it a reopen event, which can show a window and take the focus, so it is left as it is.
-  let running = onMain { NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first { !$0.isTerminated } }
-  if let running, files.isEmpty {
-    var result = describe(running)
-    result["already_running"] = true
-    return result
+  let approved = AppIdentity(pid: 0, bundleId: bundleId, name: name, launchDate: nil, path: url.path)
+  try ApprovalGate.require(approved, session: session)
+  guard !files.isEmpty else {
+    // Opening a running app sends it a reopen event, which can show a window and take the focus, so it is left as it is.
+    if let running = runningApp(bundleId) {
+      var result = describe(running)
+      result["already_running"] = true
+      return result
+    }
+    return try openInApp(url, files: [], bundleId: bundleId, name: name)
   }
-  // Files arriving while the user works in the app would mix with what they do there.
-  if let running { try requireUserNotWorking(in: identity(of: running)) }
+  // Files reach the app in turn with other requests for it, so a document does not open under another agent's typing.
+  return try AppLocks.with(bundleId, connection: connection) {
+    try ApprovalGate.require(approved, session: session)
+    // Files arriving while the user works in the app would mix with what they do there.
+    if let running = runningApp(bundleId) { try requireUserNotWorking(in: identity(of: running)) }
+    try connection.throwIfCancelled()
+    return try openInApp(url, files: files, bundleId: bundleId, name: name)
+  }
+}
+
+private func runningApp(_ bundleId: String) -> NSRunningApplication? {
+  onMain { NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first { !$0.isTerminated } }
+}
+
+// Starts the app, or hands a running one the files, and keeps the focus where it was.
+private func openInApp(_ url: URL, files: [URL], bundleId: String, name: String) throws -> JSON {
   let frontBefore = onMain { NSWorkspace.shared.frontmostApplication }
   let configuration = NSWorkspace.OpenConfiguration()
   configuration.activates = false

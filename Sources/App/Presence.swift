@@ -71,6 +71,9 @@ private func worksWhileLocked(_ method: String, params: JSON, app: AppIdentity, 
     return params["menu_bar"] as? Bool == true || params["menu_extras"] as? Bool == true
   case "press":
     return isMenu(params["element"])
+  // Sound needs no window; only a press on a window's element does.
+  case "record_audio":
+    return params["press"] == nil || isMenu(params["press"])
   // Hiding and showing go through the app, and menus stay readable and usable while locked.
   case "set_app_state", "list_menu_commands", "run_menu_command":
     return true

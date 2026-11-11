@@ -14,8 +14,8 @@ private let defaultRecordingSeconds = 60.0
 private let defaultSilenceSeconds = 3.0
 // Quieter than this counts as silence: about -60 dB.
 private let soundThreshold: Float = 0.001
-// How often the tap looks for processes the app started meanwhile, such as an audio helper that starts on the first
-// sound.
+// How often the recording looks for processes the app started meanwhile, such as an audio helper that starts on
+// the first sound.
 private let processRefreshSeconds = 0.25
 
 // MARK: Processes
@@ -65,14 +65,24 @@ private func descends(_ pid: pid_t, from ancestor: pid_t) -> Bool {
   return false
 }
 
-// The app's own audio clients: the app, the processes it started, and those inside its bundle.
+// Whether the process runs from inside the app's bundle, as its helpers do. A bundle id is no proof: another app's
+// id can start with this one's, as a browser's other release channels do.
+private func runsInsideBundle(_ pid: pid_t, of app: AppIdentity) -> Bool {
+  guard let bundle = app.path, !bundle.isEmpty else { return false }
+  var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+  guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
+  let executable = URL(fileURLWithPath: String(cString: buffer)).resolvingSymlinksInPath().path
+  return executable.hasPrefix(URL(fileURLWithPath: bundle).resolvingSymlinksInPath().path + "/")
+}
+
+// The app's own audio clients: the app, the processes it started, and those that run from inside its bundle.
 private func audioProcesses(of app: AppIdentity) -> (objects: [AudioObjectID], bundleIds: [String]) {
   var objects: [AudioObjectID] = []
   var bundleIds: Set<String> = [app.bundleId]
   for object in audioProcessObjects() {
     let pid: pid_t = property(object, kAudioProcessPropertyPID, 0)
     let bundleId = stringProperty(object, kAudioProcessPropertyBundleID)
-    guard pid > 0, descends(pid, from: app.pid) || bundleId.hasPrefix(app.bundleId + ".") else { continue }
+    guard pid > 0, descends(pid, from: app.pid) || runsInsideBundle(pid, of: app) else { continue }
     objects.append(object)
     if !bundleId.isEmpty { bundleIds.insert(bundleId) }
   }
@@ -146,6 +156,9 @@ private final class AppAudioRecorder {
   private var file: AVAudioFile?
   private var tapped: [AudioObjectID] = []
   private let queue = DispatchQueue(label: "audio-recording")
+  // Looks for new processes of the app from the start of the recording, also while the press settles.
+  private let processQueue = DispatchQueue(label: "audio-recording-processes")
+  private var processTimer: DispatchSourceTimer?
   private let lock = NSLock()
   private var heard = Heard()
   private(set) var sampleRate = 0.0
@@ -185,6 +198,11 @@ private final class AppAudioRecorder {
     guard status == noErr else { throw failure("Starting the recording", status) }
     status = AudioDeviceStart(device, procedure)
     guard status == noErr else { throw failure("Starting the recording", status) }
+    let timer = DispatchSource.makeTimerSource(queue: processQueue)
+    timer.schedule(deadline: .now() + processRefreshSeconds, repeating: processRefreshSeconds)
+    timer.setEventHandler { [weak self] in self?.followNewProcesses() }
+    timer.resume()
+    processTimer = timer
   }
 
   private func receive(_ input: UnsafePointer<AudioBufferList>, format: AVAudioFormat) {
@@ -212,7 +230,8 @@ private final class AppAudioRecorder {
   var state: Heard { lock.withLock { heard } }
 
   // Adds processes the app started since the tap was made; a tap whose description cannot change keeps the ones it has.
-  func followNewProcesses() {
+  // Runs on processQueue.
+  private func followNewProcesses() {
     let current = audioProcesses(of: app)
     guard current.objects != tapped, tap != kAudioObjectUnknown else { return }
     description.processes = current.objects
@@ -227,6 +246,10 @@ private final class AppAudioRecorder {
 
   // Stops the sound reaching the file, then lets the app be heard again. The file is complete once this returns.
   func stop() {
+    processTimer?.cancel()
+    processTimer = nil
+    // A look that is running ends before the tap goes.
+    processQueue.sync {}
     if let procedure, device != kAudioObjectUnknown {
       AudioDeviceStop(device, procedure)
       AudioDeviceDestroyIOProcID(device, procedure)
@@ -244,6 +267,8 @@ private final class AppAudioRecorder {
 
 // MARK: Request
 
+// Runs under the app's lock for the whole recording, so no other request starts or stops playback in the app
+// meanwhile, and after the check that the user is not working there, since the tap mutes the app.
 func recordAudio(app: AppIdentity, params: JSON, session: ApprovalSession, connection: Connection) throws -> JSON {
   try requirePermission(.audioRecording, for: "Recording an app's sound")
   let limit = min(max((params["seconds"] as? NSNumber)?.doubleValue ?? defaultRecordingSeconds, 1), maxRecordingSeconds)
@@ -253,30 +278,25 @@ func recordAudio(app: AppIdentity, params: JSON, session: ApprovalSession, conne
   let folder = try newCopyFolder(.audioRecordings)
   let url = folder.appendingPathComponent("\(app.name) \(timestampForFileName()).m4a")
   let recorder = AppAudioRecorder(app: app)
-  try recorder.start(writingTo: url)
+  do {
+    try recorder.start(writingTo: url)
+  } catch {
+    recorder.stop()
+    try? FileManager.default.removeItem(at: folder)
+    throw error
+  }
   let started = Date()
   var result: JSON = ["path": url.path, "muted_for_user": true]
   var ended = "time_limit"
   do {
     if let pressed {
-      result["press"] = try AppLocks.with(app.bundleId, connection: connection) { () throws -> JSON in
-        try ApprovalGate.require(app, session: session)
-        try requireSameProcess(app)
-        try requireScreenUnlocked("press", params: ["element": pressed], app: app, session: session)
-        try requireUserNotWorking(in: app)
-        try requireAccessibility()
-        return try acting(app: app, session: session) {
-          try performAction("press", app: app, params: ["app": app.bundleId, "element": pressed], session: session)
-        }
+      try requireAccessibility()
+      result["press"] = try acting(app: app, session: session) {
+        try performAction("press", app: app, params: ["app": app.bundleId, "element": pressed], session: session)
       }
     }
-    var nextRefresh = Date()
     while Date().timeIntervalSince(started) < limit {
       try connection.throwIfCancelled()
-      if Date() >= nextRefresh {
-        recorder.followNewProcesses()
-        nextRefresh = Date().addingTimeInterval(processRefreshSeconds)
-      }
       if let last = recorder.state.lastSound, Date().timeIntervalSince(last) >= silence {
         ended = "silence"
         break
@@ -299,9 +319,7 @@ func recordAudio(app: AppIdentity, params: JSON, session: ApprovalSession, conne
   result["heard_sound"] = heard.firstSound != nil
   if let first = heard.firstSound { result["sound_starts_at"] = (first.timeIntervalSince(started) * 10).rounded() / 10 }
   if heard.firstSound == nil {
-    result["note"] = permissionState(.audioRecording) == .unknown
-      ? "Nothing was heard. Either the app played nothing, or System Audio Recording is off: ask the user to allow it in the Backstage window, on the Setup tab."
-      : "Nothing was heard: the app played nothing, or its own volume is off. Check that playback started."
+    result["note"] = "Nothing was heard: the app played nothing, or its own volume is off. Check that playback started."
   }
   return result
 }
