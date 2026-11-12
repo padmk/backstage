@@ -95,10 +95,10 @@ An optional mode, off by default, on the Setup tab of the Backstage window under
 
 | Request | Route while locked |
 |---|---|
-| `screenshot` | The window is picked from the window server's list of the app's ordinary windows (layer 0) that were on screen when the screen locked, front to back, by the `window` index. `SLSHWCaptureWindowList` captures it at full resolution, and the helper scales the image to one pixel per window point, so its coordinates work with `click_at`, as unlocked |
+| `screenshot` | The window is picked from the window server's list of the app's ordinary windows (layer 0) that were on screen when the screen locked, front to back, by the `window` index. `SLSHWCaptureWindowList` captures it at full resolution, and the helper scales the image to one pixel per window point, so its coordinates work with `click_at`, as unlocked. `text: true` recognizes the text in that image, as unlocked ([Tools](tools.md#reading)) |
 | `click_at` with `x`, `y` | The point is checked against the window's bounds from the window server, then a click is posted to the app's process addressed to that window number and point, the same background route as when unlocked. What lies under the point cannot be read, so it is not checked against the refused menus |
 | `press_key` | Key events posted to the app's process; they reach whatever element has focus. A shortcut of an item in the Apple, Services or Share menu is refused as when unlocked, but an open menu's selection cannot be checked ([SECURITY.md](../SECURITY.md#design)) |
-| `type_text` without `element` | Each character as key events to the app's process; line breaks and tabs are refused, as when unlocked |
+| `type_text` without `element` | Each character as key events to the app's process; line breaks and tabs are refused, as when unlocked. A space is not checked against an open menu's selection |
 
 For Chromium and Electron apps `click_at` first makes the target window key inside the app, as when unlocked, because they take input only in their key window; keys then go to that window, so click before typing. Nothing activates the app, moves the cursor or touches the lock screen.
 
