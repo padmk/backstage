@@ -168,13 +168,12 @@ func requirePermission(_ permission: SystemPermission, for use: String) throws {
 
 // MARK: Restarting for a new grant
 
-// A grant made in System Settings reaches this process only after a restart. It waits until no request is running,
-// so no agent loses one, and the window opens again where it was.
+// A grant made in System Settings reaches this process only after a restart. New requests are turned away from now
+// on, and it waits until those running have finished, so no agent loses one; the window opens again where it was.
 func restartWhenIdleForNewGrant() {
   guard RequestActivity.planRestart() else { return }
   DispatchQueue.global().async {
-    // From the moment none runs, new requests are turned away until the app has restarted.
-    while !RequestActivity.closeIfIdle() { Thread.sleep(forTimeInterval: 0.2) }
+    while !RequestActivity.isIdle { Thread.sleep(forTimeInterval: 0.2) }
     DispatchQueue.main.async { restartApp() }
   }
 }

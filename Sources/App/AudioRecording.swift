@@ -10,6 +10,9 @@ import CoreAudio
 
 // A request has to answer before the command gives up on it (200 seconds), with the press and its settling.
 let maxRecordingSeconds = 180.0
+// What a recording leaves of the request's time for the press to settle and the file to close.
+private let recordingReserveSeconds = 10.0
+private let minRecordingSeconds = 1.0
 private let defaultRecordingSeconds = 60.0
 private let defaultSilenceSeconds = 3.0
 // Quieter than this counts as silence: about -60 dB.
@@ -267,11 +270,21 @@ private final class AppAudioRecorder {
 
 // MARK: Request
 
+// How long to record: what was asked, within the limits, and within the time the client still waits for the answer,
+// which waiting for the app's lock may have used up. Nil when too little is left to record at all.
+func recordingLimit(requested: Double?, timeLeft: TimeInterval?) -> Double? {
+  let asked = min(max(requested ?? defaultRecordingSeconds, minRecordingSeconds), maxRecordingSeconds)
+  guard let timeLeft else { return asked }
+  let available = timeLeft - recordingReserveSeconds
+  return available < minRecordingSeconds ? nil : min(asked, available)
+}
+
 // Runs under the app's lock for the whole recording, so no other request starts or stops playback in the app
 // meanwhile, and after the check that the user is not working there, since the tap mutes the app.
 func recordAudio(app: AppIdentity, params: JSON, session: ApprovalSession, connection: Connection) throws -> JSON {
   try requirePermission(.audioRecording, for: "Recording an app's sound")
-  let limit = min(max((params["seconds"] as? NSNumber)?.doubleValue ?? defaultRecordingSeconds, 1), maxRecordingSeconds)
+  guard let limit = recordingLimit(requested: (params["seconds"] as? NSNumber)?.doubleValue,
+                                   timeLeft: connection.deadline?.timeIntervalSinceNow) else { throw expiredError }
   let silence = max((params["until_silent"] as? NSNumber)?.doubleValue ?? defaultSilenceSeconds, 0.5)
   let pressed = params["press"] as? Int
 
