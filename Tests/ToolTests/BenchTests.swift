@@ -21,9 +21,11 @@ struct BenchTests {
       let result = try server.call(name, arguments, app: app)
       if result["isError"] as? Bool == true { throw TestFailure("\(name) failed: \(textOf(result))") }
     }
-    func measure(_ label: String, _ action: () throws -> Void) throws {
+    // `prepare` runs before each round and is not timed.
+    func measure(_ label: String, prepare: () throws -> Void = {}, _ action: () throws -> Void) throws {
       var times: [Double] = []
       for _ in 0..<rounds {
+        try prepare()
         let started = Date()
         try action()
         times.append(Date().timeIntervalSince(started) * 1000)
@@ -36,10 +38,13 @@ struct BenchTests {
     let started = Date()
     let tree = textOf(try server.call("get_window_state", ["window": 0]))
     print("\("first read".padding(toLength: 26, withPad: " ", startingAt: 0))\(String(format: "%8.1f", Date().timeIntervalSince(started) * 1000)) ms")
-    let press = try number(of: "Press Me", in: tree)
+    var press = try number(of: "Press Me", in: tree)
     try measure("list_apps") { try call("list_apps", app: nil) }
     try measure("get_window_state") { try call("get_window_state", ["window": 0]) }
-    try measure("press with state report") { try call("press", ["element": press]) }
+    // A press changes the window, so each round presses the button as a full read just showed it.
+    try measure("press with state report", prepare: {
+      press = try number(of: "Press Me", in: textOf(try server.call("get_window_state", ["window": 0, "full": true])))
+    }) { try call("press", ["element": press]) }
     try measure("screenshot") { try call("screenshot", ["window": 0]) }
     withExtendedLifetime(fixture) {}
   }

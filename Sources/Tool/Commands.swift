@@ -222,6 +222,11 @@ private func uninstall(reset: Bool) throws -> Int32 {
       return 1
     }
   }
+  // A test home never reaches the installed app, the Trash, the MCP clients or the macOS permissions.
+  guard ProcessInfo.processInfo.environment["HELPER_TEST_HOME"] == nil else {
+    printLine("A test home is set, so nothing was removed.")
+    return 1
+  }
   let helper = HelperClient(directories: directories, managesHelper: false, expectedBuild: nil)
   _ = try? helper.request("prepare_uninstall")
   helper.close()
