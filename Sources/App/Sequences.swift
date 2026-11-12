@@ -12,6 +12,13 @@ func runActions(app: AppIdentity, params: JSON, session: ApprovalSession) throws
   guard let steps = params["steps"] as? [JSON], !steps.isEmpty, steps.count <= maxSteps else {
     throw HelperError(code: "invalid_request", message: "steps must list 1 to \(maxSteps) actions.")
   }
+  // Every step is named right before any runs, so a typo late in the list changes nothing.
+  for (index, step) in steps.enumerated() {
+    let method = try string(step, "tool")
+    guard actionMethods.contains(method) else {
+      throw HelperError(code: "invalid_request", message: "Step \(index + 1): \(method) is not an action.")
+    }
+  }
   let frontBefore = onMain { NSWorkspace.shared.frontmostApplication }
   let watch = ChangeWatch(app: app)
   // Also when a cancel ends the steps early.
@@ -20,9 +27,6 @@ func runActions(app: AppIdentity, params: JSON, session: ApprovalSession) throws
   var failure: JSON?
   for (index, step) in steps.enumerated() {
     let method = try string(step, "tool")
-    guard actionMethods.contains(method) else {
-      throw HelperError(code: "invalid_request", message: "Step \(index + 1): \(method) is not an action.")
-    }
     if index > 0 { sleep(seconds: stepPauseSeconds) }
     do {
       try currentConnection()?.throwIfCancelled()
