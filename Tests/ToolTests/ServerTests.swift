@@ -1,6 +1,7 @@
 // The MCP server against a fake helper: protocol, argument checks and error reporting.
 
 import Foundation
+import HelperLink
 import Testing
 
 private struct Setup {
@@ -168,7 +169,8 @@ private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
     setup.server.write(line(["jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["name": "press", "arguments": ["app": "Notes", "element": 1]]]))
     _ = try until { setup.helper.first("press") }
     setup.server.write(line(["jsonrpc": "2.0", "method": "notifications/cancelled", "params": ["requestId": 1]]))
-    _ = try until { setup.helper.first("cancel") }
+    let cancel = try until { setup.helper.first("cancel") }
+    #expect((cancel["params"] as? Object)?["id"] as? Int == setup.helper.first("press")?["id"] as? Int)
     setup.helper.disconnectAll()
     let reply = try until { setup.server.received.first { ($0["id"] as? Int) == 1 } }
     #expect((reply["result"] as? Object)?["isError"] as? Bool == true)
@@ -184,6 +186,113 @@ private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
     #expect(textOf(reply).contains("may or may not have run"))
     Thread.sleep(forTimeInterval: 0.05)
     #expect(textOf(try setup.server.call("list_apps")).contains("ok"))
+  }
+
+  @Test func refusesARequestTooLargeForTheHelperWithoutHurtingAnotherCall() throws {
+    let setup = try Setup { request in
+      if request["method"] as? String == "press" { Thread.sleep(forTimeInterval: 0.5) }
+      return ["result": ["ok": true]]
+    }
+    setup.server.write(line(["jsonrpc": "2.0", "id": 100, "method": "tools/call", "params": ["name": "press", "arguments": ["app": "Notes", "element": 1]]]))
+    _ = try until { setup.helper.first("press") }
+    let large = String(repeating: "x", count: 5 << 20)
+    let refused = try setup.server.call("run_operation", ["app": "Notes", "operation": "create", "arguments": ["body": large]])
+    #expect(textOf(refused).hasPrefix("request_too_large"))
+    let pressed = try until { setup.server.received.first { ($0["id"] as? Int) == 100 } }["result"] as! Object
+    #expect(textOf(pressed).contains("ok"))
+    #expect(setup.helper.first("run_operation") == nil)
+  }
+
+  @Test func endsACallWhenTheHelperAnswersWithAnErrorThatNamesNoRequest() throws {
+    let setup = try Setup { _ in ["id": NSNull(), "error": ["code": "request_too_large", "message": "Too large."]] }
+    let result = try setup.server.call("press", ["app": "Notes", "element": 1])
+    #expect(result["isError"] as? Bool == true)
+    #expect(textOf(result).hasPrefix("helper_stopped"))
+  }
+
+  @Test func reportsAHelperThatDoesNotAnswerInTimeAndConnectsAgainAfterwards() throws {
+    let home = TemporaryHome()
+    let helper = try FakeHelper(home: home) { $0["method"] as? String == "press" ? nil : ["result": ["ok": true]] }
+    let server = try ServerProcess(home: home, environment: ["HELPER_TEST_TIMEOUT": "1"])
+    let result = try server.call("press", ["app": "Notes", "element": 1])
+    #expect(textOf(result).hasPrefix("timeout:"))
+    #expect(textOf(result).contains("may or may not have run"))
+    #expect(textOf(try until { () -> Object? in
+      let next = try? server.call("list_apps")
+      return next?["isError"] as? Bool == true ? nil : next
+    }).contains("ok"))
+    #expect(helper.all("hello").count == 2)
+  }
+
+  // A helper that restarted has forgotten the session, so numbers from before must not name its new elements.
+  @Test func numbersElementsFromANewRangeOnEveryNewConnection() throws {
+    let setup = try Setup { _ in ["result": ["ok": true]] }
+    _ = try setup.server.call("list_apps")
+    setup.helper.disconnectAll()
+    _ = try until { () -> Object? in
+      let next = try? setup.server.call("list_apps")
+      return next?["isError"] as? Bool == true ? nil : next
+    }
+    let hellos = setup.helper.all("hello").map { $0["params"] as? Object ?? [:] }
+    #expect(hellos.count == 2)
+    #expect(hellos[0]["session_id"] as? String == hellos[1]["session_id"] as? String)
+    #expect(hellos[0]["first_element_number"] == nil)
+    #expect((hellos[1]["first_element_number"] as? Int ?? 0) > 100_000)
+  }
+
+  // MARK: Builds
+
+  private func managing(_ installed: String) -> [String: String] { ["HELPER_NO_START": "", "HELPER_TEST_INSTALLED_APP": installed] }
+
+  @Test func replacesAHelperOfAnotherBuildWhenTheInstalledAppIsItsOwn() throws {
+    let home = TemporaryHome()
+    let installed = try FakeBundle(in: home, named: "Installed", build: 0xA1)
+    let helper = try FakeHelper(home: home, builds: ["other", installed.build])
+    let server = try ServerProcess(home: home, executable: installed.command, environment: managing(installed.path))
+    #expect(try server.call("list_apps")["isError"] as? Bool != true)
+    #expect(helper.requests.map { $0["method"] as? String ?? "" } == ["hello", "quit", "hello", "list_apps"])
+  }
+
+  @Test func anOlderCommandNeverStopsTheHelperOfTheInstalledApp() throws {
+    let home = TemporaryHome()
+    let installed = try FakeBundle(in: home, named: "Installed", build: 0xA1)
+    let older = try FakeBundle(in: home, named: "Older", build: 0xB2)
+    let helper = try FakeHelper(home: home, builds: [installed.build])
+    let server = try ServerProcess(home: home, executable: older.command, environment: managing(installed.path))
+    let result = try server.call("list_apps")
+    #expect(result["isError"] as? Bool == true)
+    #expect(textOf(result).contains("belongs to another build"))
+    #expect(helper.first("quit") == nil)
+    #expect(helper.first("list_apps") == nil)
+  }
+
+  @Test func asksForSetupWhenNoAppIsInstalled() throws {
+    let home = TemporaryHome()
+    let command = try FakeBundle(in: home, named: "Command", build: 0xB2)
+    let server = try ServerProcess(home: home, executable: command.command, environment: managing(home.path + "/Missing.app"))
+    let text = textOf(try server.call("list_apps"))
+    #expect(text.contains("is not installed. Run:") && text.hasSuffix("setup"))
+  }
+
+  @Test func handsTheSessionWithItsCallInFlightToTheInstalledCommand() throws {
+    let home = TemporaryHome()
+    let installed = try FakeBundle(in: home, named: "Installed", build: 0xA1, handoffRevision: Product.sessionHandoffRevision)
+    let older = try FakeBundle(in: home, named: "Older", build: 0xB2)
+    let helper = try FakeHelper(home: home, builds: [installed.build]) { _ in ["result": ["ok": true]] }
+    let server = try ServerProcess(home: home, executable: older.command, environment: managing(installed.path))
+    _ = try server.initialize("claude-code")
+    let pressed = try server.call("press", ["app": "Notes", "element": 1])
+    #expect(textOf(pressed).contains("ok"))
+    Thread.sleep(forTimeInterval: 0.2)
+    #expect(server.process.isRunning)
+    #expect(server.received.filter { ($0["id"] as? Int) == 2 }.count == 1)
+    #expect(!server.received.contains { $0["method"] as? String == "notifications/tools/list_changed" })
+    #expect(helper.all("press").count == 1)
+    #expect(helper.first("quit") == nil)
+    let hellos = helper.all("hello").map { $0["params"] as? Object ?? [:] }
+    #expect(hellos.count == 2)
+    #expect(hellos.last?["first_element_number"] as? Int == 100_000_001)
+    #expect(hellos.last?["client_name"] as? String == "claude-code")
   }
 
   @Test func reportsNoHelperInsteadOfHanging() throws {

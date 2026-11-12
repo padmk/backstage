@@ -3,6 +3,7 @@
 
 import Darwin
 import Foundation
+import HelperLink
 import Testing
 
 typealias Object = [String: Any]
@@ -80,14 +81,17 @@ private func write(_ descriptor: Int32, _ text: String) {
   }
 }
 
-// A helper that answers on the socket as the test says: a reply object, or nil for no answer.
+// A helper that answers on the socket as the test says: a reply object, or nil for no answer. A reply gets the
+// request's id unless it names one itself. Each hello reports the next of `builds`, the last one from then on.
 final class FakeHelper: @unchecked Sendable {
   private let lock = NSLock()
   private var received: [Object] = []
   private var clients: [Int32] = []
+  private var builds: [String]
   private let listener: Int32
 
-  init(home: TemporaryHome, respond: @escaping (Object) -> Object? = { _ in ["result": [:] as Object] }) throws {
+  init(home: TemporaryHome, builds: [String] = [], respond: @escaping (Object) -> Object? = { _ in ["result": [:] as Object] }) throws {
+    self.builds = builds
     listener = socket(AF_UNIX, SOCK_STREAM, 0)
     var address = sockaddr_un()
     address.sun_family = sa_family_t(AF_UNIX)
@@ -109,11 +113,16 @@ final class FakeHelper: @unchecked Sendable {
           self.lock.withLock { self.received.append(request) }
           guard let id = request["id"] else { return }
           if request["method"] as? String == "hello" {
-            write(client, line(["id": id, "result": ["version": "fake"]]))
+            var result: Object = ["version": "fake"]
+            self.lock.withLock {
+              if let build = self.builds.first { result["build"] = build }
+              if self.builds.count > 1 { self.builds.removeFirst() }
+            }
+            write(client, line(["id": id, "result": result]))
             return
           }
           guard var reply = respond(request) else { return }
-          reply["id"] = id
+          if reply["id"] == nil { reply["id"] = id }
           write(client, line(reply))
         }
       }
@@ -123,6 +132,8 @@ final class FakeHelper: @unchecked Sendable {
   var requests: [Object] { lock.withLock { received } }
 
   func first(_ method: String) -> Object? { requests.first { $0["method"] as? String == method } }
+
+  func all(_ method: String) -> [Object] { requests.filter { $0["method"] as? String == method } }
 
   // Drops every connection, as a helper that quits would.
   func disconnectAll() {
@@ -152,15 +163,17 @@ final class ServerProcess: @unchecked Sendable {
   private var nextId = 1
   private let ended = DispatchSemaphore(value: 0)
 
-  init(home: TemporaryHome, environment: [String: String] = [:]) throws {
-    process.executableURL = URL(fileURLWithPath: commandBinary)
+  // An empty value in `environment` removes that variable, such as HELPER_NO_START for a command that manages its
+  // helper.
+  init(home: TemporaryHome, executable: String = commandBinary, environment: [String: String] = [:]) throws {
+    process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = ["mcp"]
     var env = ProcessInfo.processInfo.environment
     env["HOME"] = home.path
     env["HELPER_TEST_HOME"] = home.path
     env["HELPER_NO_START"] = "1"
     env.merge(environment) { $1 }
-    process.environment = env
+    process.environment = env.filter { !$0.value.isEmpty }
     let output = Pipe()
     process.standardInput = input
     process.standardOutput = output
@@ -207,4 +220,30 @@ final class ServerProcess: @unchecked Sendable {
 
 func textOf(_ result: Object) -> String {
   (result["content"] as? [Object] ?? []).map { $0["text"] as? String ?? "" }.joined(separator: "\n")
+}
+
+// A bundle laid out as an installed app in a temporary home: a copy of the command, and in place of the app's
+// executable a Mach-O header that only names a build (its linker UUID), so nothing could start it.
+struct FakeBundle {
+  let path: String
+  let build: String
+
+  var command: String { path + "/" + Product.commandRelativePath }
+
+  init(in home: TemporaryHome, named name: String, build uuid: UInt8, handoffRevision: Int? = nil) throws {
+    path = home.path + "/\(name).app"
+    let manager = FileManager.default
+    try manager.createDirectory(atPath: path + "/Contents/MacOS", withIntermediateDirectories: true)
+    try manager.createDirectory(atPath: path + "/Contents/Helpers", withIntermediateDirectories: true)
+    try manager.copyItem(atPath: commandBinary, toPath: path + "/" + Product.commandRelativePath)
+    let bytes = [UInt8](repeating: uuid, count: 16)
+    var header = Data()
+    for word: UInt32 in [0xFEED_FACF, 0x0100_000C, 0, 2, 1, 24, 0, 0, 0x1B, 24] { withUnsafeBytes(of: word.littleEndian) { header.append(contentsOf: $0) } }
+    header.append(contentsOf: bytes)
+    try header.write(to: URL(fileURLWithPath: path + "/Contents/MacOS/" + Product.appExecutableName))
+    build = bytes.map { String(format: "%02x", $0) }.joined()
+    if let handoffRevision {
+      try ([Product.sessionHandoffKey: handoffRevision] as NSDictionary).write(to: URL(fileURLWithPath: path + "/Contents/Info.plist"))
+    }
+  }
 }
