@@ -99,7 +99,7 @@ func knowledgeLines(forBundleId bundleId: String) -> [String] {
 
 // Refuses unknown, missing and mistyped arguments, so an operation receives only what it declares.
 // A refused argument comes back with the operation's whole argument list, so the agent can fix the call at once.
-private func validated(_ arguments: Any?, for operation: Operation) throws -> JSON {
+func validated(_ arguments: Any?, for operation: Operation) throws -> JSON {
   do {
     return try checkedArguments(arguments, for: operation)
   } catch let error as HelperError where error.code == "invalid_arguments" {
