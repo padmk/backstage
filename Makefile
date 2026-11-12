@@ -5,6 +5,8 @@
 #   make live      the live test against the installed app (needs its Accessibility; operates a test app in the background)
 #   make bench     latency against the installed app
 #   make check     what CI runs
+# SWIFT_BUILD_FLAGS goes to every `swift build`; the Homebrew formula passes --disable-sandbox, since SwiftPM's own
+# sandbox cannot start inside Homebrew's.
 
 PRODUCT := Sources/HelperLink/Product.swift
 APP_NAME := $(shell sed -n 's/.*static let appName = "\(.*\)"/\1/p' $(PRODUCT))
@@ -14,18 +16,20 @@ MINIMUM_MACOS := $(shell sed -n 's/.*static let minimumMacOS = \([0-9]*\).*/\1/p
 HANDOFF_KEY := $(shell sed -n 's/.*static let sessionHandoffKey = "\(.*\)"/\1/p' $(PRODUCT))
 HANDOFF_REVISION := $(shell sed -n 's/.*static let sessionHandoffRevision = \([0-9]*\).*/\1/p' $(PRODUCT))
 COMMAND := $(shell echo $(APP_NAME) | tr A-Z a-z)
-BUILD = $(shell swift build -c release --arch arm64 --show-bin-path)
+SWIFT_BUILD_FLAGS ?=
+SWIFT_BUILD := swift build -c release --arch arm64 $(SWIFT_BUILD_FLAGS)
+BUILD = $(shell $(SWIFT_BUILD) --show-bin-path)
 APP := build/$(APP_NAME).app
 
 .PHONY: app install test live bench check clean
 
 app:
-	swift build -c release --arch arm64 --product $(APP_NAME)
-	swift build -c release --arch arm64 --product $(COMMAND)-tool
+	$(SWIFT_BUILD) --product $(APP_NAME)
+	$(SWIFT_BUILD) --product $(COMMAND)-tool
 	rm -rf $(APP).partial
 	mkdir -p $(APP).partial/Contents/MacOS $(APP).partial/Contents/Helpers $(APP).partial/Contents/Resources
-	cp $(BUILD)/$(APP_NAME) $(APP).partial/Contents/MacOS/$(APP_NAME)
-	cp $(BUILD)/$(COMMAND)-tool $(APP).partial/Contents/Helpers/$(COMMAND)
+	cp "$(BUILD)/$(APP_NAME)" $(APP).partial/Contents/MacOS/$(APP_NAME)
+	cp "$(BUILD)/$(COMMAND)-tool" $(APP).partial/Contents/Helpers/$(COMMAND)
 	cp assets/AppIcon.icns assets/Assets.car $(APP).partial/Contents/Resources/
 	sed -e 's/@APP_NAME@/$(APP_NAME)/g' -e 's/@VERSION@/$(VERSION)/g' -e 's/@BUNDLE_ID@/$(BUNDLE_ID)/g' \
 	    -e 's/@MINIMUM_MACOS@/$(MINIMUM_MACOS)/g' -e 's/@HANDOFF_KEY@/$(HANDOFF_KEY)/g' -e 's/@HANDOFF_REVISION@/$(HANDOFF_REVISION)/g' packaging/Info.plist > $(APP).partial/Contents/Info.plist
