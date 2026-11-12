@@ -19,7 +19,7 @@ private let maxResumeBytes = 64 << 20
 
 // The installed bundle can take a session only when it declares the same handoff revision as this command.
 func installedCommandTakesHandoff() -> Bool {
-  let info = NSDictionary(contentsOfFile: Product.installedAppPath + "/Contents/Info.plist")
+  let info = NSDictionary(contentsOfFile: installedAppPath + "/Contents/Info.plist")
   return info?[Product.sessionHandoffKey] as? Int == Product.sessionHandoffRevision
     && FileManager.default.isExecutableFile(atPath: installedCommandPath)
 }
@@ -69,7 +69,7 @@ func execInstalledCommand(state: HandoffState, input: Data, directories: Directo
   posix_spawnattr_setsigdefault(&attributes, &defaults)
   for kept in [STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO, descriptor] { posix_spawn_file_actions_addinherit_np(&actions, kept) }
   let arguments = [installedCommandPath, "mcp", resumeArgument, String(descriptor)]
-  var argv: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) } + [nil]
+  let argv: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) } + [nil]
   defer { argv.forEach { free($0) } }
   var pid: pid_t = 0
   _ = posix_spawn(&pid, installedCommandPath, &actions, &attributes, argv, environ)

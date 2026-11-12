@@ -68,7 +68,15 @@ func appBuildOfOwnBundle() -> String? {
   ownBundlePath().flatMap { buildIdentity(ofExecutableAt: $0 + "/Contents/MacOS/" + Product.appExecutableName) }
 }
 
-var installedCommandPath: String { Product.installedAppPath + "/" + Product.commandRelativePath }
+// The installed app whose build and command a running session follows. Tests of builds and handoffs, which set
+// HELPER_TEST_HOME, name a bundle of their own with HELPER_TEST_INSTALLED_APP.
+var installedAppPath: String {
+  let environment = ProcessInfo.processInfo.environment
+  if environment["HELPER_TEST_HOME"] != nil, let path = environment["HELPER_TEST_INSTALLED_APP"] { return path }
+  return Product.installedAppPath
+}
+
+var installedCommandPath: String { installedAppPath + "/" + Product.commandRelativePath }
 
 // How to run this command in a message: its name when that finds the installed one, otherwise its full path.
 func commandHint() -> String {
