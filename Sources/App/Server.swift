@@ -93,6 +93,7 @@ final class Connection {
   private var outstandingIds = Set<String>()
   private var cancelledIds = Set<String>()
   private var runningId: String?
+  private var runningDeadline: Date?
   private var queued = 0
   private var currentSession: ApprovalSession
   private var adoptedSession: ApprovalSession?
@@ -130,12 +131,16 @@ final class Connection {
     }
   }
 
-  func begin(generation captured: Int, id: String?) {
+  func begin(generation captured: Int, id: String?, deadline: Date?) {
     lock.withLock {
       requestGeneration = captured
       runningId = id
+      runningDeadline = deadline
     }
   }
+
+  // When the client gives up on the running request, if it said.
+  var deadline: Date? { lock.withLock { runningDeadline } }
 
   // Takes a place in this connection's queue, or refuses one beyond the limit.
   func enqueue(id: String?) -> Bool {
@@ -155,6 +160,7 @@ final class Connection {
         outstandingIds.remove(id)
       }
       runningId = nil
+      runningDeadline = nil
     }
   }
 
@@ -229,17 +235,17 @@ private func write(_ reply: JSON, to connection: Connection) {
   }
 }
 
-// How many requests run now, so a restart for a new grant waits until none does and none starts once it goes ahead.
+// How many requests run now, so a restart for a new grant waits until none does. None starts once the restart is
+// planned, so requests that keep coming cannot hold it off.
 enum RequestActivity {
   private static let lock = NSLock()
   private static var count = 0
   private static var restartPlanned = false
-  private static var closed = false
 
   // False once the app is about to restart: the request is not run.
   static func started() -> Bool {
     lock.withLock {
-      if closed { return false }
+      if restartPlanned { return false }
       count += 1
       return true
     }
@@ -255,13 +261,10 @@ enum RequestActivity {
     }
   }
 
-  static func closeIfIdle() -> Bool {
-    lock.withLock {
-      if count == 0 { closed = true }
-      return closed
-    }
-  }
+  static var isIdle: Bool { lock.withLock { count == 0 } }
 }
+
+let expiredError = HelperError(code: "expired", message: "The request waited too long and was not run.")
 
 private let connectionKey = "connection"
 
@@ -272,7 +275,9 @@ func currentConnection() -> Connection? { Thread.current.threadDictionary[connec
 private func perform(_ request: JSON, generation: Int, connection: Connection) {
   let id = request["id"] ?? NSNull()
   let key = request["id"].map { "\($0)" }
-  connection.begin(generation: generation, id: key)
+  // Milliseconds since 1970.
+  let deadline = (request["deadline"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
+  connection.begin(generation: generation, id: key, deadline: deadline)
   Thread.current.threadDictionary[connectionKey] = connection
   let admitted = RequestActivity.started()
   defer {
@@ -285,9 +290,7 @@ private func perform(_ request: JSON, generation: Int, connection: Connection) {
       throw HelperError(code: "restarting", message: "Backstage is restarting to pick up a permission the user just allowed. Try again in a few seconds.")
     }
     try connection.throwIfCancelled()
-    if let deadline = request["deadline"] as? Double, Date().timeIntervalSince1970 * 1000 > deadline {
-      throw HelperError(code: "expired", message: "The request waited too long and was not run.")
-    }
+    if let deadline, Date() > deadline { throw expiredError }
     let params = request["params"] as? JSON ?? [:]
     let method = request["method"] as? String ?? ""
     if method == "hello", let sessionId = params["session_id"] as? String { connection.adopt(sessionId: sessionId) }
