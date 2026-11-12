@@ -8,7 +8,7 @@ enum ControlTexts {
   static let honesty = "This keeps agents from using other apps through Backstage by mistake. It does not stop an agent that can run shell commands: it can control your Mac without Backstage."
   static let everyApp = "Allow every app"
   static let everyAppOff = "Off: only the apps on the list below."
-  static let everyAppOn = "On: agents may use any app except Passwords, Keychain Access and Backstage."
+  static let everyAppOn = "On: agents may use any app except password managers, authenticators, wallets, login and permission windows, and Backstage."
   static let windowsWhileLocked = "Windows while locked"
   static let windowsWhileLockedOff = "Off: while the screen is locked, agents use ready operations and menus only."
   static let windowsWhileLockedOn = "On: while the screen is locked, agents see screenshots of the windows and click and type by position, unverified, through private macOS calls. The Mac stays locked."

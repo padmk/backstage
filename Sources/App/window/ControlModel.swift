@@ -4,17 +4,54 @@
 import AppKit
 import SwiftUI
 
+// The name is looked up once, when the row is made, since the list sorts and redraws by it.
 struct AppRow: Identifiable, Equatable {
   let bundleId: String
+  let name: String
   var id: String { bundleId }
-  var url: URL? { NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) }
-  var name: String { url.map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") } ?? bundleId }
+
+  init(bundleId: String) {
+    self.bundleId = bundleId
+    name = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId)
+      .map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") } ?? bundleId
+  }
 }
 
 // The apps on the list, by name; shared by the window and the menu bar item.
 func approvedApps() -> [AppRow] {
   ApprovalStore.list().compactMap { $0["bundle_id"].map(AppRow.init) }
     .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+}
+
+// What the window reads each second. These calls reach tccd, LaunchServices, other apps' databases and files,
+// so they run off the main thread.
+private struct Reading {
+  let accessibility: Bool
+  let permissions: [SystemPermission: PermissionState]
+  let rows: [AppRow]
+  let recent: [DecisionRecord]
+  let appNames: [String: String]
+  let grants: [String: GrantState]
+  let relevantGrants: [AppGrant]
+  let login: LoginState
+  let showsMenuBarItem: Bool
+  let allowsEveryApp: Bool
+  let worksInWindowsWhileLocked: Bool
+
+  init() {
+    accessibility = AXIsProcessTrusted()
+    permissions = Dictionary(uniqueKeysWithValues: SystemPermission.allCases.map { ($0, permissionState($0)) })
+    rows = approvedApps()
+    recent = recentDecisions(limit: 50)
+    let names = Dictionary(rows.map { ($0.bundleId, $0.name) }, uniquingKeysWith: { first, _ in first })
+    appNames = Dictionary(Set(recent.map(\.bundleId)).map { ($0, names[$0] ?? AppRow(bundleId: $0).name) }, uniquingKeysWith: { first, _ in first })
+    grants = Dictionary(uniqueKeysWithValues: appGrants.map { ($0.id, grantState($0)) })
+    allowsEveryApp = Preferences.allowsEveryApp
+    relevantGrants = appGrants(forListed: Set(rows.map(\.bundleId)), everyApp: allowsEveryApp)
+    login = LaunchAtLogin.state
+    showsMenuBarItem = Preferences.showsMenuBarItem
+    worksInWindowsWhileLocked = Preferences.worksInWindowsWhileLocked
+  }
 }
 
 let accessibilityId = "accessibility"
@@ -33,7 +70,11 @@ final class ControlModel: ObservableObject {
   @Published var rows: [AppRow] = []
   @Published var requests: [ApprovalRequest] = []
   @Published var recent: [DecisionRecord] = []
+  // The names of the apps in recent, by bundle id.
+  @Published var appNames: [String: String] = [:]
   @Published var grants: [String: GrantState] = [:]
+  // The grants of apps on the list, or of every installed app while Allow every app is on.
+  @Published var relevantGrants: [AppGrant] = []
   @Published var asking: Set<String> = []
   @Published var problem: String?
   @Published var login = LoginState.unavailable
@@ -41,12 +82,19 @@ final class ControlModel: ObservableObject {
   @Published var showsMenuBarItem = false
   @Published var allowsEveryApp = false
   @Published var worksInWindowsWhileLocked = false
+  private let live: Bool
   private var timer: Timer?
+  private let reader = DispatchQueue(label: "control-model.read", qos: .userInitiated)
+  // One read at a time; a refresh asked for meanwhile reads again when it ends, so it sees the latest change.
+  private var reading = false
+  private var readAgain = false
 
-  // A live model refreshes every second; a fixed one, for rendering a state, does not read anything.
+  // A live model refreshes every second; a fixed one, for rendering a state, does not read anything. The first
+  // read is made at once, so the window opens with its content.
   init(live: Bool = true) {
+    self.live = live
     guard live else { return }
-    refresh()
+    apply(Reading())
     timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refresh() }
   }
 
@@ -55,19 +103,39 @@ final class ControlModel: ObservableObject {
   // Screen Recording is optional: only screenshots need it.
   var permissionsMissing: Bool { !accessibility }
 
-  var relevantGrants: [AppGrant] { appGrants(forListed: Set(rows.map(\.bundleId)), everyApp: allowsEveryApp) }
-
   // Grants of apps on the list that macOS has not given, which the Apps tab points to.
   var grantsWaiting: Bool { relevantGrants.contains { [.notAsked, .denied].contains(grants[$0.id] ?? .unknown) } }
 
+  // Called on the main thread; reads in the background and publishes there.
   func refresh() {
-    let trusted = AXIsProcessTrusted()
+    guard live else { return }
+    guard !reading else {
+      readAgain = true
+      return
+    }
+    reading = true
+    reader.async {
+      let reading = Reading()
+      DispatchQueue.main.async {
+        self.apply(reading)
+        self.reading = false
+        if self.readAgain {
+          self.readAgain = false
+          self.refresh()
+        }
+      }
+    }
+  }
+
+  private func apply(_ reading: Reading) {
+    let trusted = reading.accessibility
     if trusted != accessibility { accessibility = trusted }
-    let current = Dictionary(uniqueKeysWithValues: SystemPermission.allCases.map { ($0, permissionState($0)) })
+    let current = reading.permissions
     if current != permissions { permissions = current }
     for (permission, state) in current where state == .granted { PermissionRequests.remove(permission) }
     let asked = PermissionRequests.all
     if asked != permissionRequests { permissionRequests = asked }
+    if reading.grants != grants { grants = reading.grants }
     let done = inSettings.filter { id in
       if id == accessibilityId { return trusted }
       if let permission = SystemPermission(rawValue: id) { return current[permission] == .granted }
@@ -75,22 +143,18 @@ final class ControlModel: ObservableObject {
     }
     if !done.isEmpty { inSettings.subtract(done) }
     checkSettingsIfWaiting()
-    let all = approvedApps()
-    if all != rows { rows = all }
+    if reading.rows != rows { rows = reading.rows }
     let waiting = ApprovalRequests.all
     if waiting != requests { requests = waiting }
-    let latest = recentDecisions(limit: 50)
-    if latest != recent { recent = latest }
-    let states = Dictionary(uniqueKeysWithValues: appGrants.map { ($0.id, grantState($0)) })
-    if states != grants { grants = states }
-    let loginState = LaunchAtLogin.state
-    if loginState != login { login = loginState }
-    let menuBar = Preferences.showsMenuBarItem
-    if menuBar != showsMenuBarItem { showsMenuBarItem = menuBar }
-    let everyApp = Preferences.allowsEveryApp
-    if everyApp != allowsEveryApp { allowsEveryApp = everyApp }
-    let lockedWindows = Preferences.worksInWindowsWhileLocked
-    if lockedWindows != worksInWindowsWhileLocked { worksInWindowsWhileLocked = lockedWindows }
+    if reading.recent != recent { recent = reading.recent }
+    if reading.appNames != appNames { appNames = reading.appNames }
+    if reading.relevantGrants.map(\.id) != relevantGrants.map(\.id) || reading.relevantGrants.map(\.name) != relevantGrants.map(\.name) {
+      relevantGrants = reading.relevantGrants
+    }
+    if reading.login != login { login = reading.login }
+    if reading.showsMenuBarItem != showsMenuBarItem { showsMenuBarItem = reading.showsMenuBarItem }
+    if reading.allowsEveryApp != allowsEveryApp { allowsEveryApp = reading.allowsEveryApp }
+    if reading.worksInWindowsWhileLocked != worksInWindowsWhileLocked { worksInWindowsWhileLocked = reading.worksInWindowsWhileLocked }
   }
 
   // macOS asks one prompt at a time and waits for the answer, so the requests run in turn, off the main thread.
@@ -192,8 +256,9 @@ final class ControlModel: ObservableObject {
   }
 
   // The user's answer to a request that came over the socket.
+  // A request answered already, by a second click or from a row not yet redrawn, changes nothing.
   func answer(_ asked: ApprovalRequest, add: Bool) {
-    ApprovalRequests.remove(asked.app.bundleId)
+    guard ApprovalRequests.remove(asked.app.bundleId) else { return }
     if add {
       do {
         try addToList(asked.app, by: settingsClient)
