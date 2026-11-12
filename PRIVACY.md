@@ -1,6 +1,6 @@
 # Privacy
 
-Backstage sends nothing over the network itself. It has no telemetry.
+Backstage sends nothing over the network itself. It has no telemetry. macOS may: Photos' `export` asks PhotoKit for an item that is only in iCloud and lets it download the item (the reply says `downloaded`), and the apps an agent operates use the network as they would for you, as when Messages sends a message.
 
 ## What leaves the Mac
 
@@ -11,9 +11,10 @@ Window contents, screenshots, recordings of what an app plays (`record_audio`) a
 | File | Holds |
 |---|---|
 | `~/.config/backstage/approvals.json` | The app list: bundle ids and signers (entries made by earlier versions may carry an expiry time) |
-| `~/.local/state/backstage/decisions.jsonl` | Time, client, app and decision of each first use in a session and each change to the list, Allow every app or Windows while locked; past 200 KB it keeps the newest thousand records |
+| `~/.local/state/backstage/decisions.jsonl` | Time, client (the name the MCP client reports), app and decision of each first use in a session and each change to the list, Allow every app or Windows while locked; past 200 KB it keeps the newest thousand records |
 | `~/.local/share/backstage/signing.keychain-db` | The local signing certificate and its key |
 | `~/.config/backstage/settings.json` | The window's switches and last tab, and which apps' data macOS has been asked about |
 | `whatsapp-media`, `messages-attachments`, `photos-export` and `audio-recordings` in the system's temporary folder | Copies an agent asked for with WhatsApp's `save_media`, Messages' `save_attachment` or Photos' `export`, and recordings made with `record_audio`, each in a private folder of its own; macOS clears them over time |
+| `shortcut-<id>` in the system's temporary folder | While Shortcuts' `run` runs: the shortcut's input (`input.txt`) and output (`output.txt`), in a private folder removed when the shortcut ends |
 
-Apart from those copies and recordings, none of them holds window contents or operation results. Ready operations that list files (Finder's selection and front folder, the documents Pages and Numbers have open) leave out the paths of files outside your home folder and external volumes. Delete `approvals.json` and `decisions.jsonl` to reset the list and the history.
+Apart from those copies, recordings and a running shortcut's input and output, none of them holds window contents or operation results. Ready operations that list files (Finder's selection and front folder, the documents Pages and Numbers have open) leave out the paths of files outside your home folder and external volumes. Delete `approvals.json` and `decisions.jsonl` to reset the list and the history.
