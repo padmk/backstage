@@ -1,0 +1,77 @@
+# Development
+
+Backstage is one Swift package with three modules: the helper app (`Sources/App`), the `backstage` command that serves MCP and sets the app up (`Sources/Tool`), and what both share (`Sources/HelperLink`). The design and its reasons are in [architecture.md](architecture.md); agents changing the code start from [AGENTS.md](../AGENTS.md).
+
+## Commands
+
+```sh
+make app       # build/Backstage.app: release build, bundle assembly, ad hoc signature (Command Line Tools are enough)
+make install   # make app, then its setup: install into /Applications signed for this Mac, Accessibility, MCP registration
+make test      # swift test
+make check     # what CI runs: make app, then the tests
+make live      # LIVE=1: the installed app operates the fixture app in the background
+make bench     # BENCH=1: latency against the installed app
+make clean     # remove build/ and .build/
+```
+
+`swift test` runs the protocol tests against a fake helper and the app tests against a bare build of the app in a temporary home; it needs Xcode, but no macOS permission. The live test and the benchmark need the app installed with Accessibility (`make install`) and the fixture app on the app list. The fixture is `Tests/Fixtures/target`, a small app named "Test Fixture" (bundle id `app.foreverbeta.backstage.fixture`) that logs what happened to it as JSON lines, so the live test checks the effect instead of the reply. It is signed with this Mac's Backstage certificate, so the list keeps it across builds; the first live run asks you to add it in the Backstage window. Benchmark results are in [bench/README.md](../bench/README.md).
+
+Clients run the command inside the installed app, so changes in the checkout reach them only after `make install`. Running sessions then move to the new command on their next request ([Builds and updates](architecture.md#builds-and-updates)).
+
+`backstage version` prints `Product.version` from `Sources/HelperLink/Product.swift`, which `make app` also writes into the bundle's `Info.plist`; the Homebrew formula's test checks it.
+
+## Environment variables
+
+| Variable | Read by | Effect |
+|---|---|---|
+| `HELPER_TEST_HOME` | `backstage mcp`, `backstage approvals` | Use this folder for the socket, the app list, the settings and the log instead of the XDG directories. Tests only; a bare app build is started with `--home` to match |
+| `HELPER_NO_START` | `backstage mcp`, `backstage approvals` | Never start the helper; fail when nothing listens on the socket. Tests only |
+| `LIVE` | the live test | `LIVE=1` runs `LiveTests` (what `make live` sets) |
+| `LIVE_COMMAND` | the live test | The command the live test runs; default the test build's `backstage-tool` |
+| `BENCH` | the benchmark | `BENCH=1` runs `BenchTests` (what `make bench` sets) |
+| `BENCH_ROUNDS` | the benchmark | Rounds per measure, default 30 |
+
+Only a bare build outside a bundle honors `--home`; any copy of the app bundle uses the user's real files.
+
+## CI
+
+CI runs on macOS on every push to `main` and every pull request: it prints the Swift version, builds and assembles the app (`make app`), type-checks the fixture app and runs `swift test`. The live test needs real permissions, so it runs only locally.
+
+## Code map
+
+| Path | Responsibility |
+|---|---|
+| `Package.swift`, `Makefile`, `packaging/Info.plist` | The Swift package, and assembling and installing the app bundle |
+| `packaging/homebrew/backstage.rb` | The formula for the tap, filled in at each release |
+| `assets/` | The app icon |
+| `Sources/HelperLink/Product.swift` | The product's name, version, bundle id, install locations, handoff revision and directories; the steps `run_actions` takes |
+| `Sources/HelperLink/BuildIdentity.swift`, `Framing.swift` | The build identity (the linker's UUID); line-delimited JSON for the socket and stdio |
+| `Sources/Tool/ToolMain.swift`, `Commands.swift` | The command's entry; `setup`, `doctor`, `approvals`, `uninstall`, `version` |
+| `Sources/Tool/Install.swift` | Installing and signing the app for this Mac |
+| `Sources/Tool/MCPServer.swift`, `Tools.swift` | MCP over stdio, the tool definitions and their argument checks |
+| `Sources/Tool/HelperClient.swift` | Starting the app and talking to it over its socket, with the build check |
+| `Sources/Tool/Handoff.swift` | Handing a running MCP session to the installed command after an update |
+| `Sources/Tool/Processes.swift` | Running other programs; naming the command and its app in messages |
+| `Sources/App/HelperMain.swift`, `Server.swift` | The app's start, the Unix socket, connections and sessions |
+| `Sources/App/Requests.swift` | The request router |
+| `Sources/App/Common.swift` | Types and small helpers the app's modules share |
+| `Sources/App/Approvals.swift`, `ApprovalRequests.swift` | The app list and the check every request passes; apps asked for over the socket, waiting for the user |
+| `Sources/App/SystemPermissions.swift` | Screen Recording and System Audio Recording, asked for only from the window |
+| `Sources/App/Apps.swift` | Finding apps, starting them in the background and handing them files |
+| `Sources/App/Accessibility.swift`, `Tree.swift` | Reading apps and numbering elements; rendering windows as lines |
+| `Sources/App/Actions.swift`, `TextSelection.swift` | Acting on windows; reading and selecting text by what it says |
+| `Sources/App/Observation.swift`, `Sequences.swift` | Change reports after actions, the per-app lock, and `run_actions` |
+| `Sources/App/Input.swift`, `BackgroundEvents.swift`, `Capture.swift` | Key and pointer events, background delivery through private calls, screenshots |
+| `Sources/App/Presence.swift`, `LockedWindows.swift` | The user working in the target app; the locked screen and Windows while locked |
+| `Sources/App/WindowManagement.swift` | `list_windows`, `set_window`, `set_app_state`, `close`: displays, frames, layouts |
+| `Sources/App/MenuCommands.swift`, `MenuSafety.swift` | Menu commands with their shortcuts; the Apple, Services and Share menus refused |
+| `Sources/App/WaitFor.swift` | `wait_for` |
+| `Sources/App/AudioRecording.swift` | `record_audio`: a muted Core Audio tap of an app and its helper processes |
+| `Sources/App/MenuBar.swift`, `LaunchAtLogin.swift`, `Preferences.swift` | The menu bar item, starting at login, and the settings in `settings.json` |
+| `Sources/App/window/`, `Theme.swift` | The Backstage window: one file per tab, the waiting section, the drag panel for Full Disk Access, its model, texts and look |
+| `Sources/App/apps/Catalog.swift` | The catalog of app knowledge, `list_operations` and `run_operation` |
+| `Sources/App/apps/AppAccess.swift` | The macOS grants ready operations need, as the Setup tab shows them |
+| `Sources/App/apps/Scripting.swift`, `EventStore.swift`, `ReadOnlyDatabase.swift`, `Typedstream.swift`, `UserPaths.swift` | The routes operations share: the `osascript` runner, EventKit, read-only SQLite, the reader for Messages' archived text, and the rule for which files operations may touch |
+| `Sources/App/apps/` (the other files) | One file per app: Notes, Reminders, Calendar (`CalendarApp.swift`), Contacts, Mail, Messages and its history (`MessagesHistory.swift`), Music, Finder, Pages and Numbers (`IWork.swift`), Shortcuts, System Settings (`Settings.swift`), WhatsApp, Photos, Home, and the hint-only apps (`HintsOnly.swift`) |
+| `Tests/ToolTests/` | Protocol tests against a fake helper (`ServerTests`), app tests against a bare build (`HelperTests`), the live test and the benchmark |
+| `Tests/Fixtures/target/` | The fixture app the live test and the benchmark operate |

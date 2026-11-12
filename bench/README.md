@@ -1,6 +1,6 @@
 # Benchmark
 
-Latency through the installed command and app, against the fixture app in the background. It needs the app installed with Accessibility (`make install`), and puts the fixture on the app list for the run.
+Latency through the installed command and app, against the fixture app (Test Fixture, `Tests/Fixtures/target`) in the background. It needs the app installed with Accessibility (`make install`) and the fixture on the app list: a first run asks for it in the Backstage window and stops until you add it there.
 
 ```sh
 make bench                                  # 30 rounds

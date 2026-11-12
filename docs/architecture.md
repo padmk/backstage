@@ -1,6 +1,6 @@
 # How Backstage works, and why
 
-This page explains the parts of Backstage, what happens to a request, and the reasoning behind the main choices. For what each tool does, see the [README](../README.md); for the security model, [SECURITY.md](../SECURITY.md).
+This page explains the parts of Backstage, what happens to a request, and the reasoning behind the main choices. For what each tool does, see [tools.md](tools.md); for installing, [install.md](install.md); for the security model, [SECURITY.md](../SECURITY.md).
 
 ## The parts
 
@@ -14,18 +14,23 @@ backstage mcp  (Backstage.app/Contents/Helpers/backstage, Sources/Tool)
 Backstage.app  (the helper app, Sources/App, started through LaunchServices)
    │  holds the macOS permissions and the app list, decides every request
    ▼
-Accessibility · window server events · ScreenCaptureKit · Apple events · EventKit · Contacts · shortcuts
+Accessibility · window server events · ScreenCaptureKit · Core Audio taps · Apple events
+EventKit · Contacts · PhotoKit · shortcuts · apps' own databases, read-only
 ```
 
-- **The command** (`backstage`, inside the app bundle) serves MCP over stdio when a client runs it with `mcp`: it validates arguments against the tool schemas, starts the helper when needed and forwards each call over the socket. It keeps nothing about the user. Its instructions to clients put the access policy first, because clients cut long server instructions. The same command installs the app (`setup`), checks this Mac (`doctor`) and edits the list (`approvals`). It uses Foundation only, never AppKit or a privacy-protected API.
-- **The helper** is a signed macOS app in `/Applications`. It holds Accessibility, the optional Screen Recording and System Audio Recording, the Automation, Reminders, Calendars, Contacts and Photos grants, and Full Disk Access when the user turns it on for WhatsApp. It also holds the app list and checks every request against it, so a process that talks to the socket directly meets the same rules as an agent. It shows the Backstage window, and stops 2 minutes after the last client disconnects unless Open at login or the menu bar item is on.
+- **The command** (`backstage`, inside the app bundle) serves MCP over stdio when a client runs it with `mcp`: it validates arguments against the tool schemas, starts the helper when needed and forwards each call over the socket. It keeps nothing about the user. Its instructions to clients put the access policy first, because clients cut long server instructions. The same command installs the app (`setup`), checks this Mac (`doctor`), edits the list (`approvals`), removes the app (`uninstall`) and prints its version (`version`). It uses Foundation only, never AppKit or a privacy-protected API.
+- **The helper** is a signed macOS app in `/Applications`. It holds Accessibility, the optional Screen Recording and System Audio Recording, the Automation, Reminders, Calendars, Contacts and Photos grants, and Full Disk Access when the user turns it on for WhatsApp or the Messages history. It also holds the app list and checks every request against it, so a process that talks to the socket directly meets the same rules as an agent. It shows the Backstage window, and stops 2 minutes after the last client disconnects unless Open at login or the menu bar item is on.
 - **HelperLink** is the code both share: the product's name, version and bundle id, the directories, line framing and the build identity.
 
 **Why two processes.** macOS attributes privacy permissions to the process responsible for a request. A program an MCP client starts directly runs on the client's behalf, so its Accessibility would be the terminal's or the client's, and would change with whatever runs it. The helper is started through LaunchServices (`open -g -j`), so macOS treats it as its own app: its grants stay stable across updates, in one place the user can see and revoke. The command only forwards requests and needs no grant.
 
 **Why one Swift package.** The app and the command share their code and their version, build with the Command Line Tools alone, and ship as one bundle. The command starts in about 20 ms with under 10 MB of memory, which matters because every client session starts one.
 
-**Builds and updates.** Clients run the command inside the installed app, which only an explicit `setup` replaces: it copies the bundle next to the installed one, signs the copy for this Mac and swaps the two in one step (`renamex_np` with `RENAME_SWAP`), so the registered path never disappears. Each process reads its build identity once, at start: the linker's UUID of the app executable, which follows the code and not the signature. When the running helper is another build, the command restarts it only if the installed app is the command's own build; if the command itself is the older one, it never stops the helper that newer sessions use. Instead it hands its MCP session to the installed command, when that bundle declares the same handoff revision (`SessionHandoffRevision` in Info.plist, owned by `Product.swift`); otherwise it refuses and asks for a new session. The handoff happens only when the command has to connect again, holding the connection lock, so no request is on its way to a helper: calls that reached the old helper have already failed with `helper_stopped`, and it waits up to 5 s for them to finish. It stops reading stdin between reads, writes the client's name, a digest of the tool list, a handoff count, the calls that never reached a helper (not those the client cancelled) and any incomplete input line to an unlinked private file, and execs the installed command with stdin, stdout, stderr and that file, keeping the process id. The new command reads the file before stdin, numbers elements from a range of its own (100,000,000 apart per handoff), so numbers from before fail with `unknown_element` instead of naming new elements, and sends `notifications/tools/list_changed` when the tool list differs. Sessions started before this mechanism shipped still need one restart.
+## Builds and updates
+
+Clients run the command inside the installed app, which only an explicit `setup` replaces: it copies the bundle next to the installed one, signs the copy for this Mac and swaps the two in one step (`renamex_np` with `RENAME_SWAP`), so the registered path never disappears. Each process reads its build identity once, at start: the linker's UUID of the app executable, which follows the code and not the signature. When the running helper is another build, the command restarts it only if the installed app is the command's own build; if the command itself is the older one, it never stops the helper that newer sessions use. Instead it hands its MCP session to the installed command, when that bundle declares the same handoff revision (`SessionHandoffRevision` in Info.plist, owned by `Product.swift`); otherwise it refuses and asks for a new session. The handoff happens only when the command has to connect again, holding the connection lock, so no request is on its way to a helper: calls that reached the old helper have already failed with `helper_stopped`, and it waits up to 5 s for them to finish. It stops reading stdin between reads, writes the client's name, a digest of the tool list, a handoff count, the calls that never reached a helper (not those the client cancelled) and any incomplete input line to an unlinked private file, and execs the installed command with stdin, stdout, stderr and that file, keeping the process id. The new command reads the file before stdin, numbers elements from a range of its own (100,000,000 apart per handoff), so numbers from before fail with `unknown_element` instead of naming new elements, and sends `notifications/tools/list_changed` when the tool list differs.
+
+The helper keeps a session (its element numbers, its last reads and the apps it has used) for 10 minutes after its last connection closes, so a command whose connection drops and comes back carries on where it was. A handoff starts a new session, and a helper that restarts starts with none. It keeps at most 256 sessions and drops the ones detached longest first.
 
 ## A request, step by step
 
@@ -65,6 +70,22 @@ An app can still bring itself forward, for example when it shows a dialog. The h
 
 **Why private calls.** The public `CGEventPostToPid` routes a click by what is under the real cursor, so it cannot click a window behind another one. The private SkyLight calls `SLEventPostToPid` and `CGEventSetWindowLocation` let an event name its window and the point in it, and `SLPSPostEventRecordTo` makes a Chromium window key inside its app. Each is looked up at run time; when one is missing, the helper falls back to the public call instead of crashing, and the behavior degrades rather than breaks. The full list is in `Sources/App/BackgroundEvents.swift` and `Sources/App/LockedWindows.swift`; `status` and `backstage doctor` report which of them this macOS has.
 
+### What works in the background
+
+Measured against the fixture app in the live test (`make live`), with another app in front:
+
+| Action | Result |
+|---|---|
+| Reading windows, `press`, `set_value`, sheets, `scroll`, `screenshot` | Works |
+| `type_text` at an element in a native field, empty or not | Works, without taking focus |
+| `click_at` on a view without accessibility support | Works, without moving the cursor |
+| `drag` | Works: a slider's knob moved with the app inactive and another app in front |
+| `menu_extras` and `press` on an item | Works: an app's menu bar item opened its popover, which reads like a window, and Escape closed it, without taking focus. Apps without a Dock icon are reachable when they have such items. Wi-Fi, Sound and other system items belong to a process whose items carry no names |
+| Menu commands on the current document (Save, Duplicate) | Disabled while the app is in the background, because it has no key window, so pressing them does nothing |
+| `press_key` | Reaches a view after `click_at` gives it focus. With nothing focused the key is ignored. Combinations such as `cmd+s` are not measured |
+
+Making a Chromium window key inside its app was measured on Brave and Chrome for Testing settings toggles. Electron apps build their accessibility tree on request, and the helper asks once per process. Chromium browsers support neither `AXManualAccessibility` nor `AXEnhancedUserInterface`, so web content shows no elements: use `screenshot` and `click_at`.
+
 ## Windows and menus
 
 **Windows.** `list_windows` takes the windows from the window server, which knows every app's windows on every display and Space, and adds what Accessibility knows for the apps on the user's list: title, minimized, full screen, modal, movable and resizable. Accessibility makes every change (`set_window`, `close`), since it is the public way to move another app's window, and reads the frame back: an app may clamp a window to its minimum size, so the reply says `adjusted` rather than claiming the frame asked for. Accessibility reaches only the current Space, so a window elsewhere is listed but not changed, and nothing moves windows between Spaces (that needs private calls macOS has closed to other processes). Bringing a window back from the Dock and full screen put it in front, so they need `foreground: true`. A window id is the window server's number, checked against the app that owns it before any change.
@@ -83,7 +104,7 @@ An action reply says how it was delivered and what the helper saw afterwards:
 
 ## Ready operations
 
-For well-known apps the helper carries typed operations that use the app's own automation surface: JavaScript for Automation scripts run as `osascript` children of the helper, EventKit, the Contacts framework, `shortcuts`, and System Settings URLs. They are faster than the window, work while the app is hidden, closed or the screen is locked, and read their result back. Design, scope and measurements are in [app-knowledge.md](app-knowledge.md).
+For well-known apps the helper carries typed operations that use the app's own automation surface: JavaScript for Automation scripts run as `osascript` children of the helper, EventKit, the Contacts framework, PhotoKit, `shortcuts`, System Settings URLs, and the apps' own databases opened read-only (WhatsApp and the Messages history, with Full Disk Access). They are faster than the window, work while the app is hidden, closed or the screen is locked, and read their result back. Design, scope and measurements are in [app-knowledge.md](app-knowledge.md).
 
 **Why compiled operations, not a script tool.** Scripts are fixed in the helper and arguments travel as data, never as script text, so an approval of Notes gives agents the Notes operations and nothing else. An open AppleScript tool behind the same gate would turn one approval into control of every scriptable app.
 
@@ -97,7 +118,7 @@ Agents may use an app only when the user put it on the list, or turned on Allow 
 
 **Why a list and not prompts.** Prompts during a task block unattended sessions, train people to click Allow, and show up on whatever screen the user is looking at. A list decided in advance works the same at 3 a.m. as at noon. The cost is setup: the user adds apps once.
 
-Adding an app over the socket, from the command line or by an agent, only asks: the request waits on the Apps tab until the user adds it, because the socket cannot tell an agent from the user running the same command. Removing an app narrows access and takes effect at once. List entries are bound to the app's signer (its team, or its certificate when it has none), never-available apps (Passwords, Keychain Access, login and authentication windows, Backstage itself) are refused whatever the settings, and the server instructions ask agents to respect the list by every route. The limits of that are in [SECURITY.md](../SECURITY.md).
+Adding an app over the socket, from the command line or by an agent, only asks: the request waits on the Apps tab until the user adds it, because the socket cannot tell an agent from the user running the same command. Removing an app narrows access and takes effect at once. List entries are bound to the app's signer (its team, or its certificate when it has none), never-available apps (Passwords, Keychain Access, other makers' password managers, authenticators and wallets, the system processes that show login, authentication and permission prompts, and Backstage itself) are refused whatever the settings, and the server instructions ask agents to respect the list by every route. The limits of that are in [SECURITY.md](../SECURITY.md).
 
 ## Signing and permissions
 
@@ -109,8 +130,8 @@ Adding an app over the socket, from the command line or by an agent, only asks: 
 |---|---|
 | `/Applications/Backstage.app` (or `~/Applications`) | The helper app, and the command in `Contents/Helpers/backstage` |
 | `~/.config/backstage/approvals.json` | The app list (`0600`) |
-| `~/.local/share/backstage/` | The signing keychain and its certificate hash |
+| `~/.local/share/backstage/` | The signing keychain, its certificate hash and the setup lock |
 | `~/.local/state/backstage/` | The socket, the start lock and the activity log `decisions.jsonl` |
-| `~/.config/backstage/settings.json` | The window's switches: Allow every app, Windows while locked and the menu bar item, and the last tab (`0600`) |
+| `~/.config/backstage/settings.json` | The window's switches: Allow every app, Windows while locked and the menu bar item, the last tab, and which apps' data macOS has been asked about (`0600`) |
 
 The directories are `0700`. Outside them, macOS keeps what it owns: the permissions, the login item (Open at login) and the app's defaults, where AppKit alone stores things such as the size of the open panel. The `XDG_*` variables are not read, because the helper also starts from launchd, at login or from the Finder, without the shell's environment, and must find the same files. The bundle id, `app.foreverbeta.backstage`, stays fixed: macOS ties the permissions to it, so changing it would ask every user to grant everything again.
