@@ -37,7 +37,7 @@ private let listChats = Operation(
 
 // A chat id from list_chats contains semicolons ("iMessage;-;+15555550100"); anything else is a handle.
 private let sendScript = """
-  on run argv
+  on main(argv)
     set destination to item 1 of argv
     set message to item 2 of argv
     tell application "Messages"
@@ -48,7 +48,7 @@ private let sendScript = """
       end if
     end tell
     return "sent"
-  end run
+  end main
   """
 
 private let send = Operation(
