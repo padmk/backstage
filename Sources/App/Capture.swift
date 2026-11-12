@@ -1,4 +1,5 @@
-// Captures one window, at one image pixel per window point so its coordinates work with click_at.
+// Captures one window, at one image pixel per window point so its coordinates work with click_at, and with
+// recognizeText also the text in the image.
 
 import AppKit
 import ApplicationServices
@@ -7,14 +8,14 @@ import ScreenCaptureKit
 private let captureTimeoutSeconds = 15
 private let maxFrameDifference: CGFloat = 24
 
-func captureWindow(pid: pid_t, window: AXUIElement) throws -> JSON {
+func captureWindow(pid: pid_t, window: AXUIElement, recognizeText: Bool = false) throws -> JSON {
   try requirePermission(.screenRecording, for: "A screenshot")
   guard let target = frame(of: window) else {
     throw HelperError(code: "action_failed", message: "The window has no position.")
   }
   let title = stringAttribute(window, kAXTitleAttribute)
   let done = DispatchSemaphore(value: 0)
-  var outcome: Result<JSON, Error> = .failure(HelperError(code: "action_failed", message: "No screenshot."))
+  var outcome: Result<(JSON, CGImage), Error> = .failure(HelperError(code: "action_failed", message: "No screenshot."))
 
   Task.detached {
     do {
@@ -44,7 +45,7 @@ func captureWindow(pid: pid_t, window: AXUIElement) throws -> JSON {
       guard let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
         throw HelperError(code: "action_failed", message: "The image could not be encoded.")
       }
-      outcome = .success(["png_base64": data.base64EncodedString(), "width": image.width, "height": image.height, "title": match.title ?? ""])
+      outcome = .success((["png_base64": data.base64EncodedString(), "width": image.width, "height": image.height, "title": match.title ?? ""], image))
     } catch {
       outcome = .failure(error)
     }
@@ -53,5 +54,6 @@ func captureWindow(pid: pid_t, window: AXUIElement) throws -> JSON {
   guard done.wait(timeout: .now() + .seconds(captureTimeoutSeconds)) == .success else {
     throw HelperError(code: "timeout", message: "The capture did not finish in time.")
   }
-  return try outcome.get()
+  let (reply, image) = try outcome.get()
+  return recognizeText ? addingRecognizedText(to: reply, image: image) : reply
 }
