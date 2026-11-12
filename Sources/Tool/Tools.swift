@@ -35,9 +35,9 @@ struct ToolDefinition {
   func rule(for key: String) -> JSON? { properties.first { $0.0 == key }?.1 }
 }
 
-// The apps with ready operations, kept in step with the app's catalog (Sources/App/apps/Catalog.swift), so an agent
-// can go straight to list_operations for one of them.
-private let appsWithOperations = "Notes, Reminders, Calendar, Contacts, Mail, Messages, Finder, Pages, Numbers, Music, Shortcuts and System Settings"
+// The apps with ready operations, kept in step with the app's catalog (Sources/App/apps/Catalog.swift; a helper test
+// compares the two), so an agent can go straight to list_operations for one of them.
+private let appsWithOperations = "Notes, Reminders, Calendar, Contacts, Mail, Messages, WhatsApp, Finder, Pages, Numbers, Music, Photos, Shortcuts and System Settings"
 
 // The tools run_actions can run as steps, with their own arguments except app.
 let stepTools = actionToolNames
