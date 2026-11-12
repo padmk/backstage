@@ -32,6 +32,7 @@
 - **Ready operations for well-known apps.** Read WhatsApp chats and the Messages history, find and export photos, add reminders and events, search notes and mail, fill Numbers cells: typed operations that run while the app is hidden or closed, most of them also on a locked screen, and that read their result back.
 - **Every app's menu commands, by name.** `list_menu_commands` shows what any app can do, with its shortcuts, and `run_menu_command` runs `File > Export…` without opening a menu, also in apps Backstage has never seen.
 - **Hears what an app plays.** `record_audio` records an app's sound into a file, muted for you, such as a voice message that cannot be downloaded.
+- **Reads views without elements.** `screenshot` with `text: true` recognizes the text of canvases, remote desktops and other custom views on this Mac, with each line's place for `click_at`.
 - **Several steps, one call.** `run_actions` runs up to 20 actions in an app and reports their combined effect once.
 - **You decide which apps.** Agents can use only the apps on your list, and nothing asks during a task. Password managers, authenticators, wallets and the system's login prompts are never available.
 - **Local and independent.** No account, no telemetry, no dependency on any AI product. Everything is Swift: a small command speaks MCP, and a signed helper app does the work.
@@ -92,7 +93,7 @@ If you are an agent using Backstage: check `list_apps` before using an app by an
 24 tools, with every argument, reply and error code in [docs/tools.md](docs/tools.md):
 
 - **Apps and operations:** `list_apps`, `launch_app`, `list_operations`, `run_operation`
-- **Reading:** `get_window_state`, `read_text`, `screenshot`
+- **Reading:** `get_window_state`, `read_text`, `screenshot` (with the text recognized in it, on this Mac)
 - **Acting:** `press`, `set_value`, `type_text`, `select_text`, `press_key`, `scroll`, `drag`, `click_at`, `run_actions`
 - **Windows:** `list_windows`, `set_window`, `set_app_state`, `close`
 - **Menus:** `list_menu_commands`, `run_menu_command`

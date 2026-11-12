@@ -79,7 +79,8 @@ The tag starts `.github/workflows/release.yml`. It builds the app and runs the t
 | `Sources/App/Input.swift`, `BackgroundEvents.swift`, `Capture.swift` | Key and pointer events, background delivery through private calls, screenshots |
 | `Sources/App/Presence.swift`, `LockedWindows.swift` | The user working in the target app; the locked screen and Windows while locked |
 | `Sources/App/WindowManagement.swift` | `list_windows`, `set_window`, `set_app_state`, `close`: displays, frames, layouts |
-| `Sources/App/MenuCommands.swift`, `MenuSafety.swift` | Menu commands with their shortcuts; the Apple, Services and Share menus refused |
+| `Sources/App/TextRecognition.swift` | The text recognized in a screenshot with Vision, in reading order |
+| `Sources/App/MenuCommands.swift`, `MenuSafety.swift` | Menu commands with their shortcuts; the Apple, Services and Share menus refused, with the points and keys checked against them |
 | `Sources/App/WaitFor.swift` | `wait_for` |
 | `Sources/App/AudioRecording.swift` | `record_audio`: a muted Core Audio tap of an app and its helper processes |
 | `Sources/App/MenuBar.swift`, `LaunchAtLogin.swift`, `Preferences.swift` | The menu bar item, starting at login, and the settings in `settings.json` |
@@ -89,5 +90,5 @@ The tag starts `.github/workflows/release.yml`. It builds the app and runs the t
 | `Sources/App/apps/Scripting.swift`, `EventStore.swift`, `ReadOnlyDatabase.swift`, `Typedstream.swift`, `UserPaths.swift` | The routes operations share: the `osascript` runner, EventKit, read-only SQLite, the reader for Messages' archived text, and the rule for which files operations may touch |
 | `Sources/App/apps/` (the other files) | One file per app: Notes, Reminders, Calendar (`CalendarApp.swift`), Contacts, Mail, Messages and its history (`MessagesHistory.swift`), Music, Finder, Pages and Numbers (`IWork.swift`), Shortcuts, System Settings (`Settings.swift`), WhatsApp, Photos, Home, and the hint-only apps (`HintsOnly.swift`) |
 | `Tests/ToolTests/` | Protocol tests against a fake helper (`ServerTests`), app tests against a bare build (`HelperTests`), the app list as socket clients meet it (`AppListTests`), the live test and the benchmark |
-| `Tests/AppTests/` | The app's pure functions through `@testable import App`: ready operations' paths, values, scripts and databases, the app list's rules, menu safety and key combinations, change reports, recording and window rules |
+| `Tests/AppTests/` | The app's pure functions through `@testable import App`: ready operations' paths, values, scripts and databases, the app list's rules, menu safety and key combinations, change reports, recording and window rules, and text recognition (`TextRecognitionTests`) |
 | `Tests/Fixtures/target/` | The fixture app the live test and the benchmark operate |
