@@ -91,8 +91,9 @@ let tools: [ToolDefinition] = [
     required: ["app", "element"], annotations: reads),
   ToolDefinition(
     name: "screenshot",
-    description: "Capture a window as a PNG, one image pixel per window point, so its coordinates work with click_at. Needs Screen Recording, which is optional: without it the reply is permission_missing and the Backstage window shows the user an Allow button; meanwhile, work from get_window_state.",
-    properties: [("app", app), ("window", window)],
+    description: "Capture a window as a PNG, one image pixel per window point, so its coordinates work with click_at. Needs Screen Recording, which is optional: without it the reply is permission_missing and the Backstage window shows the user an Allow button; meanwhile, work from get_window_state. With text: true the reply also lists the text recognized in the image on this Mac, for views without elements: each line's text, confidence (0 to 1) and frame [x, y, width, height] in window points from the top left, top to bottom, with text_truncated: true when the list was cut, or text_error instead when recognition fails. Recognized text can be wrong and does not prove that an action worked.",
+    properties: [("app", app), ("window", window),
+                 ("text", ["type": "boolean", "description": "Also recognize the text in the image (default false)"])],
     required: ["app"], annotations: reads),
   ToolDefinition(
     name: "press",

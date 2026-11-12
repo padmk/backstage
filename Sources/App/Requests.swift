@@ -149,7 +149,7 @@ private func performAppRequest(_ method: String, app: AppIdentity, params: JSON,
 
   case "screenshot":
     let application = try applicationElement(app)
-    return try captureWindow(pid: app.pid, window: selectWindow(application, params: params))
+    return try captureWindow(pid: app.pid, window: selectWindow(application, params: params), recognizeText: params["text"] as? Bool == true)
 
   case "read_text":
     try requireAccessibility()

@@ -51,7 +51,7 @@ func worksOnLockedWindows(_ method: String, params: JSON) -> Bool {
 func lockedWindowRequest(_ method: String, app: AppIdentity, params: JSON) throws -> JSON {
   switch method {
   case "screenshot":
-    return try captureLockedWindow(try lockedWindow(app: app, params: params))
+    return try captureLockedWindow(try lockedWindow(app: app, params: params), recognizeText: params["text"] as? Bool == true)
   case "click_at":
     let window = try lockedWindow(app: app, params: params)
     let style = try ClickStyle.parse(button: params["button"] as? String, modifiers: params["modifiers"] as? [String] ?? [])
@@ -106,7 +106,7 @@ private func lockedWindow(app: AppIdentity, params: JSON) throws -> LockedWindow
 }
 
 // One image pixel per window point, as unlocked screenshots, so the coordinates work with click_at.
-private func captureLockedWindow(_ window: LockedWindow) throws -> JSON {
+private func captureLockedWindow(_ window: LockedWindow, recognizeText: Bool) throws -> JSON {
   try requirePermission(.screenRecording, for: "A screenshot")
   guard let mainConnection, let captureWindowList else {
     throw HelperError(code: "action_failed", message: "This macOS cannot capture windows while the screen is locked.")
@@ -128,6 +128,7 @@ private func captureLockedWindow(_ window: LockedWindow) throws -> JSON {
     let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
     throw HelperError(code: "action_failed", message: "The image could not be encoded.")
   }
-  return ["png_base64": data.base64EncodedString(), "width": width, "height": height, "title": window.title,
-          "note": "The screen is locked: this is the window as the window server last drew it."]
+  let reply: JSON = ["png_base64": data.base64EncodedString(), "width": width, "height": height, "title": window.title,
+                      "note": "The screen is locked: this is the window as the window server last drew it."]
+  return recognizeText ? addingRecognizedText(to: reply, image: image) : reply
 }
