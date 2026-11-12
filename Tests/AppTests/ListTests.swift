@@ -1,5 +1,5 @@
 // The app list's own rules, called as the helper calls them: client names from hello, apps that are never
-// available, and the activity log's bounds. Files go to a temporary home only.
+// available, the activity log's bounds and answering a waiting request. Files go to a temporary home only.
 
 import Foundation
 import HelperLink
@@ -103,6 +103,19 @@ private let neverAvailable = [
       let size = try #require(try FileManager.default.attributesOfItem(atPath: path)[.size] as? Int)
       #expect(size < 4096)
       #expect(recentDecisions(limit: 50).map(\.bundleId) == ["com.example.next", "com.example.last", "com.example.first"])
+    }
+  }
+
+  @Test func aWaitingRequestIsAnsweredOnce() throws {
+    try withTemporaryHome {
+      let app = AppIdentity(pid: 0, bundleId: "com.example.asked", name: "Asked", launchDate: nil, path: nil)
+      #expect(try ApprovalRequests.add(app, client: "agent"))
+      let request = try #require(ApprovalRequests.all.first { $0.app.bundleId == app.bundleId })
+      let model = ControlModel(live: false)
+      model.answer(request, add: false)
+      model.answer(request, add: false)
+      #expect(recentDecisions(limit: 50).map(\.decision) == ["decline"])
+      #expect(!ApprovalRequests.all.contains { $0.app.bundleId == app.bundleId })
     }
   }
 }

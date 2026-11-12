@@ -45,7 +45,7 @@ struct ActivityTab: View {
         let isLockedWindows = record.decision.hasPrefix("locked_windows")
         ControlRow(icon: isLockedWindows ? .symbol("lock.display") : record.bundleId == "*" ? .symbol("square.grid.2x2") : .app(record.bundleId),
                    title: isLockedWindows ? ControlTexts.windowsWhileLocked
-                     : record.bundleId == "*" ? ControlTexts.everyApp : AppRow(bundleId: record.bundleId).name,
+                     : record.bundleId == "*" ? ControlTexts.everyApp : readableAppName(model.appNames[record.bundleId] ?? record.bundleId) ?? record.bundleId,
                    detail: who(record.client)) {
           HStack(spacing: 8) {
             Text(chipText(record.decision))
@@ -53,9 +53,12 @@ struct ActivityTab: View {
               .padding(.horizontal, 7).frame(height: 18)
               .background(Capsule().fill(chipColor(record.decision).opacity(0.18)))
             if let time = record.time {
-              Text(time.formatted(.relative(presentation: .named)))
-                .font(.system(size: 11)).foregroundStyle(Palette.secondary)
-                .frame(minWidth: 96, alignment: .trailing)
+              // Redrawn on its own, so "now" turns into "1 minute ago" without a new record.
+              TimelineView(.periodic(from: .now, by: 30)) { _ in
+                Text(time.formatted(.relative(presentation: .named)))
+                  .font(.system(size: 11)).foregroundStyle(Palette.secondary)
+                  .frame(minWidth: 96, alignment: .trailing)
+              }
             }
           }
         }
