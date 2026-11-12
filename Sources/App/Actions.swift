@@ -362,43 +362,69 @@ func scroll(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> 
   let vertical = direction == "up" || direction == "down"
   let forward = direction == "down" || direction == "right"
 
-  var current: AXUIElement? = element
-  var hops = 0
-  while let candidate = current, hops < 12 {
-    let barName = vertical ? kAXVerticalScrollBarAttribute : kAXHorizontalScrollBarAttribute
-    if let barValue = attribute(candidate, barName) {
-      let bar = barValue as! AXUIElement
-      if let position = attribute(bar, kAXValueAttribute) as? Double, isSettable(bar, kAXValueAttribute) {
-        let next = min(max(position + (forward ? 0.25 : -0.25) * Double(pages), 0), 1)
-        let outcome = AXUIElementSetAttributeValue(bar, kAXValueAttribute as CFString, NSNumber(value: next))
-        guard outcome == .success else { throw axFailure(outcome, "scrolling") }
-        return ["delivery": "accessibility"]
-      }
-    }
-    current = attribute(candidate, kAXParentAttribute).map { $0 as! AXUIElement }
-    hops += 1
+  let barName = vertical ? kAXVerticalScrollBarAttribute : kAXHorizontalScrollBarAttribute
+  let settableBar = { (area: AXUIElement) -> AXUIElement? in
+    guard let bar = attribute(area, barName).map({ $0 as! AXUIElement }), attribute(bar, kAXValueAttribute) is Double,
+      isSettable(bar, kAXValueAttribute) else { return nil }
+    return bar
   }
-  // A list that has no scroll bar may still scroll by page through its own actions, as WhatsApp's chat does,
-  // which needs no pointer event.
+  if let area = selfOrAncestor(of: element, where: { settableBar($0) != nil }), let bar = settableBar(area),
+    let position = attribute(bar, kAXValueAttribute) as? Double, let step = pageStep(area: area, bar: bar, vertical: vertical) {
+    let next = scrollPosition(from: position, step: step, pages: forward ? pages : -pages)
+    let outcome = AXUIElementSetAttributeValue(bar, kAXValueAttribute as CFString, NSNumber(value: next))
+    guard outcome == .success else { throw axFailure(outcome, "scrolling") }
+    return ["delivery": "accessibility"]
+  }
+  // A list without a scroll bar may still move by its own page actions, as WhatsApp's chat does, which needs no
+  // pointer event. A scroll bar comes first: a standard scroll view lists these actions and refuses them.
   let pageAction = vertical ? (forward ? "AXScrollDownByPage" : "AXScrollUpByPage") : (forward ? "AXScrollRightByPage" : "AXScrollLeftByPage")
-  current = element
-  hops = 0
-  while let candidate = current, hops < 12 {
-    if actions(of: candidate).contains(pageAction) {
-      for _ in 0..<pages {
-        let outcome = AXUIElementPerformAction(candidate, pageAction as CFString)
-        guard outcome == .success else { throw axFailure(outcome, "scrolling") }
-      }
-      return ["delivery": "accessibility", "action": pageAction]
+  if let area = selfOrAncestor(of: element, where: { actions(of: $0).contains(pageAction) }) {
+    for _ in 0..<pages {
+      let outcome = AXUIElementPerformAction(area, pageAction as CFString)
+      guard outcome == .success else { throw axFailure(outcome, "scrolling") }
     }
-    current = attribute(candidate, kAXParentAttribute).map { $0 as! AXUIElement }
-    hops += 1
+    return ["delivery": "accessibility", "action": pageAction]
   }
   guard vertical, let box = frame(of: element) else {
     throw HelperError(code: "action_failed", message: "No scroll bar or scroll action was found for this element.")
   }
   try postScroll(at: CGPoint(x: box.midX, y: box.midY), target: pointerTarget(for: element), pid: app.pid, lines: Int32((forward ? -10 : 10) * pages))
   return ["delivery": "pointer_event", "verified": false]
+}
+
+private func selfOrAncestor(of element: AXUIElement, where matches: (AXUIElement) -> Bool) -> AXUIElement? {
+  var current: AXUIElement? = element
+  for _ in 0..<12 {
+    guard let candidate = current else { return nil }
+    if matches(candidate) { return candidate }
+    current = attribute(candidate, kAXParentAttribute).map { $0 as! AXUIElement }
+  }
+  return nil
+}
+
+// A scroll bar's value runs from 0 to 1 over the distance the content can move, which is its length less the
+// visible part, so one page is the visible length over that distance.
+func scrollBarPageStep(visible: Double, content: Double) -> Double? {
+  guard visible > 0, content > visible else { return nil }
+  return visible / (content - visible)
+}
+
+func scrollPosition(from position: Double, step: Double, pages: Int) -> Double {
+  min(max(position + step * Double(pages), 0), 1)
+}
+
+// One page as a step of the bar's value, from the lengths of the area and its content, or else of the knob and
+// the bar, since the knob's share of the bar is the visible share of the content. Nil when neither can be read.
+private func pageStep(area: AXUIElement, bar: AXUIElement, vertical: Bool) -> Double? {
+  let length = { (box: CGRect) in Double(vertical ? box.height : box.width) }
+  if let visible = frame(of: area), let content = ((attribute(area, kAXContentsAttribute) as? [AXUIElement]) ?? []).first.flatMap(frame(of:)),
+    let step = scrollBarPageStep(visible: length(visible), content: length(content)) {
+    return step
+  }
+  let knob = ((attribute(bar, kAXChildrenAttribute) as? [AXUIElement]) ?? [])
+    .first { stringAttribute($0, kAXRoleAttribute) == kAXValueIndicatorRole }
+  guard let knob, let knobBox = frame(of: knob), let barBox = frame(of: bar) else { return nil }
+  return scrollBarPageStep(visible: length(knobBox), content: length(barBox))
 }
 
 // Chromium ignores input to a window that is not key, so its window is made key inside the app first. An app
