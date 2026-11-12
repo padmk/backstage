@@ -23,6 +23,8 @@ public enum Product {
   // Arguments the command opens the app with: started for a client, without its window, or with its window on a tab.
   public static let backgroundArgument = "--background"
   public static let tabArgument = "--tab"
+  // Draws the window's tabs into PNG files in the folder that follows, for the documentation, and exits.
+  public static let renderWindowArgument = "--render-window"
   // An Info.plist key saying which way of taking over a running MCP session the bundle's command speaks
   // (`make app` writes both); a command hands its session only to a bundle with its own revision.
   public static let sessionHandoffKey = "SessionHandoffRevision"

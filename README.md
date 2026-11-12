@@ -141,7 +141,7 @@ While the screen is locked, ready operations and the menu bar keep working, and 
 Open **Backstage** from `/Applications` to choose apps, allow optional permissions and see which agent used which app. [docs/window.md](docs/window.md) describes each tab.
 
 <p align="center">
-  <img src="docs/images/window-apps.png" width="480" alt="The Backstage window on its Apps tab: Allow every app is off, and Calendar, Finder, Music, Notes, Pages and Reminders are on the list of apps agents may use">
+  <img src="docs/images/window-apps.png" width="480" alt="The Backstage window on its Apps tab: Allow every app is off, and Finder, Preview, Reminders, TextEdit and Weather are on the list of apps agents may use">
 </p>
 
 ## Troubleshooting

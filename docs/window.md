@@ -3,11 +3,11 @@
 Open **Backstage** from `/Applications` to see and change everything in one window, with three tabs. It is the only place where apps go on the list.
 
 <p align="center">
-  <img src="images/window-apps.png" width="420" alt="The Apps tab: Allow every app is off, and Calendar, Finder, Music, Notes, Pages and Reminders are on the list of apps agents may use">
+  <img src="images/window-apps.png" width="420" alt="The Apps tab: Allow every app is off, and Finder, Preview, Reminders, TextEdit and Weather are on the list of apps agents may use">
 </p>
 
 <p align="center">
-  <img src="images/window-setup.png" width="420" alt="The Setup tab: Open at login, Show in menu bar and Windows while locked under Background, Accessibility and Screen Recording allowed, and the macOS grants the listed apps use; this picture does not show the System Audio Recording row or the Full Disk Access rows">
+  <img src="images/window-setup.png" width="420" alt="The Setup tab: Open at login, Show in menu bar and Windows while locked under Background; Accessibility and Screen Recording allowed and System Audio Recording with an Allow button; the grants of the listed apps, with Add in Settings buttons for the Messages history and WhatsApp, which need Full Disk Access">
   <img src="images/window-activity.png" width="420" alt="The Activity tab: which agent first used which app, and changes to the list and the switches, with relative times">
 </p>
 

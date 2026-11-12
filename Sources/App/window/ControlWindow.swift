@@ -72,7 +72,7 @@ private struct TabBar: View {
 }
 
 // The tab bar as the toolbar shows it, following the model for the missing-permission dot.
-private struct ToolbarTabs: View {
+struct ToolbarTabs: View {
   @ObservedObject var model: ControlModel
   @ObservedObject var selection: ControlSelection
 
@@ -83,22 +83,32 @@ private struct ToolbarTabs: View {
   }
 }
 
+// The chosen tab under the waiting section, at its whole height.
+struct ControlContent: View {
+  @ObservedObject var model: ControlModel
+  @ObservedObject var selection: ControlSelection
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      WaitingSection(model: model)
+      switch selection.tab {
+      case .apps: AppsTab(model: model, showSetup: { selection.tab = .setup })
+      case .setup: SetupTab(model: model)
+      case .activity: ActivityTab(model: model)
+      }
+    }
+    .padding(22)
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+}
+
 struct ControlView: View {
   @ObservedObject var model: ControlModel
   @ObservedObject var selection: ControlSelection
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 14) {
-        WaitingSection(model: model)
-        switch selection.tab {
-        case .apps: AppsTab(model: model, showSetup: { selection.tab = .setup })
-        case .setup: SetupTab(model: model)
-        case .activity: ActivityTab(model: model)
-        }
-      }
-      .padding(22)
-      .frame(maxWidth: .infinity, alignment: .leading)
+      ControlContent(model: model, selection: selection)
     }
     .frame(width: controlWindowWidth)
     .frame(maxHeight: .infinity)
