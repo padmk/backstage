@@ -1,0 +1,138 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+  # A dry run: builds and checks everything a tag would, publishes nothing.
+  workflow_dispatch:
+
+# The build job runs the project's code, so it can only read the repository.
+# Only `publish` and `tap` write, and neither runs project code.
+permissions:
+  contents: read
+
+env:
+  PUBLISH: ${{ github.event_name == 'push' }}
+
+jobs:
+  app:
+    # Backstage.app as the formula builds it, and the tests. Nothing built here is published: the formula builds
+    # from the tag's source archive, because the app is signed on the Mac it runs on.
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: swift --version
+      - run: make app
+      - run: swiftc -typecheck Tests/Fixtures/target/main.swift
+      - run: swift test
+      - name: Smoke-test the app as users get it
+        # The signature holds and the command reports its version, as the formula's test checks.
+        run: |
+          codesign --verify --deep --strict build/Backstage.app
+          build/Backstage.app/Contents/Helpers/backstage version
+      - name: The tag matches the release version
+        if: env.PUBLISH == 'true'
+        run: |
+          version=$(build/Backstage.app/Contents/Helpers/backstage version)
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "$GITHUB_REF_NAME does not match Product.version $version" >&2; exit 1; }
+      - name: The formula renders
+        # Every placeholder is filled and the result parses as Ruby; the tap job renders it the same way.
+        run: |
+          version=$(build/Backstage.app/Contents/Helpers/backstage version)
+          sed -e "s/__VERSION__/$version/" -e "s/__SOURCE_SHA256__/$(printf '0%.0s' $(seq 64))/" \
+            -e "s#__REPO__#$GITHUB_REPOSITORY#" packaging/homebrew/backstage.rb.tmpl > "$RUNNER_TEMP/backstage.rb"
+          if grep -n '__[A-Z0-9_]*__' "$RUNNER_TEMP/backstage.rb"; then echo "A placeholder is left in the formula" >&2; exit 1; fi
+          ruby -c "$RUNNER_TEMP/backstage.rb"
+      - name: Release notes from CHANGELOG.md
+        # The section of this version, without its heading; a tag without one stops here.
+        if: env.PUBLISH == 'true'
+        run: |
+          mkdir out
+          awk -v h="## ${GITHUB_REF_NAME#v}" '$0 == h {on = 1; next} on && /^## / {exit} on' CHANGELOG.md > out/notes.md
+          grep -q '[^[:space:]]' out/notes.md || { echo "CHANGELOG.md has no section for ${GITHUB_REF_NAME#v}" >&2; exit 1; }
+          printf '\n## Install\n\nWith Homebrew on macOS 26 or later (Apple Silicon), built from source on your Mac:\n\n```sh\nbrew install %s/tap/backstage\nbackstage setup\n```\n\nAfter `brew upgrade backstage`, run `backstage setup` again. See the README for details.\n' "$GITHUB_REPOSITORY_OWNER" >> out/notes.md
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: env.PUBLISH == 'true'
+        with:
+          name: notes
+          path: out/
+          if-no-files-found: error
+
+  publish:
+    # Creates the GitHub release with the notes; runs none of the project's code.
+    if: github.event_name == 'push'
+    needs: app
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Require a tested commit on main
+        # The tag must point at a commit of main whose `ci` run passed; a run
+        # still in progress is waited for.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .status)
+          case "$status" in identical|behind) ;; *) echo "$GITHUB_REF_NAME ($GITHUB_SHA) is not on main ($status)" >&2; exit 1;; esac
+          for _ in $(seq 60); do
+            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push" --jq '.workflow_runs[0] | "\(.status) \(.conclusion)"')
+            case "$run" in
+              "completed success") echo "ci passed for $GITHUB_SHA"; exit 0;;
+              completed*) echo "ci did not pass for $GITHUB_SHA: $run" >&2; exit 1;;
+              ""|"null null") echo "no ci run for $GITHUB_SHA" >&2; exit 1;;
+            esac
+            sleep 30
+          done
+          echo "ci for $GITHUB_SHA did not finish in 30 minutes" >&2; exit 1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: notes
+          path: release
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" \
+            --notes-file release/notes.md
+
+  tap:
+    # Publishes the formula to <owner>/homebrew-tap. The token lives in the
+    # `release` environment, which only tags `v*` reach.
+    if: github.event_name == 'push'
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    env:
+      HAS_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: packaging/homebrew
+      - name: Update the Homebrew formula
+        # Skipped until the tap token is set up for this repository.
+        if: env.HAS_TAP_TOKEN == 'true'
+        env:
+          # git asks gh for credentials, so the token stays out of URLs and git config.
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # The formula builds from the tag's source archive.
+          curl -fsSL -o "$RUNNER_TEMP/source.tar.gz" "https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$GITHUB_REF_NAME.tar.gz"
+          source_sha=$(sha256sum "$RUNNER_TEMP/source.tar.gz" | cut -d' ' -f1)
+          gh auth setup-git
+          git clone "https://github.com/${GITHUB_REPOSITORY_OWNER}/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          sed -e "s/__VERSION__/$version/" -e "s/__SOURCE_SHA256__/$source_sha/" -e "s#__REPO__#$GITHUB_REPOSITORY#" \
+            packaging/homebrew/backstage.rb.tmpl > tap/Formula/backstage.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/backstage.rb
+          git commit -m "backstage $version"
+          git push
