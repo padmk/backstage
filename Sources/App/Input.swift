@@ -5,19 +5,83 @@ import AppKit
 import Carbon.HIToolbox
 
 private let namedKeys: [String: CGKeyCode] = [
-  "return": 36, "enter": 36, "tab": 48, "space": 49, "delete": 51, "backspace": 51, "escape": 53, "esc": 53,
+  "return": 36, "tab": 48, "space": 49, "delete": 51, "escape": 53,
   "left": 123, "right": 124, "down": 125, "up": 126, "home": 115, "end": 119, "pageup": 116, "pagedown": 121,
   "forwarddelete": 117,
   "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97, "f7": 98, "f8": 100, "f9": 101, "f10": 109,
   "f11": 103, "f12": 111,
 ]
 
-private let modifierFlags: [String: CGEventFlags] = [
-  "cmd": .maskCommand, "command": .maskCommand, "super": .maskCommand,
-  "ctrl": .maskControl, "control": .maskControl,
-  "alt": .maskAlternate, "option": .maskAlternate,
-  "shift": .maskShift,
-]
+// In the order menus show them, which is also the order of a combination's text.
+enum KeyModifier: String, CaseIterable {
+  case ctrl, alt, shift, cmd
+
+  static func named(_ name: String) -> KeyModifier? {
+    switch name.lowercased() {
+    case "cmd", "command", "super": return .cmd
+    case "ctrl", "control": return .ctrl
+    case "alt", "option": return .alt
+    case "shift": return .shift
+    default: return nil
+    }
+  }
+
+  var flag: CGEventFlags {
+    switch self {
+    case .cmd: return .maskCommand
+    case .ctrl: return .maskControl
+    case .alt: return .maskAlternate
+    case .shift: return .maskShift
+    }
+  }
+}
+
+// Other names for the same key, so a combination and a menu's shortcut compare equal however they spell it.
+private let keyAliases = ["enter": "return", "esc": "escape", "backspace": "delete"]
+
+// A key with the modifiers held for it, parsed from text such as cmd+shift+s or cmd++, where a trailing + is the
+// key itself. Key names lose case and underscores, so page_up and pageup are one key.
+struct KeyCombination: Equatable {
+  let modifiers: Set<KeyModifier>
+  let key: String
+
+  init(modifiers: Set<KeyModifier>, key: String) {
+    self.modifiers = modifiers
+    let name = key.count == 1 ? key.lowercased() : key.lowercased().replacingOccurrences(of: "_", with: "")
+    self.key = keyAliases[name] ?? name
+  }
+
+  static func parse(_ text: String) throws -> KeyCombination {
+    let key: String
+    var names: [String]
+    if text.hasSuffix("+") {
+      key = "+"
+      let rest = text.dropLast()
+      names = (rest.hasSuffix("+") ? rest.dropLast() : rest).split(separator: "+", omittingEmptySubsequences: false).map(String.init)
+      if names == [""] { names = [] }
+    } else {
+      let parts = text.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
+      key = parts.last ?? ""
+      names = Array(parts.dropLast())
+    }
+    guard !key.isEmpty else { throw HelperError(code: "invalid_key", message: "No key in \(text).") }
+    var modifiers: Set<KeyModifier> = []
+    for name in names {
+      guard let modifier = KeyModifier.named(name) else {
+        throw HelperError(code: "invalid_key", message: "Unknown modifier \(name).")
+      }
+      modifiers.insert(modifier)
+    }
+    return KeyCombination(modifiers: modifiers, key: key)
+  }
+
+  // Commands and shortcuts of the app's menus answer to it; other keys go to the focused view.
+  var isShortcut: Bool { modifiers.contains(.cmd) || modifiers.contains(.ctrl) }
+
+  var flags: CGEventFlags { modifiers.reduce(into: []) { $0.insert($1.flag) } }
+
+  var text: String { (KeyModifier.allCases.filter(modifiers.contains).map(\.rawValue) + [key]).joined(separator: "+") }
+}
 
 // Maps characters to physical keys on the current layout, so cmd+z means z on QWERTZ too.
 private func characterKeys() -> [String: CGKeyCode] {
@@ -47,25 +111,15 @@ func keyCode(named name: String) -> CGKeyCode? {
   namedKeys[name] ?? onMain { characterKeys() }[name]
 }
 
-func postKey(_ combination: String, pid: pid_t) throws {
-  let parts = combination.lowercased().split(separator: "+", omittingEmptySubsequences: false).map(String.init)
-  let keyName = combination.hasSuffix("+") ? "+" : (parts.last ?? "")
-  let modifiers = combination.hasSuffix("+") ? parts.dropLast(2) : parts.dropLast()
-  guard let code = keyCode(named: keyName) else {
-    throw HelperError(code: "invalid_key", message: "Unknown key \(keyName) in \(combination).")
-  }
-  var flags: CGEventFlags = []
-  for name in modifiers {
-    guard let flag = modifierFlags[name] else {
-      throw HelperError(code: "invalid_key", message: "Unknown modifier \(name).")
-    }
-    flags.insert(flag)
+func postKey(_ combination: KeyCombination, pid: pid_t) throws {
+  guard let code = keyCode(named: combination.key) else {
+    throw HelperError(code: "invalid_key", message: "Unknown key \(combination.key).")
   }
   for down in [true, false] {
     guard let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down) else {
       throw HelperError(code: "action_failed", message: "Could not create a key event.")
     }
-    event.flags = flags
+    event.flags = combination.flags
     event.postToPid(pid)
   }
 }
@@ -104,10 +158,10 @@ struct ClickStyle {
     default: throw HelperError(code: "invalid_request", message: "button must be left, right or middle.")
     }
     for name in names {
-      guard let flag = modifierFlags[name.lowercased()] else {
+      guard let modifier = KeyModifier.named(name) else {
         throw HelperError(code: "invalid_key", message: "Unknown modifier \(name).")
       }
-      style.flags.insert(flag)
+      style.flags.insert(modifier.flag)
     }
     return style
   }

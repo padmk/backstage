@@ -96,8 +96,10 @@ let actionMethods = Set(actionToolNames)
 
 // Runs one action without reporting its effect, which the caller does once for one action or a sequence.
 func performAction(_ method: String, app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
-  if let number = params["element"] as? Int {
-    try requireAllowedMenu(try session.table.element(number, pid: app.pid), app: app)
+  for key in ["element", "from_element", "to_element"] {
+    if let number = params[key] as? Int {
+      try requireAllowedMenu(try session.table.element(number, pid: app.pid), app: app)
+    }
   }
   switch method {
   case "press": return try press(app: app, params: params, session: session)
@@ -105,7 +107,8 @@ func performAction(_ method: String, app: AppIdentity, params: JSON, session: Ap
   case "type_text": return try typeText(app: app, params: params, session: session)
   case "select_text": return try selectText(app: app, params: params, session: session)
   case "press_key":
-    let key = try string(params, "key")
+    let key = try KeyCombination.parse(try string(params, "key"))
+    try requireAllowedKey(key, app: app)
     prepareInput(app: app, window: nil)
     try postKey(key, pid: app.pid)
     return ["delivery": "key_events", "verified": false]
@@ -145,7 +148,7 @@ func press(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> J
     throw HelperError(code: "action_failed", message: "The element has no action and no position.")
   }
   prepareInput(app: app, window: attribute(element, kAXWindowAttribute).map { $0 as! AXUIElement })
-  try postClick(at: CGPoint(x: box.midX, y: box.midY), target: pointerTarget(for: element), pid: app.pid, count: 1)
+  try postAllowedClick(at: CGPoint(x: box.midX, y: box.midY), app: app, target: pointerTarget(for: element), count: 1)
   return ["delivery": "pointer_event", "verified": false]
 }
 
@@ -272,7 +275,7 @@ func typeText(app: AppIdentity, params: JSON, session: ApprovalSession) throws -
   guard let number = params["element"] as? Int else {
     try requireTextForKeys(text)
     prepareInput(app: app, window: nil)
-    try postText(text, pid: app.pid)
+    try postAllowedText(text, app: app)
     return ["delivery": "key_events", "verified": false]
   }
   let element = try session.table.element(number, pid: app.pid)
@@ -346,7 +349,7 @@ func typeText(app: AppIdentity, params: JSON, session: ApprovalSession) throws -
   guard let focused, CFEqual(focused, element) else {
     throw HelperError(code: "action_failed", message: "Could not focus this element, so nothing was typed.")
   }
-  try postText(text, pid: app.pid)
+  try postAllowedText(text, app: app)
   guard let before else { return ["delivery": "key_events", "verified": false] }
   if case .changed = watchValue(of: element, from: before as NSString) { return ["delivery": "key_events", "verified": true] }
   return ["delivery": "key_events", "verified": false]
@@ -466,11 +469,11 @@ func clickAt(app: AppIdentity, params: JSON, session: ApprovalSession) throws ->
   }
   let count = params["count"] as? Int ?? 1
   if params["foreground"] as? Bool == true {
-    try postForegroundClick(at: point, window: window, pid: app.pid, count: count, style: style)
+    try postAllowedForegroundClick(at: point, app: app, window: window, count: count, style: style)
     return ["delivery": "foreground_pointer_event", "verified": false, "window": stringAttribute(window, kAXTitleAttribute) ?? ""]
   }
   prepareInput(app: app, window: window)
-  try postClick(at: point, target: pointerTarget(for: window), pid: app.pid, count: count, style: style)
+  try postAllowedClick(at: point, app: app, target: pointerTarget(for: window), count: count, style: style)
   return ["delivery": "pointer_event", "verified": false, "window": stringAttribute(window, kAXTitleAttribute) ?? ""]
 }
 
@@ -499,6 +502,6 @@ func drag(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JS
     throw HelperError(code: "invalid_request", message: "Both ends must be in the same window.")
   }
   prepareInput(app: app, window: start.window)
-  try postDrag(from: start.point, to: end.point, target: pointerTarget(for: start.window), pid: app.pid)
+  try postAllowedDrag(from: start.point, to: end.point, app: app, target: pointerTarget(for: start.window))
   return ["delivery": "pointer_event", "verified": false]
 }

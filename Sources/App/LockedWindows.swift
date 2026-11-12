@@ -66,7 +66,8 @@ func lockedWindowRequest(_ method: String, app: AppIdentity, params: JSON) throw
                   count: params["count"] as? Int ?? 1, style: style)
     return lockedReply(["delivery": "pointer_event", "window": window.title])
   case "press_key":
-    let key = try string(params, "key")
+    let key = try KeyCombination.parse(try string(params, "key"))
+    try requireAllowedKey(key, app: app)
     try postKey(key, pid: app.pid)
     return lockedReply(["delivery": "key_events"])
   case "type_text":

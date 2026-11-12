@@ -23,12 +23,17 @@ private let namedKeys: [Int: String] = [
 struct MenuCommand {
   let path: [String]
   let element: AXUIElement
-  let shortcut: String?
 
   var joinedPath: String { path.joined(separator: " > ") }
+  var shortcut: String? { shortcutText(of: element) }
 }
 
-private func shortcut(of item: AXUIElement) -> String? {
+struct MenuBarRead {
+  var commands: [MenuCommand] = []
+  var truncated = false
+}
+
+func shortcutText(of item: AXUIElement) -> String? {
   let modifiers = (attribute(item, "AXMenuItemCmdModifiers") as? NSNumber)?.intValue ?? 0
   var key = (attribute(item, "AXMenuItemCmdChar") as? String)?.lowercased() ?? ""
   if key.isEmpty, let code = (attribute(item, "AXMenuItemCmdVirtualKey") as? NSNumber)?.intValue { key = namedKeys[code] ?? "" }
@@ -43,45 +48,48 @@ private func shortcut(of item: AXUIElement) -> String? {
 
 // Every command in the app's menu bar, depth first, without opening a menu: items AppKit fills only while a menu
 // is open (Open Recent, some Window lists) can be missing, and those the app validates on opening can show a
-// stale enabled state. The Apple menu and the Services and Share menus are left out; they are never available.
-func menuCommands(app: AppIdentity, limit: Int = .max) throws -> (commands: [MenuCommand], truncated: Bool) {
+// stale enabled state. The Apple menu and the Services and Share menus are left out, since they are never
+// available. `topMenu` reads only the menu bar's menus with that title, when there is one.
+func menuCommands(app: AppIdentity, topMenu: String? = nil) throws -> MenuBarRead {
   let application = try applicationElement(app)
   guard let bar = attribute(application, kAXMenuBarAttribute).map({ $0 as! AXUIElement }) else {
     throw HelperError(code: "window_not_found", message: "\(app.name) has no menu bar.")
   }
-  var found: [MenuCommand] = []
-  var truncated = false
+  var read = MenuBarRead()
   let started = Date()
-  func walk(_ menuParent: AXUIElement, path: [String], depth: Int) {
+  func walk(_ menuParent: AXUIElement, path: [String], topIndex: Int, submenuTitles: [String], depth: Int) {
     guard depth < maxDepth else {
-      truncated = true
+      read.truncated = true
       return
     }
     for menu in (attribute(menuParent, kAXChildrenAttribute) as? [AXUIElement]) ?? [] {
       for item in (attribute(menu, kAXChildrenAttribute) as? [AXUIElement]) ?? [] {
-        guard found.count < limit, Date().timeIntervalSince(started) < listSeconds else {
-          truncated = true
+        guard Date().timeIntervalSince(started) < listSeconds else {
+          read.truncated = true
           return
         }
         let title = stringAttribute(item, kAXTitleAttribute) ?? ""
         guard !title.isEmpty else { continue }
-        if restrictedMenu(item, in: application) != nil { continue }
         let itemPath = path + [title]
         let children = (attribute(item, kAXChildrenAttribute) as? [AXUIElement]) ?? []
-        if children.isEmpty {
-          found.append(MenuCommand(path: itemPath, element: item, shortcut: shortcut(of: item)))
+        let titles = children.isEmpty ? submenuTitles : submenuTitles + [title]
+        if refusedMenu(topIndex: topIndex, submenuTitles: titles) != nil { continue }
+        if !children.isEmpty {
+          walk(item, path: itemPath, topIndex: topIndex, submenuTitles: titles, depth: depth + 1)
         } else {
-          walk(item, path: itemPath, depth: depth + 1)
+          read.commands.append(MenuCommand(path: itemPath, element: item))
         }
       }
     }
   }
-  let tops = (attribute(bar, kAXChildrenAttribute) as? [AXUIElement]) ?? []
-  for top in tops.dropFirst() {
-    guard !truncated else { break }
-    walk(top, path: [stringAttribute(top, kAXTitleAttribute) ?? ""], depth: 1)
+  let tops = Array(((attribute(bar, kAXChildrenAttribute) as? [AXUIElement]) ?? []).enumerated())
+  let titled = topMenu.map { wanted in tops.filter { normalized(stringAttribute($0.element, kAXTitleAttribute) ?? "") == wanted } } ?? []
+  for (index, top) in titled.isEmpty ? tops : titled {
+    guard !read.truncated else { break }
+    if refusedMenu(topIndex: index, submenuTitles: []) != nil { continue }
+    walk(top, path: [stringAttribute(top, kAXTitleAttribute) ?? ""], topIndex: index, submenuTitles: [], depth: 1)
   }
-  return (found, truncated)
+  return read
 }
 
 private func checked(_ item: AXUIElement) -> Bool? {
@@ -99,20 +107,21 @@ func listMenuCommands(app: AppIdentity, params: JSON, session: ApprovalSession) 
   let max = min(Swift.max(params["max"] as? Int ?? defaultMaxCommands, 1), 2000)
   let query = (params["query"] as? String)?.lowercased()
   let enabledOnly = params["enabled_only"] as? Bool == true
-  let (all, truncated) = try menuCommands(app: app)
+  let read = try menuCommands(app: app)
   var listed: [JSON] = []
-  var more = truncated
-  for command in all {
+  var more = read.truncated
+  for command in read.commands {
     let enabled = boolAttribute(command.element, kAXEnabledAttribute)
     if enabledOnly, !enabled { continue }
-    if let query, !command.joinedPath.lowercased().contains(query), command.shortcut?.contains(query) != true { continue }
+    let shortcut = command.shortcut
+    if let query, !command.joinedPath.lowercased().contains(query), shortcut?.contains(query) != true { continue }
     guard listed.count < max else {
       more = true
       break
     }
     var entry: JSON = ["path": command.joinedPath, "enabled": enabled,
                        "element": session.table.number(for: command.element, pid: app.pid, shownToAgent: true)]
-    if let shortcut = command.shortcut { entry["shortcut"] = shortcut }
+    if let shortcut { entry["shortcut"] = shortcut }
     if let mark = checked(command.element), mark { entry["checked"] = true }
     listed.append(entry)
   }
@@ -138,8 +147,8 @@ private func resolveCommand(_ all: [MenuCommand], params: JSON) throws -> MenuCo
     }
   } else if let key = params["shortcut"] as? String {
     asked = key
-    let wanted = Set(key.lowercased().split(separator: "+").map(String.init))
-    matches = all.filter { command in command.shortcut.map { Set($0.split(separator: "+").map(String.init)) == wanted } ?? false }
+    let wanted = try KeyCombination.parse(key)
+    matches = all.filter { command in command.shortcut.flatMap { try? KeyCombination.parse($0) } == wanted }
   } else {
     throw HelperError(code: "invalid_request", message: "Give command (a path such as File > Export…) or shortcut (such as cmd+shift+s).")
   }
@@ -157,11 +166,14 @@ private func resolveCommand(_ all: [MenuCommand], params: JSON) throws -> MenuCo
 
 // Read again just before pressing, so a command disabled since the list is refused rather than pressed in vain.
 func runMenuCommand(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
-  let (all, truncated) = try menuCommands(app: app)
+  // A path that starts with a menu's title is looked for in that menu alone, which reads less.
+  let path = (params["command"] as? String)?.split(separator: ">").map { normalized(String($0)) }
+  let read = try menuCommands(app: app, topMenu: (path?.count ?? 0) > 1 ? path?.first : nil)
   // A path or shortcut that looks unique in part of the menus may not be; the command runs only from all of them.
-  guard !truncated else {
-    throw HelperError(code: "outcome_unknown", message: "\(app.name)'s menus could not be read in full in time, so the command did not run. Try again, or use press with an element number from list_menu_commands.")
+  guard !read.truncated else {
+    throw HelperError(code: "timeout", message: "\(app.name)'s menus could not be read in full in time, so the command did not run. Give the whole path from its menu, such as File > Export…, so only that menu is read, or use press with an element number from get_window_state with menu_bar.")
   }
+  let all = read.commands
   let command = try resolveCommand(all, params: params)
   try requireAllowedMenu(command.element, app: app)
   guard boolAttribute(command.element, kAXEnabledAttribute) else {
