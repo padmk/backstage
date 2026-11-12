@@ -37,6 +37,8 @@ The server repeats the essentials in its MCP instructions, so a client that load
 
 Arguments in the second column are optional unless marked required.
 
+Each tool tells MCP clients what it may do, so a client can decide what to allow without asking: the tools that only read (`list_apps`, `list_operations`, `get_window_state`, `read_text`, `screenshot`, `list_windows`, `list_menu_commands`, `wait_for`) are marked read-only; those that send input or run what an app offers (`press`, `set_value`, `type_text`, `press_key`, `drag`, `click_at`, `run_actions`, `run_operation`, `run_menu_command`, `close`) are marked destructive, since they can replace or delete what an app holds; `launch_app`, `select_text`, `scroll`, `set_window`, `set_app_state` and `record_audio` change only what is shown or started.
+
 ### Apps and ready operations
 
 | Tool | Arguments | What it does |
