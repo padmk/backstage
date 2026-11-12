@@ -19,6 +19,9 @@ enum HelperMain {
     if Bundle.main.bundleIdentifier == nil, let index = arguments.firstIndex(of: "--home"), arguments.indices.contains(index + 1) {
       Configuration.directories = Directories(testHome: arguments[index + 1])
     }
+    if let index = arguments.firstIndex(of: Product.renderWindowArgument), arguments.indices.contains(index + 1) {
+      exit(renderControlWindow(into: arguments[index + 1]) ? 0 : 1)
+    }
     for directory in [Configuration.configHome, Configuration.stateHome] {
       try? ensurePrivateDirectory(directory)
     }

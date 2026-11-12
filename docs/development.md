@@ -18,6 +18,8 @@ make clean     # remove build/ and .build/
 
 Clients run the command inside the installed app, so changes in the checkout reach them only after `make install`. Running sessions then move to the new command on their next request ([Builds and updates](architecture.md#builds-and-updates)).
 
+The window's pictures in `docs/images` are drawn offscreen at 2x, each tab at its whole height, with `--render-window <folder>`, which writes `window-apps.png`, `window-setup.png` and `window-activity.png` there. Run it from a bare build with a sample home, so the pictures show a sample list and activity rather than yours: put an `approvals.json` and a `decisions.jsonl` in a temporary folder, then run `swift build` and `"$(swift build --show-bin-path)/Backstage" --home <that folder> --render-window <output folder>`. The grants shown are those of the process that runs it. It shows no window and changes nothing, so it also runs while the installed helper serves agents.
+
 `backstage version` prints `Product.version` from `Sources/HelperLink/Product.swift`, which `make app` also writes into the bundle's `Info.plist`; the Homebrew formula's test checks it.
 
 `SWIFT_BUILD_FLAGS` passes extra flags to every `swift build` the Makefile runs; the formula passes `--disable-sandbox`, because SwiftPM's own sandbox cannot start inside Homebrew's build sandbox.
@@ -84,7 +86,7 @@ The tag starts `.github/workflows/release.yml`. It builds the app and runs the t
 | `Sources/App/WaitFor.swift` | `wait_for` |
 | `Sources/App/AudioRecording.swift` | `record_audio`: a muted Core Audio tap of an app and its helper processes |
 | `Sources/App/MenuBar.swift`, `LaunchAtLogin.swift`, `Preferences.swift` | The menu bar item, starting at login, and the settings in `settings.json` |
-| `Sources/App/window/`, `Theme.swift` | The Backstage window: one file per tab, the waiting section, the drag panel for Full Disk Access, its model, texts and look |
+| `Sources/App/window/`, `Theme.swift` | The Backstage window: one file per tab, the waiting section, the drag panel for Full Disk Access, its model, texts and look, and drawing the tabs into the pictures of the documentation (`WindowRendering.swift`) |
 | `Sources/App/apps/Catalog.swift` | The catalog of app knowledge, `list_operations` and `run_operation` |
 | `Sources/App/apps/AppAccess.swift` | The macOS grants ready operations need, as the Setup tab shows them |
 | `Sources/App/apps/Scripting.swift`, `EventStore.swift`, `ReadOnlyDatabase.swift`, `Typedstream.swift`, `UserPaths.swift` | The routes operations share: the `osascript` runner, EventKit, read-only SQLite, the reader for Messages' archived text, and the rule for which files operations may touch |
