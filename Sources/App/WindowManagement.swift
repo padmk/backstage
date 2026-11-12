@@ -196,7 +196,7 @@ private func nearlyEqual(_ a: CGRect, _ b: CGRect) -> Bool {
 }
 
 // Where a layout puts a window on a display's visible area.
-private func layoutFrame(_ name: String, current: CGRect, on area: CGRect) throws -> CGRect {
+func layoutFrame(_ name: String, current: CGRect, on area: CGRect) throws -> CGRect {
   let x = area.minX, y = area.minY, w = area.width, h = area.height
   switch name {
   case "maximize": return area
@@ -353,6 +353,28 @@ func setAppState(app: AppIdentity, params: JSON) throws -> JSON {
 
 // MARK: Closing
 
+// What is known of a window after its close button was pressed.
+struct WindowAfterClose {
+  var wasOnScreen: Bool
+  var inWindowServer: Bool
+  var onScreen: Bool
+  // Whether the app still lists it among its windows; nil when the app's list cannot be read.
+  var inAccessibility: Bool?
+  var minimized: Bool
+  var appHidden: Bool
+}
+
+// Many apps keep a closed window in the window server, hidden, so leaving the window server is not the only sign.
+// A window the app no longer lists has closed: the app lists its minimized windows and those of the current Space,
+// where the window was when it was pressed. A window that was drawn and no longer is has closed too, unless it was
+// minimized meanwhile. An app hidden meanwhile stops drawing its windows, so then only the window server counts.
+func windowHasClosed(_ window: WindowAfterClose) -> Bool {
+  if !window.inWindowServer { return true }
+  if window.appHidden { return false }
+  if window.inAccessibility == false { return true }
+  return window.wasOnScreen && !window.onScreen && !window.minimized
+}
+
 // A window closes through its close button; an app quits as if the user chose Quit. Either may stop to ask about
 // unsaved work, which the agent then reads; nothing is ever forced.
 func closeWindowOrApp(app: AppIdentity, params: JSON) throws -> JSON {
@@ -375,9 +397,21 @@ func closeWindowOrApp(app: AppIdentity, params: JSON) throws -> JSON {
     throw HelperError(code: "not_settable", message: "This window has no close button.")
   }
   let reference = reference(window)
+  let wasOnScreen = number.map { id in serverWindows().contains { $0.id == id && $0.onScreen } } ?? false
+  let application = try applicationElement(app)
   let outcome = AXUIElementPerformAction(button, kAXPressAction as CFString)
   guard outcome == .success else { throw axFailure(outcome, "pressing the close button") }
-  let gone = waitFor({ number.map { id in !serverWindows().contains { $0.id == id } } ?? false }, seconds: closeSeconds)
+  let gone = waitFor({
+    guard let id = number else { return false }
+    let server = serverWindows().first { $0.id == id }
+    // While the screen is locked, or when the app does not answer, its window list says nothing.
+    let listed = isScreenLocked() ? nil : (attribute(application, kAXWindowsAttribute) as? [AXUIElement])
+    let running = onMain { NSRunningApplication(processIdentifier: app.pid) }
+    return windowHasClosed(WindowAfterClose(
+      wasOnScreen: wasOnScreen, inWindowServer: server != nil, onScreen: server?.onScreen == true,
+      inAccessibility: listed.map { $0.contains { CFEqual($0, window) } },
+      minimized: boolAttribute(window, kAXMinimizedAttribute), appHidden: running?.isHidden == true))
+  }, seconds: closeSeconds)
   if gone { return ["delivery": "accessibility", "closed": reference, "verified": true] }
   if isModal(window) {
     throw HelperError(code: "outcome_unknown", message: "The window asks about unsaved work instead of closing. Read it with get_window_state and answer, or tell the user.")
