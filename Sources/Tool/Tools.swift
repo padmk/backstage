@@ -15,9 +15,11 @@ private func described(_ rule: JSON, _ description: String) -> JSON {
   return copy
 }
 
-// Tools that only read say so, so a client can allow or batch them; the others act on apps.
+// Tools that only read say so, so a client can allow or batch them. Of the tools that act on apps, those that
+// only arrange, show or start them are not destructive; input can replace or delete what an app holds, so it is.
 private let reads: JSON = ["readOnlyHint": true, "destructiveHint": false, "openWorldHint": false]
 private let acts: JSON = ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false]
+private let changes: JSON = ["readOnlyHint": false, "destructiveHint": true, "openWorldHint": false]
 
 struct ToolDefinition {
   let name: String
@@ -69,7 +71,7 @@ let tools: [ToolDefinition] = [
       ("operation", ["type": "string", "description": "Operation name from list_operations, such as create"]),
       ("arguments", ["type": "object", "description": "The operation's arguments, as list_operations describes them"]),
     ],
-    required: ["app", "operation"], annotations: ["readOnlyHint": false, "destructiveHint": true, "openWorldHint": false]),
+    required: ["app", "operation"], annotations: changes),
   ToolDefinition(
     name: "get_window_state",
     description: "Read a window as lines of numbered elements with their state and actions. The first line lists the app's windows. Numbers stay valid across reads in this session; a new session numbers elements anew, so read again before using a number from another one. Reading the same place again returns only what changed since your last read or action there; pass full: true for all of it.",
@@ -99,17 +101,17 @@ let tools: [ToolDefinition] = [
     name: "press",
     description: "Press an element without taking focus, or run one of the actions it lists. A list row without actions, or the text in one, is selected. The reply's `state` reports what changed in the area last read once the app settles (`settled: false` if it was still busy), or `unknown` when it cannot tell; `verified: false` means delivery could not be confirmed.",
     properties: [("app", app), ("element", element), ("action", ["type": "string", "description": "An action the element lists, such as ShowMenu. Default: press"])],
-    required: ["app", "element"], annotations: acts),
+    required: ["app", "element"], annotations: changes),
   ToolDefinition(
     name: "set_value",
     description: "Replace the value of an editable element.",
     properties: [("app", app), ("element", element), ("value", ["type": "string"])],
-    required: ["app", "element", "value"], annotations: acts),
+    required: ["app", "element", "value"], annotations: changes),
   ToolDefinition(
     name: "type_text",
     description: "Insert text at an element, or without one send it as keys to the app's focused element. Delivery `value_appended_at_end` means an unfocused one-line field took it at its end, ignoring the cursor. Line breaks and tabs need an element that takes text directly; otherwise send them with press_key. Nothing is typed if the element cannot take it.",
     properties: [("app", app), ("text", ["type": "string", "maxLength": 100000]), ("element", element)],
-    required: ["app", "text"], annotations: acts),
+    required: ["app", "text"], annotations: changes),
   ToolDefinition(
     name: "select_text",
     description: "Select text in a field or document by what it says, or put the cursor just before or after it, so type_text then replaces the selection or inserts there instead of rewriting the whole value. Give text exactly as the element's value has it; when it occurs more than once, add prefix or suffix text around it until it occurs once.",
@@ -126,7 +128,7 @@ let tools: [ToolDefinition] = [
     name: "press_key",
     description: "Send a key or combination, such as return or cmd+s, to the app in the background. A native view receives it once it has focus, so click the view with click_at first. Other apps and combinations may behave differently, so check the effect, and prefer pressing the menu item.",
     properties: [("app", app), ("key", ["type": "string", "maxLength": 64])],
-    required: ["app", "key"], annotations: acts),
+    required: ["app", "key"], annotations: changes),
   ToolDefinition(
     name: "scroll",
     description: "Scroll the area containing an element.",
@@ -146,7 +148,7 @@ let tools: [ToolDefinition] = [
       ("to_element", described(element, "Element to drag to, at its center")),
       ("to_x", ["type": "number", "minimum": 0]), ("to_y", ["type": "number", "minimum": 0]),
     ],
-    required: ["app"], annotations: acts),
+    required: ["app"], annotations: changes),
   ToolDefinition(
     name: "click_at",
     description: "Send a click at a point in window coordinates, or at an element's center, in the background and without moving the cursor. Use it when press cannot do the job, such as a right-click, a cmd-click or a view without elements, and check the effect, for example with a screenshot.",
@@ -160,7 +162,7 @@ let tools: [ToolDefinition] = [
       ("modifiers", ["type": "array", "maxItems": 4, "items": ["type": "string", "enum": ["cmd", "shift", "alt", "ctrl"]] as JSON, "description": "Keys held during the click"]),
       ("foreground", ["type": "boolean", "description": "Last resort when a background click did not land: the window comes forward for the click, then the previous app gets the focus back and the cursor returns. Tell the user you used it."]),
     ],
-    required: ["app"], annotations: acts),
+    required: ["app"], annotations: changes),
   ToolDefinition(
     name: "list_windows",
     description: "List windows across apps and displays: each window's id, app, frame (global points, origin at the top left of the main display), display, whether it is on screen, and for apps on the user's list its title, window number, minimized, fullscreen, modal, movable and resizable. Displays come with their frame and visible area (without the menu bar and the Dock). Windows of apps not on the list show no title. space is current, other or unknown: Accessibility reaches only windows on the current Space.",
@@ -195,7 +197,7 @@ let tools: [ToolDefinition] = [
       ("window", window),
       ("quit", ["type": "boolean", "description": "Quit the app instead of closing one window"]),
     ],
-    required: ["app"], annotations: ["readOnlyHint": false, "destructiveHint": true, "openWorldHint": false]),
+    required: ["app"], annotations: changes),
   ToolDefinition(
     name: "list_menu_commands",
     description: "List what an app can do from its menu bar: each command's path (such as File > Export…), keyboard shortcut, enabled state and element number, without opening a menu. Use it to find a command instead of exploring the window; query narrows it. Commands that act on the current document are disabled while the app is in the background. The Apple, Services and Share menus are never available.",
@@ -214,7 +216,7 @@ let tools: [ToolDefinition] = [
       ("command", ["type": "string", "maxLength": 500, "description": "Menu path, separated by >"]),
       ("shortcut", ["type": "string", "maxLength": 64, "description": "Such as cmd+shift+s"]),
     ],
-    required: ["app"], annotations: ["readOnlyHint": false, "destructiveHint": true, "openWorldHint": false]),
+    required: ["app"], annotations: changes),
   ToolDefinition(
     name: "wait_for",
     description: "Wait until text shows in a window (a dialog, a result, a label), or with gone: true until it stops showing, for up to timeout seconds (default 10, at most 30). It reads the same place get_window_state reads (window, menu_bar, root). The reply says whether it was found and the matching line, preferring one whose title or value is exactly the text.",
@@ -246,7 +248,7 @@ let tools: [ToolDefinition] = [
       ("app", app),
       ("steps", ["type": "array", "minItems": 1, "maxItems": maxSteps, "items": ["type": "object", "properties": ["tool": ["type": "string", "enum": stepTools]] as JSON, "required": ["tool"]] as JSON]),
     ],
-    required: ["app", "steps"], annotations: acts),
+    required: ["app", "steps"], annotations: changes),
 ]
 
 let toolsByName = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0) })
