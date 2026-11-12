@@ -18,5 +18,6 @@ let package = Package(
     .executableTarget(name: "App", dependencies: ["HelperLink"], swiftSettings: [.swiftLanguageMode(.v5)]),
     .executableTarget(name: "Tool", dependencies: ["HelperLink"], swiftSettings: [.swiftLanguageMode(.v5)]),
     .testTarget(name: "ToolTests", dependencies: ["Tool", "HelperLink"], exclude: [], swiftSettings: [.swiftLanguageMode(.v5)]),
+    .testTarget(name: "AppTests", dependencies: ["App", "HelperLink"], swiftSettings: [.swiftLanguageMode(.v5)]),
   ]
 )

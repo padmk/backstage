@@ -22,6 +22,13 @@ private func digest(_ text: String) -> String {
   return String(hash, radix: 16)
 }
 
+// A label or value as a line shows it. A cut one says how long it is, so the agent reads the rest with read_text,
+// and carries a digest of all of it, so a change past the visible part still changes the line.
+func quoted(_ text: String, lengthKey: String) -> String {
+  let shown = "\"\(clamped(text))\""
+  return isClamped(text) ? shown + " \(lengthKey)=\(text.utf16.count) digest=\(digest(text))" : shown
+}
+
 private func shortName(_ name: String) -> String {
   name.hasPrefix("AX") ? String(name.dropFirst(2)) : name
 }
@@ -32,19 +39,16 @@ private func line(for element: AXUIElement, attributes: ElementAttributes, role:
   var text = String(repeating: "  ", count: depth) + "\(number) \(shortName(role))"
   if let subrole, subrole != "AXUnknown", !isSecure { text += "(\(shortName(subrole)))" }
   if let label = attributes.string(kAXTitleAttribute) ?? attributes.string(kAXDescriptionAttribute) {
-    text += " \"\(clamped(label))\""
-    // A cut label says how long it is, as a cut value does, so the agent reads the rest with read_text.
-    if isClamped(label) { text += " label_length=\(label.utf16.count)" }
+    text += " " + quoted(label, lengthKey: "label_length")
   }
   if isSecure {
     text += " secure"
   } else {
     let raw = attributes.value(kAXValueAttribute)
-    if let value = describeValue(raw) {
+    if let full = raw as? String, !full.isEmpty {
+      text += " value=" + quoted(full, lengthKey: "length")
+    } else if let value = describeValue(raw) {
       text += " value=\"\(value)\""
-      // A cut value says how long it is, so the agent knows to read the rest with read_text, and carries a digest
-      // of all of it, so a change past the visible part still changes the line.
-      if let full = raw as? String, isClamped(full) { text += " length=\(full.utf16.count) digest=\(digest(full))" }
     }
   }
   if let placeholder = attributes.string(kAXPlaceholderValueAttribute) { text += " placeholder=\"\(clamped(placeholder))\"" }
@@ -203,17 +207,53 @@ struct LastRead {
   }
 }
 
+// The lines without their element numbers, in order.
+func content(of lines: [String]) -> [String] {
+  lines.map { line in
+    guard let parsed = parse(line) else { return line }
+    return String(repeating: "  ", count: parsed.depth) + parsed.content
+  }
+}
+
+// The element number a line starts with.
+func number(ofLine line: String) -> Int? { parse(line)?.number }
+
+// What changed between two reads, by what the lines say. Apps such as System Settings hand out new elements for
+// unchanged ones, which gives them new numbers; such a line is no change, and comes back under `renumbered` with the
+// number to use now.
 func changeReport(before: [String], after: [String]) -> JSON {
   let beforeSet = Set(before)
   let afterSet = Set(after)
-  let added = after.filter { !beforeSet.contains($0) }
-  let removed = before.filter { !afterSet.contains($0) }
+  let beforeContent = content(of: before)
+  let afterContent = content(of: after)
+  // What the lines that did not stay exactly the same say, counted on each side.
+  var beforeLeft: [String: Int] = [:]
+  var afterLeft: [String: Int] = [:]
+  for (line, text) in zip(before, beforeContent) where !afterSet.contains(line) { beforeLeft[text, default: 0] += 1 }
+  for (line, text) in zip(after, afterContent) where !beforeSet.contains(line) { afterLeft[text, default: 0] += 1 }
+  var added: [String] = []
+  var renumbered: [String] = []
+  for (line, text) in zip(after, afterContent) where !beforeSet.contains(line) {
+    if let left = beforeLeft[text], left > 0 {
+      beforeLeft[text] = left - 1
+      renumbered.append(line)
+    } else {
+      added.append(line)
+    }
+  }
+  var removed: [String] = []
+  for (line, text) in zip(before, beforeContent) where !afterSet.contains(line) {
+    if let left = afterLeft[text], left > 0 {
+      afterLeft[text] = left - 1
+    } else {
+      removed.append(line)
+    }
+  }
   let limit = 40
-  var report: JSON = [
-    "changed": !(added.isEmpty && removed.isEmpty),
-    "added": added.prefix(limit).map { $0.trimmingCharacters(in: .whitespaces) },
-    "removed": removed.prefix(limit).map { $0.trimmingCharacters(in: .whitespaces) },
-  ]
+  let trimmed = { (lines: [String]) in lines.prefix(limit).map { $0.trimmingCharacters(in: .whitespaces) } }
+  var report: JSON = ["changed": !(added.isEmpty && removed.isEmpty), "added": trimmed(added), "removed": trimmed(removed)]
   if added.count > limit || removed.count > limit { report["more_changes"] = true }
+  if !renumbered.isEmpty { report["renumbered"] = trimmed(renumbered) }
+  if renumbered.count > limit { report["more_renumbered"] = true }
   return report
 }

@@ -250,6 +250,20 @@ final class ElementTable {
     }
   }
 
+  // Forgets the numbers from `first` on that this app's elements got and `kept` does not hold. Only for numbers no
+  // agent was shown: a forgotten number is never given out again, and its element gets a new one when met again.
+  func forget(numbersFrom first: Int, pid: pid_t, keeping kept: Set<Int>) {
+    lock.withLock {
+      let gone = entries.filter { $0.key >= first && $0.value.pid == pid && !kept.contains($0.key) }
+      for (number, entry) in gone {
+        entries[number] = nil
+        let hash = CFHash(entry.element)
+        numbersByHash[hash]?.removeAll { $0.number == number }
+        if numbersByHash[hash]?.isEmpty == true { numbersByHash[hash] = nil }
+      }
+    }
+  }
+
   // Elements a change report showed the agent, as that report's read saw them, so acting on them right after is not
   // refused as stale, while an element that changed again since then still is.
   func acknowledge(_ seen: [Int: [String?]]) {

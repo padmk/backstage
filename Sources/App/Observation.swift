@@ -164,7 +164,8 @@ private func treeState(app: AppIdentity, params: JSON, session: ApprovalSession)
   return ["tree": text] as JSON
 }
 
-// A busy indicator that was not there before the action means the app is still working on it.
+// A busy indicator that was not there before the action means the app is still working on it. Both sides are the
+// lines without their numbers, so one that only got a new number is not new.
 private func showsNewBusyIndicator(_ lines: [String], comparedTo before: Set<String>) -> Bool {
   lines.contains { line in
     guard !before.contains(line) else { return false }
@@ -192,16 +193,6 @@ func acting(app: AppIdentity, session: ApprovalSession, _ action: () throws -> J
 }
 
 // `watch` was made before the action, so it holds what the app reported while the action ran.
-// The lines without their element numbers, in order.
-private func content(of lines: [String]) -> [String] {
-  lines.map { line in
-    let indent = line.prefix { $0 == " " }
-    let rest = line.dropFirst(indent.count)
-    guard let space = rest.firstIndex(of: " "), rest[..<space].allSatisfy(\.isNumber) else { return line }
-    return String(indent + rest[rest.index(after: space)...])
-  }
-}
-
 func observeChange(app: AppIdentity, session: ApprovalSession, watch: ChangeWatch?) -> JSON {
   guard let last = session.lock.withLock({ session.lastReads[app.pid] }) else {
     return ["unknown": true, "reason": "Nothing was read before this action, so changes cannot be reported."] as JSON
@@ -210,7 +201,12 @@ func observeChange(app: AppIdentity, session: ApprovalSession, watch: ChangeWatc
     return ["unknown": true, "reason": "The last read was partial, so changes cannot be reported. Read a smaller area with root."] as JSON
   }
   let started = Date()
-  let before = Set(last.lines)
+  // The reads below number new elements the agent never sees. Those numbers the reported read does not hold are
+  // given up at the end, so they do not push out numbers the agent holds.
+  let mintedFrom = session.table.nextFreeNumber
+  var shownNumbers = Set<Int>()
+  defer { session.table.forget(numbersFrom: mintedFrom, pid: app.pid, keeping: shownNumbers) }
+  let before = Set(content(of: last.lines))
   var after = last.lines
   var afterContent = content(of: last.lines)
   var completeReads = 0
@@ -273,21 +269,22 @@ func observeChange(app: AppIdentity, session: ApprovalSession, watch: ChangeWatc
       continue
     }
     let quiet = followsNotices ? confirmSeconds : quietSeconds
-    if now.timeIntervalSince(changedAt) >= quiet, !showsNewBusyIndicator(after, comparedTo: before) { break }
+    if now.timeIntervalSince(changedAt) >= quiet, !showsNewBusyIndicator(afterContent, comparedTo: before) { break }
     if waited >= settleLimitSeconds {
       settled = false
       break
     }
   }
+  shownNumbers = Set(after.compactMap(number(ofLine:)))
   var report = changeReport(before: last.lines, after: after)
   // Only the lines the report shows count as seen.
-  let shown = (report["added"] as? [String] ?? []).compactMap { Int($0.split(separator: " ").first ?? "") }
+  let shown = Set(((report["added"] as? [String] ?? []) + (report["renumbered"] as? [String] ?? [])).compactMap(number(ofLine:)))
   session.table.acknowledge(afterFingerprints.filter { shown.contains($0.key) })
   if !settled {
     report["settled"] = false
     report["note"] = "The app was still changing or showed a busy indicator after \(Int(settleLimitSeconds)) s. Read the state again before relying on it."
   }
   remember(LastRead(request: last.request, root: last.root, lines: after, isPartial: false,
-                    reportedInPart: last.reportedInPart || report["more_changes"] != nil), pid: app.pid, session: session)
+                    reportedInPart: last.reportedInPart || report["more_changes"] != nil || report["more_renumbered"] != nil), pid: app.pid, session: session)
   return report
 }
