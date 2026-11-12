@@ -127,7 +127,7 @@ This keeps agents from using other apps through Backstage by mistake. It does no
 
 - List entries name the app's bundle id and signer, so another app claiming the same bundle id is not covered.
 - Apps that give agents a shell or control of the system (terminals, Shortcuts, Finder, System Settings, Xcode and similar) carry a warning.
-- Passwords, Keychain Access, the system's login, authentication and permission prompts, Backstage itself, and password managers, authenticators and wallets from other makers (1Password, Bitwarden, KeePassXC, MacPass, Proton Pass, Enpass, Yubico Authenticator, Ledger Live, Sparrow, Electrum) are never available, whatever the settings. Neither are the Apple menu and the Services and Share menus of any app.
+- Passwords, Keychain Access, the system's login, authentication and permission prompts, Backstage itself, and password managers, authenticators and wallets from other makers (such as 1Password, Bitwarden, LastPass, KeePassXC, Proton Pass, Yubico Authenticator, Ledger Live and Trezor Suite; the full list is in `Sources/App/Approvals.swift`) are never available, whatever the settings. Neither are the Apple menu, the Services and Share menus and a toolbar's Share button in any app, with the few gaps [SECURITY.md](SECURITY.md#design) lists.
 
 `backstage approvals add <app>` only asks; the app goes on the list when you click Add in the window. [SECURITY.md](SECURITY.md) has the full model and what it does not protect against.
 

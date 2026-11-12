@@ -19,4 +19,4 @@ Result on 2026-11-06, macOS 27.2, Apple M4 Pro, 30 rounds, two runs:
 
 Starting the MCP command, answering `initialize` and ending takes about 20 ms, with a peak of 8.6 MB of memory.
 
-`press` includes waiting until the window has stayed the same for 0.3 s after the change shows. Real apps have far larger trees, so their reads take longer. The first read excludes building the app.
+`press` includes waiting until the window has stayed the same for 0.3 s after the change shows. Before each `press` round the benchmark reads the window in full, outside the measure, so it presses the button as that read shows it. Real apps have far larger trees, so their reads take longer. The first read excludes building the app.

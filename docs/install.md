@@ -25,7 +25,7 @@ cd backstage
 make install
 ```
 
-Homebrew builds the app from source and puts the `backstage` command on your `PATH`; `make install` builds `build/Backstage.app` with Swift Package Manager and runs its setup. Either way, `setup`:
+Homebrew builds the app from the release's source with `make app`, keeps it in its own prefix and puts the `backstage` command on your `PATH`. It never writes outside its prefix or asks for a permission, so its notes after `brew install` and every `brew upgrade backstage` ask you to run `backstage setup`; after an upgrade, agents keep the previous version until you do. `make install` builds `build/Backstage.app` with Swift Package Manager and runs its setup. Either way, `setup`:
 
 1. Installs the app into `/Applications` (or `~/Applications`), signed with a certificate of this Mac (see [Signing and updates](#signing-and-updates)). An app already installed in either place is updated where it is.
 2. Opens System Settings and waits up to 3 minutes for you to enable Backstage under **Accessibility**, the one permission it needs. If it is not listed, drag it there from the Finder window setup opens.
@@ -112,5 +112,6 @@ Copies an agent asked for and recordings live in private folders in the system's
 | `not_approved` | The app is not on the list. Add it on the Apps tab, or turn on Allow every app |
 | `stale_element` or `unknown_element` | Read the window again |
 | `screen_locked` | Unlock the Mac, or let the agent use ready operations and the menu bar; see [Working while the screen is locked](locked-screen.md) |
+| `Backstage is not installed. Run: backstage setup` | The command had to start the app, but none is installed in Applications, as with Homebrew's copy before the first `backstage setup` or after `backstage uninstall`: run `backstage setup` |
 | `This backstage command belongs to another build` | The session runs a command from another build that could not hand its session to the installed one (a build that declares another handoff revision): restart the session |
 | The tools do not show in a client after the first setup | Start a new session: clients load MCP servers when a session starts |

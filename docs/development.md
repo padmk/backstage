@@ -14,18 +14,22 @@ make bench     # BENCH=1: latency against the installed app
 make clean     # remove build/ and .build/
 ```
 
-`swift test` runs the protocol tests against a fake helper and the app tests against a bare build of the app in a temporary home; it needs Xcode, but no macOS permission. The live test and the benchmark need the app installed with Accessibility (`make install`) and the fixture app on the app list. The fixture is `Tests/Fixtures/target`, a small app named "Test Fixture" (bundle id `app.foreverbeta.backstage.fixture`) that logs what happened to it as JSON lines, so the live test checks the effect instead of the reply. It is signed with this Mac's Backstage certificate, so the list keeps it across builds; the first live run asks you to add it in the Backstage window. Benchmark results are in [bench/README.md](../bench/README.md).
+`swift test` runs two test targets: `Tests/ToolTests`, the protocol tests against a fake helper and the app tests against a bare build of the app in a temporary home, and `Tests/AppTests`, which tests the app's pure functions through `@testable import App`. It needs Xcode, but no macOS permission. The live test and the benchmark need the app installed with Accessibility (`make install`) and the fixture app on the app list. The fixture is `Tests/Fixtures/target`, a small app named "Test Fixture" (bundle id `app.foreverbeta.backstage.fixture`) that logs what happened to it as JSON lines, so the live test checks the effect instead of the reply. It is signed with this Mac's Backstage certificate, so the list keeps it across builds; the first live run asks you to add it in the Backstage window. Benchmark results are in [bench/README.md](../bench/README.md).
 
 Clients run the command inside the installed app, so changes in the checkout reach them only after `make install`. Running sessions then move to the new command on their next request ([Builds and updates](architecture.md#builds-and-updates)).
 
 `backstage version` prints `Product.version` from `Sources/HelperLink/Product.swift`, which `make app` also writes into the bundle's `Info.plist`; the Homebrew formula's test checks it.
 
+`SWIFT_BUILD_FLAGS` passes extra flags to every `swift build` the Makefile runs; the formula passes `--disable-sandbox`, because SwiftPM's own sandbox cannot start inside Homebrew's build sandbox.
+
 ## Environment variables
 
 | Variable | Read by | Effect |
 |---|---|---|
-| `HELPER_TEST_HOME` | `backstage mcp`, `backstage approvals` | Use this folder for the socket, the app list, the settings and the log instead of the XDG directories. Tests only; a bare app build is started with `--home` to match |
+| `HELPER_TEST_HOME` | `backstage mcp`, `backstage approvals`, `backstage uninstall` | Use this folder for the socket, the app list, the settings and the log instead of the XDG directories; `uninstall` then removes nothing. Tests only; a bare app build is started with `--home` to match |
 | `HELPER_NO_START` | `backstage mcp`, `backstage approvals` | Never start the helper; fail when nothing listens on the socket. Tests only |
+| `HELPER_TEST_INSTALLED_APP` | the command, only with `HELPER_TEST_HOME` | The bundle the command treats as the installed app, for tests of builds and handoffs |
+| `HELPER_TEST_TIMEOUT` | the command, only with `HELPER_TEST_HOME` | Seconds the command waits for a reply from the helper instead of 200 |
 | `LIVE` | the live test | `LIVE=1` runs `LiveTests` (what `make live` sets) |
 | `LIVE_COMMAND` | the live test | The command the live test runs; default the test build's `backstage-tool` |
 | `BENCH` | the benchmark | `BENCH=1` runs `BenchTests` (what `make bench` sets) |
@@ -35,14 +39,25 @@ Only a bare build outside a bundle honors `--home`; any copy of the app bundle u
 
 ## CI
 
-CI runs on macOS on every push to `main` and every pull request: it prints the Swift version, builds and assembles the app (`make app`), type-checks the fixture app and runs `swift test`. The live test needs real permissions, so it runs only locally.
+CI (`.github/workflows/ci.yml`) runs on `macos-26` on every push to `main` and every pull request, and cancels a run that a newer push to the same branch supersedes: it prints the Swift version, builds and assembles the app (`make app`), type-checks the fixture app and runs `swift test`. The live test needs real permissions, so it runs only locally. Dependabot proposes updates of the pinned GitHub Actions once a month.
+
+## Releasing
+
+1. Set `Product.version` in `Sources/HelperLink/Product.swift`.
+2. Head the release's section of `CHANGELOG.md` with `## <version>`, exactly; its text becomes the release notes.
+3. Push `main` and wait until CI passes for that commit.
+4. Push the tag `v<version>` on that commit.
+
+The tag starts `.github/workflows/release.yml`. It builds the app and runs the tests on `macos-26`, checks the signature and that `backstage version` matches the tag, renders the formula, and takes the CHANGELOG section as notes; a tag without a matching version or section stops there. It then requires the tag to point at a commit of `main` whose CI run passed, waiting up to 30 minutes for one still running, and creates the GitHub release. Last, it renders `packaging/homebrew/backstage.rb.tmpl` with the version and the checksum of the tag's source archive into the tap (`<owner>/homebrew-tap`) as `Formula/backstage.rb`; this step is skipped while the `release` environment has no `HOMEBREW_TAP_TOKEN`. Running the workflow by hand is a dry run that builds and checks without publishing.
 
 ## Code map
 
 | Path | Responsibility |
 |---|---|
 | `Package.swift`, `Makefile`, `packaging/Info.plist` | The Swift package, and assembling and installing the app bundle |
-| `packaging/homebrew/backstage.rb` | The formula for the tap, filled in at each release |
+| `packaging/homebrew/backstage.rb.tmpl` | The template of the formula, rendered into the tap at each release |
+| `.github/workflows/ci.yml`, `release.yml` | CI, and the release from a `v<version>` tag ([Releasing](#releasing)) |
+| `.github/ISSUE_TEMPLATE/`, `.github/dependabot.yml` | The bug report form and the pointer to private vulnerability reports; updates of the pinned actions |
 | `assets/` | The app icon |
 | `Sources/HelperLink/Product.swift` | The product's name, version, bundle id, install locations, handoff revision and directories; the steps `run_actions` takes |
 | `Sources/HelperLink/BuildIdentity.swift`, `Framing.swift` | The build identity (the linker's UUID); line-delimited JSON for the socket and stdio |
@@ -73,5 +88,6 @@ CI runs on macOS on every push to `main` and every pull request: it prints the S
 | `Sources/App/apps/AppAccess.swift` | The macOS grants ready operations need, as the Setup tab shows them |
 | `Sources/App/apps/Scripting.swift`, `EventStore.swift`, `ReadOnlyDatabase.swift`, `Typedstream.swift`, `UserPaths.swift` | The routes operations share: the `osascript` runner, EventKit, read-only SQLite, the reader for Messages' archived text, and the rule for which files operations may touch |
 | `Sources/App/apps/` (the other files) | One file per app: Notes, Reminders, Calendar (`CalendarApp.swift`), Contacts, Mail, Messages and its history (`MessagesHistory.swift`), Music, Finder, Pages and Numbers (`IWork.swift`), Shortcuts, System Settings (`Settings.swift`), WhatsApp, Photos, Home, and the hint-only apps (`HintsOnly.swift`) |
-| `Tests/ToolTests/` | Protocol tests against a fake helper (`ServerTests`), app tests against a bare build (`HelperTests`), the live test and the benchmark |
+| `Tests/ToolTests/` | Protocol tests against a fake helper (`ServerTests`), app tests against a bare build (`HelperTests`), the app list as socket clients meet it (`AppListTests`), the live test and the benchmark |
+| `Tests/AppTests/` | The app's pure functions through `@testable import App`: ready operations' paths, values, scripts and databases, the app list's rules, menu safety and key combinations, change reports, recording and window rules |
 | `Tests/Fixtures/target/` | The fixture app the live test and the benchmark operate |

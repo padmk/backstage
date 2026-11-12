@@ -7,13 +7,13 @@ Backstage is one Swift package: the helper app (`Sources/App`), the `backstage` 
 ```sh
 make app        # build/Backstage.app: release build, bundle assembly, ad hoc signature (Command Line Tools are enough)
 make install    # make app, then its setup: install into /Applications signed for this Mac, Accessibility, MCP registration
-swift test      # Protocol tests against a fake helper and app tests against a bare build with --home; needs Xcode
+swift test      # Tests/ToolTests (protocol against a fake helper, app against a bare build with --home) and Tests/AppTests (the app's pure functions); needs Xcode
 make check      # what CI runs: make app, then swift test (make test is swift test)
 make live       # LIVE=1: the installed app operates the fixture app in the background; needs Accessibility and the fixture on the list
 make bench      # BENCH=1: latency against the installed app
 ```
 
-CI (macOS) runs `make app`, type-checks the fixture app and runs `swift test`. macOS runners are expensive, so push finished work in batches.
+CI (`macos-26`) runs `make app`, type-checks the fixture app and runs `swift test`, and cancels runs a newer push supersedes. macOS runners are expensive, so push finished work in batches. A `v<version>` tag runs `.github/workflows/release.yml`, which publishes the release and the Homebrew formula; the steps are in [Releasing](docs/development.md#releasing).
 
 ## Constraints
 
@@ -25,7 +25,7 @@ CI (macOS) runs `make app`, type-checks the fixture app and runs `swift test`. m
 - Only a bare build outside a bundle honors `--home`; any copy of the bundle uses the user's real files.
 - Private macOS calls are looked up at run time with `lookUp` in `Sources/App/BackgroundEvents.swift` and must degrade to a public call or a clear error when missing.
 - Every ready operation reads its result back and reports `verified`; nothing retries a change by itself. See [docs/app-knowledge.md](docs/app-knowledge.md).
-- Every action on an element passes `requireAllowedMenu` (`Sources/App/MenuSafety.swift`); new routes that act on elements must too. Adding to the app list over the socket only queues a request (`Sources/App/ApprovalRequests.swift`); only the window adds.
+- Every route that acts on an element, a key or a point passes the menu check in `Sources/App/MenuSafety.swift` (`requireAllowedMenu`, `requireAllowedKey`, `requireAllowedPoint`); new routes must too, and [SECURITY.md](SECURITY.md#design) lists the routes and the gaps. Adding to the app list over the socket only queues a request (`Sources/App/ApprovalRequests.swift`); only the window adds.
 - Behavior on a locked screen is decided in `Sources/App/Presence.swift` and `Sources/App/LockedWindows.swift`; keep [docs/locked-screen.md](docs/locked-screen.md) in step with them.
 - Tools are defined in `Sources/Tool/Tools.swift`; keep [docs/tools.md](docs/tools.md) in step with them, and the ready operations with [docs/app-knowledge.md](docs/app-knowledge.md).
 - Update README, CHANGELOG, SECURITY, PRIVACY and the docs with any change to what agents or users get.
