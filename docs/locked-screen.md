@@ -4,7 +4,7 @@ When the Mac's screen is locked, macOS hides app windows from the interfaces Bac
 
 This page covers what changes when the screen locks, why, what Backstage does about it, and the optional **Windows while locked** mode: how it works, what it costs and where it stops.
 
-All measurements here are from 5 November 2026, on macOS 27.2 (build 26B123) on an Apple M4 Pro, with the screen locked and both displays asleep. They came from probes run while locked and from the MCP server itself, against the CUA Fixture test app (`test/fixtures/target`), TextEdit, Notes and the apps with ready operations.
+All measurements here are from 5 November 2026, on macOS 27.2 on an Apple M4 Pro, with the screen locked and both displays asleep. They came from probes run while locked and from the MCP server itself, against the Test Fixture app (`Tests/Fixtures/target`), TextEdit, Notes and the apps with ready operations.
 
 ## In short
 
@@ -62,7 +62,7 @@ Two findings correct earlier assumptions:
 
 ### Ready operations
 
-Ready operations go through each app's scripting dictionary, EventKit, the Contacts framework or the `shortcuts` command, none of which needs a window. Measured while locked through the MCP server: Notes `list_folders` and `search`, Reminders `list_lists` and `list`, Calendar `list_calendars`, Contacts `search`, Mail `list_mailboxes`, Messages `list_chats`, Music `now_playing` and `list_playlists`, Finder `selection` and `front_folder`, System Settings `get_appearance`, `get_volume` and `set_volume`, and Shortcuts `list`. The other operations use the same routes and are expected to work, with these exceptions:
+Ready operations go through each app's scripting dictionary, EventKit, the Contacts framework, PhotoKit, the `shortcuts` command or an app's own database read-only, none of which needs a window. Measured while locked through the MCP server: Notes `list_folders` and `search`, Reminders `list_lists` and `list`, Calendar `list_calendars`, Contacts `search`, Mail `list_mailboxes`, Messages `list_chats`, Music `now_playing` and `list_playlists`, Finder `selection` and `front_folder`, System Settings `get_appearance`, `get_volume` and `set_volume`, and Shortcuts `list`. The other operations use the same routes and are expected to work, though they are not measured while locked: among them WhatsApp's operations, Messages `read_chat` and `save_attachment` from its history, and Photos' operations. The exceptions:
 
 - **Messages `send`** sends, but confirms the message by reading the chat list in Messages' window, which cannot be read while locked. It then returns `verified: false` with a `check` that says so and tells the agent not to send again. Sending a message twice cannot be undone, so the agent must wait for the user rather than retry.
 - **System Settings `open_pane`** confirms the pane by the window's title, which cannot be read while locked, so expect `verified: false` (not measured).
@@ -78,10 +78,10 @@ The helper decides this per element: it looks up the element number in the sessi
 While locked, the header of a read lists the app's windows from the window server, numbered as `screenshot` and `click_at` take them, and adds `screen=locked`:
 
 ```text
-app="CUA Fixture" windows=[0:"Fixture Other" 1:"Fixture Main"] screen=locked
+app="Test Fixture" windows=[0:"Fixture Other" 1:"Fixture Main"] screen=locked
 ```
 
-Menu commands that act on the current document (Save, Duplicate) are disabled while the app has no key window, locked or not; see [What works in the background](../README.md#what-works-in-the-background).
+Menu commands that act on the current document (Save, Duplicate) are disabled while the app has no key window, locked or not; see [What works in the background](architecture.md#what-works-in-the-background).
 
 ### Window requests
 
@@ -105,11 +105,11 @@ For Chromium and Electron apps `click_at` first makes the target window key insi
 The sequence measured on the fixture through the MCP server:
 
 ```text
-screenshot app=CUA Fixture window=1           → 420×452 PNG of "Fixture Main", "presses: 1"
-click_at   app=CUA Fixture window=1 x=52 y=55 → pointer_event, verified: false; the fixture logged a press
-click_at   app=CUA Fixture window=1 x=200 y=112 → the text field took focus
-type_text  app=CUA Fixture text="locked hi"   → key_events, verified: false; the field logged "locked hi"
-screenshot app=CUA Fixture window=1           → the counter shows "presses: 2"
+screenshot app=Test Fixture window=1           → 420×452 PNG of "Fixture Main", "presses: 1"
+click_at   app=Test Fixture window=1 x=52 y=55 → pointer_event, verified: false; the fixture logged a press
+click_at   app=Test Fixture window=1 x=200 y=112 → the text field took focus
+type_text  app=Test Fixture text="locked hi"   → key_events, verified: false; the field logged "locked hi"
+screenshot app=Test Fixture window=1           → the counter shows "presses: 2"
 ```
 
 ### Why it is built this way
@@ -141,7 +141,7 @@ Unlocked, Backstage prefers accessibility: it reads elements, acts on them by nu
 - **No keyboard focus control.** Keys go to the element that has focus in the app. Click the target with `click_at` first, and check with a screenshot.
 - **The window index can change.** It is the window server's front-to-back order. Read the header (`get_window_state` with `menu_bar: true`) or take a screenshot before each step.
 - **Pointer-only actions only.** `click_at` with `element` is refused, because element frames are not available; so is `foreground: true`, which would need to bring a window forward on a locked screen.
-- **Same app list.** The mode applies to the apps agents may use and nothing else. Passwords, Keychain Access, other password managers, authenticators and wallets, login and authentication windows and Backstage itself stay unavailable.
+- **Same app list.** The mode applies to the apps agents may use and nothing else. Passwords, Keychain Access, other password managers, authenticators and wallets, the system's login and authentication prompts and Backstage itself stay unavailable.
 
 ### Turning it on and off
 

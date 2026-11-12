@@ -6,7 +6,7 @@ Working through a window means reading it and working out where things are, in e
 
 For each app, the definition uses the first route that works:
 
-1. **The app's own automation surface**: its AppleScript dictionary, a system framework that owns the data (EventKit for reminders and calendars, Contacts for contacts), `x-apple.systempreferences:` URLs and preference domains for System Settings, Shortcuts for apps that offer them.
+1. **The app's own automation surface**: its AppleScript dictionary, a system framework that owns the data (EventKit for reminders and calendars, Contacts for contacts, PhotoKit for photos), the app's own database read-only where it has no automation surface (WhatsApp, and the Messages history), `x-apple.systempreferences:` URLs and preference domains for System Settings, Shortcuts for apps that offer them.
 2. **Accessibility with per-app knowledge**: hints about where things are, which custom actions to use, what not to do.
 3. **Screenshots and `click_at`**, for views without elements.
 
@@ -16,7 +16,7 @@ Route 1 is fast, needs no window, works when the app is hidden or not running an
 
 One Swift file per app in `Sources/App/apps/`, keyed by bundle id:
 
-- **Operations**: named, typed actions such as `notes.create` or `reminders.add`. Each declares its arguments (name, type, required, description), whether it changes anything (`reads` or `changes`), and a function that runs it and returns a result with `verified`.
+- **Operations**: named, typed actions such as `create` in Notes or `add` in Reminders. Each declares its arguments (name, type, required, description), whether it changes anything (`reads` or `changes`), and a function that runs it and returns a result with `verified`.
 - **Hints**: a few short lines for an agent working through accessibility: where things are in the window, which custom actions an element offers, which keys work.
 - **Pitfalls**: known traps, such as Home's favorite colors also changing brightness.
 
@@ -33,7 +33,7 @@ Two tools, not one tool per operation:
 
 `get_window_state` adds the app's hints and pitfalls under its header line, with a pointer to `list_operations` when the app has operations, so an agent that starts with a read learns about the faster route.
 
-**Why not one tool per operation.** The first batch alone has about 20 operations. Every tool's schema is sent to the model in every conversation, whether the task touches Notes or not, which costs context and makes choosing harder. Two tools keep the list short (16 tools in all), and the agent loads one app's schemas only when it needs them. The cost is a discovery step, which `get_window_state` hints and the server instructions point to, and arguments that MCP clients cannot check against a schema, so the helper validates them and names the problem.
+**Why not one tool per operation.** The first batch alone has about 20 operations. Every tool's schema is sent to the model in every conversation, whether the task touches Notes or not, which costs context and makes choosing harder. Two tools keep the list short (24 tools in all), and the agent loads one app's schemas only when it needs them. The cost is a discovery step, which `get_window_state` hints and the server instructions point to, and arguments that MCP clients cannot check against a schema, so the helper validates them and names the problem.
 
 ## Approval and macOS permissions
 
@@ -84,7 +84,7 @@ An app gets ready operations when many Mac users have it, agents often need it, 
 | Done | Photos (finding and copying out, through PhotoKit) |
 | Done | Hints only: Bear, Telegram, Discord (voice messages through `record_audio`), Chromium browsers (Bruse for pages) |
 | Later | Safari (tabs and opening addresses), Voice Memos transcripts, Books highlights |
-| When it can be measured | Keynote: not installed on the Mac these were built on, and operations ship only once measured |
+| When it can be measured | Keynote: operations ship only once measured |
 | Hints only | Home: HomeKit needs an entitlement a locally signed app cannot have, so scenes go through Shortcuts |
 
 ### Operations
@@ -93,27 +93,39 @@ An app gets ready operations when many Mac users have it, agents often need it, 
 |---|---|
 | Notes | `list_folders`, `search`, `read`, `create` |
 | Reminders | `list_lists`, `list` (with `query`), `read`, `add`, `update`, `complete` |
-| Calendar | `list_calendars`, `list_events`, `get_event`, `create_event`, `update_event` (not recurring events) |
+| Calendar | `list_calendars`, `list_events`, `get_event` (all notes, link, attendees), `create_event`, `update_event` (not recurring events) |
 | System Settings | `list_panes`, `open_pane`, `get_appearance`, `set_appearance`, `get_volume`, `set_volume` |
 | Contacts | `search`, `read`, `add` |
-| Mail | `list_mailboxes`, `search`, `read`, `set_read`, `create_draft` |
+| Mail | `list_mailboxes`, `search`, `read`, `set_read`, `create_draft` (never sends) |
 | Shortcuts | `list`, `run` |
 | Music | `now_playing`, `control`, `play`, `set_volume`, `list_playlists` |
-| Messages | `list_chats` (with `query`), `read_chat`, `save_attachment`, `send` |
-| WhatsApp | `list_chats` (with `query`), `read_chat`, `save_media` |
+| Messages | `list_chats` (with `query`), `read_chat` (latest messages, a time range, or earlier ones with `before`), `save_attachment`, `send`. Reading needs Full Disk Access (the Messages history grant); without it `list_chats` uses scripting and conversations are read through the window |
+| WhatsApp | `list_chats` (with `query`), `read_chat` (latest messages, or a time range; earlier ones with `before`), `save_media` (copies a photo or document to a temporary file); read from WhatsApp's data on this Mac, without its window. Needs Full Disk Access |
 | Finder | `selection`, `front_folder`, `reveal`, `get_tags`, `set_tags`, `trash` |
-| Pages | `list_documents`, `open`, `export_pdf`, `close`, `read_text` |
-| Photos | `list_albums`, `list_media`, `export` |
-| Numbers | `list_documents`, `open`, `export_pdf`, `close`, `read_table`, `set_cell`, `set_cells` |
+| Pages | `list_documents`, `open`, `read_text`, `export_pdf`, `close` |
+| Photos | `list_albums`, `list_media` (by date, photo or video, screenshots, Live Photos, favorites, album; newest first, on with `before`), `export` (the original, or a photo as a JPEG without location); through PhotoKit, without the Photos app |
+| Numbers | `list_documents`, `open`, `read_table` (from any row), `set_cell`, `set_cells`, `export_pdf`, `close` |
+
+Apps with hints and pitfalls only:
+
+| App | Hints |
+|---|---|
+| Home | Hints and pitfalls for its window |
+| Bear | Its own `bearcli` and MCP server read and write notes |
+| Telegram | Hints and pitfalls for its window, whose lists show no rows to Accessibility |
+| Discord | Where messages are in its window, `record_audio` for voice messages, which cannot be downloaded, and `launch_app` with `files` to hand a recording to a speech-to-text app |
+| Chrome, Brave, Edge, Arc, Vivaldi, Helium | [Bruse](https://github.com/padmk/bruse) works their pages in background tabs |
+
+`get_window_state` shows an app's hints and pitfalls under its first line.
 
 Contracts:
 
 - Items are named by the ids their owner gives (note ids, EventKit calendar and item identifiers). Destinations are ids from the list operations, or names that match exactly one; read-only lists and calendars are refused.
 - Times are ISO 8601. A time without an offset is local time. All-day events take dates (`2026-11-05`), and their `end` is the last day, inclusive. Results give times with the local offset.
 - Searches and lists are bounded by `limit` (default 20, at most 200), and event ranges by at most 366 days.
-- Paths for files are absolute or start with `~`, and must be in the home folder (not the folder itself) or on an external volume; one module owns this rule. In the home folder's Library only iCloud Drive (`Mobile Documents`) and `CloudStorage` are reachable: Library holds other apps' data, which Full Disk Access, granted for WhatsApp, would otherwise open to every operation that takes a path. `export_pdf` never replaces an existing file.
+- Paths for files are absolute or start with `~`, and must be in the home folder (not the folder itself) or on an external volume; one module owns this rule. In the home folder's Library only iCloud Drive (`Mobile Documents`) and `CloudStorage` are reachable: Library holds other apps' data, which Full Disk Access, granted for WhatsApp or the Messages history, would otherwise open to every operation that takes a path. `export_pdf` never replaces an existing file.
 - Pages and Numbers answer as their Creator Studio versions (`com.apple.Pages`, `com.apple.Numbers`, 15.4) or the earlier ones (`com.apple.iWork.Pages`, `com.apple.iWork.Numbers`, 14.5), which have the same scripting: a running one is used, otherwise the first installed in that order. Each needs its own approval and Automation grant.
-- Apple announced on 27 October 2026 that Keynote, Pages and Numbers gain MCP support on macOS 27, letting external agents read, edit and run actions in documents, in an update due in November. It is not measured yet: whether it needs the Creator Studio subscription and how agents connect are not stated. Once it ships, compare it with these operations and, if it is better, point agents to it with a hint instead of growing the operations.
+- Apple has [announced](https://www.apple.com/newsroom/2026/10/apple-creator-studio-adds-powerful-new-ai-features-and-even-more-creative-tools/) MCP support in Keynote, Pages and Numbers on macOS 27 or later, letting external agents read, edit and run actions in documents. It is not measured here: whether it needs the Creator Studio subscription and how agents connect are not stated. Once it ships, compare it with these operations and, if it is better, point agents to it with a hint instead of growing the operations.
 - iWork documents are named by id or name; scripts hold them by id, because Numbers renames a new document from its content.
 - Panes are the Settings extensions installed in `/System/Library/ExtensionKit/Extensions`, so `open_pane` accepts only ids this Mac has and the list follows the macOS version.
 - Notes bodies are HTML inside Notes. `create` takes a title and plain text and builds escaped HTML with the title as heading. Nothing adds to an existing note: Notes gives the body back without attachments, checklist state and some formatting (an image vanished in a test), so any rewrite can lose content. `read` returns plain text, and HTML too with `html: true`. Locked notes are refused.
@@ -137,12 +149,12 @@ macOS 27.2, 4 November 2026, with another app in front throughout. Each operatio
 | Calendar | All work, about 0.3 s; `update_event` keeps an event's length when only start moves and refuses recurring events and their changed occurrences, for timed and all-day events; the read-only Birthdays calendar is refused |
 | System Settings | All six work, 0.4 to 1.6 s. The front app kept the focus while `open_pane` started System Settings and switched panes. Setting a volume level unmutes the output |
 | Contacts | All three work, about 30 ms. Search matches the start of names and whole email addresses or phone numbers |
-| Mail | `list_mailboxes`, `search` and `create_draft` work; no Mail account was enabled, so `read` and `set_read` are not measured. A draft is found as the new id in Drafts and its recipients and body are read back; with no enabled account that check is not measured |
+| Mail | `list_mailboxes`, `search` and `create_draft` work; `read` and `set_read` are not measured, since they need an enabled Mail account. A draft is found as the new id in Drafts and its recipients and body are read back; that read-back is not measured either |
 | Shortcuts | `list` works; the command lists every shortcut for an unknown folder, so the folder is checked first. `run` is measured only for an unknown shortcut, because every installed one acts on something |
 | Music | All five work, 0.1 to 1.8 s; Music started behind the front app, which kept the focus |
-| Messages | `list_chats` and `send` work; a test message was confirmed through the chat list in about 0.3 s. Messages labels each chat with its latest message. From the database: `list_chats` answered every chat, and `read_chat` read a few thousand messages in 0.9 s (at most 0.1 s for 500), text for all but 4 (attachments alone), accented letters and emoji intact; paging by 13 with `before` matched one read of 300. Most attachments of a Messages in iCloud account were not on the Mac, which `save_attachment` reports as `not_found` |
+| Messages | `list_chats` and `send` work; a test message was confirmed through the chat list in about 0.3 s. Messages labels each chat with its latest message. From the database, on a history of several thousand messages: `read_chat` read every message in under a second (at most 0.1 s for 500), with text for all but attachments sent alone, and non-ASCII letters and emoji intact; paging by 13 with `before` matched one read of 300. With Messages in iCloud, attachments that are not on the Mac are reported by `save_attachment` as `not_found` |
 | WhatsApp | Measured with WhatsApp 26.44.15: `list_chats` about 7 ms, `read_chat` 14 ms for 50 messages and 100 ms for 500, `save_media` 2 ms. A day's messages matched what the window showed, including messages still in the database's write-ahead log, photos with captions, links, a document and group senders |
 | Finder | All six work. Finder asks for an administrator password to trash a symbolic link and then fails, so links go to the Trash directly; other items go through Finder for Put Back. Paths outside the home folder and external volumes, and the home folder itself, are refused |
 | Pages | All five work, 0.2 to 1.8 s. A plain text file opens as a new document without a file (`imported: true`) |
 | Photos | On a library of several thousand items: `list_albums` 0.12 s, `list_media` 15 to 160 ms by filter, paging by 7 with `before` matched one read of 60. `export` of a photo as a 800-pixel JPEG took 0.13 s and carried no location; an original 6 ms with `contains_location`; a 160 MB video only in iCloud downloaded in 4.3 s (`downloaded: true`). A video as JPEG is refused |
-| Numbers | Started hidden by an operation, Numbers Creator Studio showed no window and the front app kept the focus. All six work. Cells outside the table are refused; numbers and text are recognized as if typed. A new or imported document is named from its content (here "Fruit and Vegetable List") and saved to iCloud Drive as soon as it changes |
+| Numbers | Started hidden by an operation, Numbers Creator Studio showed no window and the front app kept the focus. `list_documents`, `open`, `read_table`, `set_cell`, `export_pdf` and `close` work; `set_cells` is not measured. Cells outside the table are refused; numbers and text are recognized as if typed. A new or imported document is named from its content (here "Fruit and Vegetable List") and saved to iCloud Drive as soon as it changes |
