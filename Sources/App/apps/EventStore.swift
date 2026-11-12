@@ -62,9 +62,11 @@ func describe(_ calendar: EKCalendar, isDefault: Bool) -> JSON {
 // MARK: Times
 
 // ISO dates are Gregorian whatever calendar the user prefers, in this Mac's time zone.
-var isoCalendar: Calendar {
+var isoCalendar: Calendar { gregorian(in: .current) }
+
+private func gregorian(in zone: TimeZone) -> Calendar {
   var calendar = Calendar(identifier: .gregorian)
-  calendar.timeZone = .current
+  calendar.timeZone = zone
   return calendar
 }
 
@@ -74,23 +76,24 @@ struct Moment {
   let isDay: Bool
 }
 
-private func formatter(_ format: String) -> DateFormatter {
+private func formatter(_ format: String, in zone: TimeZone = .current) -> DateFormatter {
   let formatter = DateFormatter()
   formatter.locale = Locale(identifier: "en_US_POSIX")
-  formatter.timeZone = .current
+  formatter.timeZone = zone
   formatter.dateFormat = format
   return formatter
 }
 
 // ISO 8601: a date, or a date and time with or without an offset; without one it is local time.
-func moment(_ text: String, key: String) throws -> Moment {
+func moment(_ text: String, key: String, in zone: TimeZone = .current) throws -> Moment {
   // From the date's parts, because where the clock changes at midnight, that midnight does not exist and a
   // formatter refuses the day; the calendar gives its first moment instead.
   if text.range(of: #"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"#, options: .regularExpression) != nil {
     let parts = text.split(separator: "-").compactMap { Int($0) }
+    let calendar = gregorian(in: zone)
     if parts.count == 3 {
       let components = DateComponents(year: parts[0], month: parts[1], day: parts[2])
-      if components.isValidDate(in: isoCalendar), let day = isoCalendar.date(from: components) { return Moment(date: day, isDay: true) }
+      if components.isValidDate(in: calendar), let day = calendar.date(from: components) { return Moment(date: day, isDay: true) }
     }
   }
   for options: ISO8601DateFormatter.Options in [[.withInternetDateTime], [.withInternetDateTime, .withFractionalSeconds]] {
@@ -99,7 +102,7 @@ func moment(_ text: String, key: String) throws -> Moment {
     if let date = iso.date(from: text) { return Moment(date: date, isDay: false) }
   }
   for format in ["yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm"] {
-    if let date = formatter(format).date(from: text) { return Moment(date: date, isDay: false) }
+    if let date = formatter(format, in: zone).date(from: text) { return Moment(date: date, isDay: false) }
   }
   throw HelperError(code: "invalid_arguments", message: "\(key) must be an ISO 8601 date or time, such as 2026-11-05 or 2026-11-05T14:30.")
 }

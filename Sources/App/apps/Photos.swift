@@ -154,8 +154,17 @@ private func fetch(_ resource: PHAssetResource, to url: URL, network: Bool) -> F
   var outcome = Fetched.done
   let done = DispatchSemaphore(value: 0)
   let manager = PHAssetResourceManager.default()
-  var request: PHAssetResourceDataRequestID = 0
-  request = manager.requestData(for: resource, options: options, dataReceivedHandler: { data in
+  // The request's id arrives only when requestData returns; a stop wanted before then is made right after.
+  var request: PHAssetResourceDataRequestID?
+  var stopWanted = false
+  let cancel = {
+    let id: PHAssetResourceDataRequestID? = lock.withLock {
+      if request == nil { stopWanted = true }
+      return request
+    }
+    if let id { manager.cancelDataRequest(id) }
+  }
+  let started = manager.requestData(for: resource, options: options, dataReceivedHandler: { data in
     // The request is cancelled outside the lock, in case cancelling calls back into these handlers.
     let stop: Bool = lock.withLock {
       guard !finished else { return false }
@@ -172,7 +181,7 @@ private func fetch(_ resource: PHAssetResource, to url: URL, network: Bool) -> F
       done.signal()
       return true
     }
-    if stop { manager.cancelDataRequest(request) }
+    if stop { cancel() }
   }, completionHandler: { error in
     lock.withLock {
       guard !finished else { return }
@@ -184,6 +193,7 @@ private func fetch(_ resource: PHAssetResource, to url: URL, network: Bool) -> F
       done.signal()
     }
   })
+  if lock.withLock({ request = started; return stopWanted }) { manager.cancelDataRequest(started) }
   if done.wait(timeout: .now() + exportSeconds) == .timedOut {
     lock.withLock {
       if !finished {
@@ -191,7 +201,7 @@ private func fetch(_ resource: PHAssetResource, to url: URL, network: Bool) -> F
         outcome = .timedOut
       }
     }
-    manager.cancelDataRequest(request)
+    manager.cancelDataRequest(started)
   }
   return lock.withLock { outcome }
 }

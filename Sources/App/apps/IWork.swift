@@ -220,14 +220,9 @@ private let setCell = Operation(
 
 private let maxCells = 500
 
-// Several cells in one script, checked before any is written, so a bad address changes nothing.
-private let setCells = Operation(
-  name: "set_cells", summary: "Set several cells at once, as if typed, and report each one", effect: .changes,
-  arguments: tableArguments + [
-    Argument(name: "values", kind: .string, required: true, description: "A JSON object of cell address to value, such as {\"B2\": \"10\", \"C2\": \"done\"}; at most 500 cells, empty clears"),
-  ]
-) { arguments in
-  guard let data = try string(arguments, "values").data(using: .utf8),
+// The cells set_cells writes: addresses in capitals, each value as the text typed into it.
+func cellValues(_ values: String) throws -> [String: String] {
+  guard let data = values.data(using: .utf8),
     let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any], !object.isEmpty
   else { throw HelperError(code: "invalid_arguments", message: "values must be a JSON object of cell address to value.") }
   guard object.count <= maxCells else { throw HelperError(code: "invalid_arguments", message: "values may hold at most \(maxCells) cells.") }
@@ -238,13 +233,25 @@ private let setCells = Operation(
     guard cell.range(of: #"^[A-Z]{1,3}[1-9][0-9]{0,5}$"#, options: .regularExpression) != nil else {
       throw HelperError(code: "invalid_arguments", message: "\(address) is not a cell address such as B2.")
     }
-    guard let text = value as? String ?? (value as? NSNumber).map({ $0.stringValue }) else {
+    // JSON true and false arrive as numbers too, and would be written as 1 and 0.
+    let number = (value as? NSNumber).flatMap { CFGetTypeID($0) == CFBooleanGetTypeID() ? nil : $0.stringValue }
+    guard let text = value as? String ?? number else {
       throw HelperError(code: "invalid_arguments", message: "The value for \(address) must be text or a number.")
     }
     cells[cell] = text
   }
+  return cells
+}
+
+// Several cells in one script, checked before any is written, so a bad address changes nothing.
+private let setCells = Operation(
+  name: "set_cells", summary: "Set several cells at once, as if typed, and report each one", effect: .changes,
+  arguments: tableArguments + [
+    Argument(name: "values", kind: .string, required: true, description: "A JSON object of cell address to value, such as {\"B2\": \"10\", \"C2\": \"done\"}; at most 500 cells, empty clears"),
+  ]
+) { arguments in
   var given = arguments
-  given["values"] = cells
+  given["values"] = try cellValues(try string(arguments, "values"))
   return try run(findTable + #"""
     const document = documentNamed(args.document);
     const { sheet, table } = tableIn(document);
