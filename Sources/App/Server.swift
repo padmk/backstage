@@ -2,11 +2,11 @@
 // while another is running, and a closed connection ends its requests.
 
 import AppKit
+import HelperLink
 
 private let idleExitSeconds: TimeInterval = 120
 // Bounds that keep one client from exhausting the helper: a frame no request needs (type_text takes 100,000
 // characters), requests waiting on one connection, connections at once, and sessions kept for reconnecting.
-private let maxFrameBytes = 4 << 20
 private let maxQueuedRequests = 64
 private let maxConnections = 64
 private let maxSessions = 256

@@ -18,8 +18,6 @@ private let toolCapabilities: JSON = ["tools": ["listChanged": true] as JSON]
 // A handoff waits this long for calls that already reached the old helper to finish; otherwise it does not happen.
 private let handoffDrainSeconds: TimeInterval = 5
 private let handoffPollSeconds: TimeInterval = 0.02
-// Element numbers after each handoff start this far apart, above any a session reaches.
-let elementNumbersPerHandoff = 100_000_000
 
 // The policy comes first: clients cut long server instructions, and several servers share that budget.
 let instructions =
@@ -55,7 +53,7 @@ final class MCPServer: @unchecked Sendable {
     helper = HelperClient(directories: directories, managesHelper: managesHelper, expectedBuild: expectedBuild,
                           clientName: { server?.currentClientName })
     server = self
-    if handoff.generation > 0 { helper.firstElementNumber = handoff.generation * elementNumbersPerHandoff + 1 }
+    helper.handoffGeneration = handoff.generation
     if managesHelper { helper.onOutdated = { server?.handOff() } }
   }
 

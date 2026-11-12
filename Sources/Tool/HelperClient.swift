@@ -20,10 +20,18 @@ final class Ticket: @unchecked Sendable {
 }
 
 private let startTimeout: TimeInterval = 8
-// Long enough for the slowest operation, such as a shortcut or an export.
-let requestTimeout: TimeInterval = 200
+// Long enough for the slowest operation, such as a shortcut or an export. Tests with HELPER_TEST_HOME may shorten
+// it with HELPER_TEST_TIMEOUT, in seconds.
+let requestTimeout: TimeInterval = {
+  let environment = ProcessInfo.processInfo.environment
+  guard environment["HELPER_TEST_HOME"] != nil, let seconds = environment["HELPER_TEST_TIMEOUT"].flatMap(Double.init), seconds > 0 else { return 200 }
+  return seconds
+}()
 private let quitWait: TimeInterval = 3
-private let startLockStale: TimeInterval = 20
+// Element numbers start this far apart for each handoff, and for each connection within one, above any a session
+// reaches; a helper that kept the session ignores the start and goes on with its own numbers.
+private let elementNumbersPerHandoff = 100_000_000
+private let elementNumbersPerConnection = 1_000_000
 
 // One socket, read by its own thread. Replies go to the client's queue.
 private final class SocketConnection: @unchecked Sendable {
@@ -39,10 +47,10 @@ private final class SocketConnection: @unchecked Sendable {
   }
 
   // A write that the helper does not take by the deadline fails rather than hangs, however slowly it drains.
-  func write(_ object: Any, deadline: Date = Date().addingTimeInterval(requestTimeout)) -> Bool {
+  func write(_ line: Data, deadline: Date = Date().addingTimeInterval(requestTimeout)) -> Bool {
     guard writeLock.lock(before: deadline) else { return false }
     defer { writeLock.unlock() }
-    return writeAll(descriptor, jsonLine(object), deadline: deadline)
+    return writeAll(descriptor, line, deadline: deadline)
   }
 
   // Ends reads and writes; the reader thread then sees the end and reports it.
@@ -96,9 +104,11 @@ final class HelperClient: @unchecked Sendable {
   // Called, holding the connection lock, when this command turns out to be an older build than the installed app;
   // it may replace this process with the installed command and then never returns.
   var onOutdated: (() -> Void)?
-  // Where this session's element numbers start in the helper; set after a handoff, so numbers from before it do not
-  // name new elements.
-  var firstElementNumber: Int?
+  // How many handoffs brought this session here, and how many connections this process has made: each connection
+  // asks for element numbers of its own range, so a number read before a helper restart or a handoff never names
+  // an element of the new helper.
+  var handoffGeneration = 0
+  private var connectionsMade = 0
 
   init(directories: Directories, managesHelper: Bool, expectedBuild: String?, clientName: @escaping () -> String? = { nil }) {
     self.directories = directories
@@ -142,7 +152,7 @@ final class HelperClient: @unchecked Sendable {
       guard ticket.sent, let id = ticket.id, let socket = current else { return nil }
       return (id, socket)
     }
-    if let (id, socket) = target { _ = socket.write(["method": "cancel", "params": ["id": id]]) }
+    if let (id, socket) = target { _ = socket.write(jsonLine(["method": "cancel", "params": ["id": id]])) }
   }
 
   func close() {
@@ -166,11 +176,15 @@ final class HelperClient: @unchecked Sendable {
     // One deadline covers waiting for the order lock, the write and the reply.
     let due = Date().addingTimeInterval(requestTimeout)
     let deadline = Int(due.timeIntervalSince1970 * 1000)
-    // Cancelled between taking its id and being written, a request is never written.
+    let line = jsonLine(["id": id, "method": method, "params": params, "deadline": deadline])
+    // Cancelled between taking its id and being written, a request is never written. Nor is one the helper would
+    // refuse for its size: that refusal names no request, so it ends the connection for every other call.
     if orderLock.lock(before: due) {
       if queue.sync(execute: { ticket?.cancelled == true }) {
         finish(id, .failure(HelperFailure(code: "cancelled", message: "The request was cancelled.")))
-      } else if socket.write(["id": id, "method": method, "params": params, "deadline": deadline], deadline: due) {
+      } else if line.count - 1 > maxFrameBytes {
+        finish(id, .failure(HelperFailure(code: "request_too_large", message: "The request is larger than \(maxFrameBytes >> 20) MB, so it was not sent. Send less at once.")))
+      } else if socket.write(line, deadline: due) {
         queue.sync { ticket?.sent = true }
       } else {
         finish(id, .failure(stoppedFailure))
@@ -214,7 +228,13 @@ final class HelperClient: @unchecked Sendable {
       let count = readAvailable(socket.descriptor, into: &buffer)
       guard count > 0 else { break }
       for line in framer.lines(in: Data(buffer[0..<count])) {
-        guard let reply = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? JSON, let id = reply["id"] as? Int else { continue }
+        guard let reply = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? JSON else { continue }
+        // An error that names no request could belong to any of them; ending the connection fails them all rather
+        // than leave one waiting for its deadline.
+        guard let id = reply["id"] as? Int else {
+          if reply["error"] != nil { socket.shut() }
+          continue
+        }
         if let error = reply["error"] as? JSON {
           finish(id, .failure(HelperFailure(code: error["code"] as? String ?? "error", message: error["message"] as? String ?? "")))
         } else {
@@ -252,10 +272,13 @@ final class HelperClient: @unchecked Sendable {
     }
   }
 
+  // Runs holding the connection lock, once for each new connection.
   private func hello(_ socket: SocketConnection) throws -> JSON {
     var params: JSON = ["session_id": sessionId]
     if let name = clientName() { params["client_name"] = name }
-    if let firstElementNumber { params["first_element_number"] = firstElementNumber }
+    let first = handoffGeneration * elementNumbersPerHandoff + connectionsMade * elementNumbersPerConnection + 1
+    connectionsMade += 1
+    if first > 1 { params["first_element_number"] = first }
     return try send(socket, "hello", params, ticket: nil) as? JSON ?? [:]
   }
 
@@ -283,11 +306,15 @@ final class HelperClient: @unchecked Sendable {
   }
 
   private func installedBuild() -> String? {
-    buildIdentity(ofExecutableAt: Product.installedAppPath + "/Contents/MacOS/" + Product.appExecutableName)
+    buildIdentity(ofExecutableAt: installedAppPath + "/Contents/MacOS/" + Product.appExecutableName)
   }
 
+  // Without an installed app nothing can be restarted into, so the message asks for the install.
   private func differsFromInstalled() -> HelperFailure {
-    HelperFailure(code: nil, message: "This \(Product.commandName) command belongs to another build than the installed \(Product.appName). Restart this session, or run: \(commandHint()) setup")
+    guard installedBuild() != nil else {
+      return HelperFailure(code: nil, message: "\(Product.appName) is not installed. Run: \(commandHint()) setup")
+    }
+    return HelperFailure(code: nil, message: "This \(Product.commandName) command belongs to another build than the installed \(Product.appName). Restart this session, or run: \(commandHint()) setup")
   }
 
   private func waitForSocketToClose() {
@@ -308,7 +335,7 @@ final class HelperClient: @unchecked Sendable {
     }
     let launch = { () throws -> SocketConnection in
       if let descriptor = connectSocket(self.directories.socketPath) { return self.attach(descriptor) }
-      try runProcess("/usr/bin/open", ["-g", "-j", Product.installedAppPath, "--args", Product.backgroundArgument], timeout: 15)
+      try runProcess("/usr/bin/open", ["-g", "-j", installedAppPath, "--args", Product.backgroundArgument], timeout: 15)
       let started = Date()
       while Date().timeIntervalSince(started) < startTimeout {
         if let descriptor = connectSocket(self.directories.socketPath) { return self.attach(descriptor) }
@@ -326,20 +353,20 @@ final class HelperClient: @unchecked Sendable {
   }
 
   // One start at a time: a second open of a running app counts as the user reopening it, which shows its window
-  // and takes focus.
+  // and takes focus. The kernel releases the lock when its holder exits, crashes or execs another command, so a
+  // lock is never left behind and never taken from a start that is still running.
   private func withStartLock<T>(_ action: () throws -> T) throws -> T {
     try ensurePrivateDirectory(directories.state)
-    let lock = directories.state + "/start.lock"
+    let path = directories.state + "/start-lock"
+    let descriptor = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+    guard descriptor >= 0 else { throw HelperFailure(code: nil, message: "Could not open \(path): \(String(cString: strerror(errno)))") }
+    defer { Darwin.close(descriptor) }
     let started = Date()
-    while mkdir(lock, 0o700) != 0 {
-      if let modified = (try? FileManager.default.attributesOfItem(atPath: lock))?[.modificationDate] as? Date,
-         Date().timeIntervalSince(modified) > startLockStale {
-        rmdir(lock)
-      }
-      if Date().timeIntervalSince(started) > startLockStale * 2 { throw HelperFailure(code: nil, message: "\(lock) is held") }
+    while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+      guard errno == EWOULDBLOCK || errno == EINTR else { throw HelperFailure(code: nil, message: "Could not lock \(path): \(String(cString: strerror(errno)))") }
+      if Date().timeIntervalSince(started) > requestTimeout { throw HelperFailure(code: nil, message: "Another start of the helper still holds \(path)") }
       Thread.sleep(forTimeInterval: 0.1)
     }
-    defer { rmdir(lock) }
     return try action()
   }
 }

@@ -3,6 +3,10 @@
 
 import Foundation
 
+// The longest request line the app's socket takes, without its newline: more than any request needs (type_text takes
+// 100,000 characters). The app closes a connection that sends a longer one, so the command never sends it.
+public let maxFrameBytes = 4 << 20
+
 public struct LineFramer: Sendable {
   private var pending = Data()
 
