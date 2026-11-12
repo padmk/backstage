@@ -6,6 +6,7 @@
 
 import AppKit
 import CryptoKit
+import HelperLink
 import Security
 
 struct AppIdentity {
@@ -37,37 +38,62 @@ private let farReaching: Set<String> = [
 func isFarReaching(_ bundleId: String) -> Bool { farReaching.contains(bundleId) }
 // Whole families too: Passwords has helpers such as its menu bar extra under its own prefix. Password managers,
 // authenticators and wallets from other makers hold the same kind of secret, so no list or switch reaches them
-// either; their ids are the makers' own, as Homebrew's casks record them.
+// either; their ids are the makers' own, as Homebrew's casks record them. Bundle ids compare without case, as
+// LaunchServices compares them.
 private let neverApprovedPrefixes = [
   "com.apple.Passwords.", "com.apple.keychainaccess.",
-  "com.1password.", "com.agilebits.", "com.bitwarden.", "org.keepassxc.", "com.hicknhacksoftware.MacPass", "me.proton.pass",
-  "in.sinew.Enpass", "com.yubico.", "com.ledger.", "com.sparrowwallet.",
-]
+  "com.1password.", "com.agilebits.", "com.bitwarden.", "org.keepassxc.", "org.keepassx.", "com.hicknhacksoftware.MacPass",
+  "me.proton.pass", "in.sinew.", "com.lastpass.", "com.keepersecurity.", "com.nordsec.nordpass", "com.sibersystems.roboform",
+  "app.elpass.", "com.safeincloud.", "pw.buttercup.", "net.antelle.keeweb", "com.jumpcloud.pwm.",
+  "com.yubico.", "io.ente.auth",
+  "com.ledger.", "com.sparrowwallet.", "io.trezor.", "ch.shiftcrypto.", "io.atomicwallet", "zksnacks.wasabiwallet",
+  "io.bluewallet.", "org.bitcoin.", "org.bitcoinfoundation.",
+].map { $0.lowercased() }
+
+private let neverApprovedLowercased = Set(neverApproved.map { $0.lowercased() })
 
 func isNeverApproved(_ bundleId: String) -> Bool {
-  neverApproved.contains(bundleId) || neverApprovedPrefixes.contains { bundleId.hasPrefix($0) } || bundleId == Bundle.main.bundleIdentifier
+  let id = bundleId.lowercased()
+  return neverApprovedLowercased.contains(id) || neverApprovedPrefixes.contains { id.hasPrefix($0) }
+    || id == Bundle.main.bundleIdentifier?.lowercased() || id == Product.bundleIdentifier.lowercased()
 }
 
 private let maxClientNameLength = 40
 // Words clients use in their names that read as capitals, such as "codex-mcp-client".
 private let acronyms: Set<String> = ["mcp", "cli", "ai", "api", "ide"]
 
+private func printable(_ text: String) -> String {
+  String(String.UnicodeScalarView(text.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && !CharacterSet.newlines.contains($0) }))
+}
+
+private func bounded(_ text: String) -> String {
+  text.count > maxClientNameLength ? String(text.prefix(maxClientNameLength - 1)) + "…" : text
+}
+
 // The client names itself, so the name is kept to one short line in the Activity list and the menu.
 func readableClientName(_ name: String?) -> String? {
-  let printable = (name ?? "").unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && !CharacterSet.newlines.contains($0) }
-  let words = String(String.UnicodeScalarView(printable)).split(whereSeparator: { "-_ ".contains($0) })
+  let words = printable(name ?? "").split(whereSeparator: { "-_ ".contains($0) })
   guard !words.isEmpty else { return nil }
-  let readable = words.map { acronyms.contains($0.lowercased()) ? $0.uppercased() : $0.prefix(1).uppercased() + $0.dropFirst() }
-    .joined(separator: " ")
-  return readable.count > maxClientNameLength ? String(readable.prefix(maxClientNameLength - 1)) + "…" : readable
+  return bounded(words.map { acronyms.contains($0.lowercased()) ? $0.uppercased() : $0.prefix(1).uppercased() + $0.dropFirst() }
+    .joined(separator: " "))
 }
 
 // An app's name as one short line without control characters, for messages agents read.
 func readableAppName(_ name: String) -> String? {
-  let printable = String(String.UnicodeScalarView(name.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && !CharacterSet.newlines.contains($0) }))
-    .trimmingCharacters(in: .whitespaces)
-  guard !printable.isEmpty else { return nil }
-  return printable.count > maxClientNameLength ? String(printable.prefix(maxClientNameLength - 1)) + "…" : printable
+  let line = printable(name).trimmingCharacters(in: .whitespaces)
+  return line.isEmpty ? nil : bounded(line)
+}
+
+// The name a client gives in hello, as the session keeps it: one short line, read only this far. It cannot be
+// the window's or the command line's mark, or read as either in the Activity list.
+func sessionClientName(_ value: Any?) -> String? {
+  guard let raw = value as? String,
+    let name = readableAppName(String(String.UnicodeScalarView(raw.unicodeScalars.prefix(4 * maxClientNameLength))))
+  else { return nil }
+  let shown = readableClientName(name)?.lowercased()
+  let reserved = [settingsClient, commandLineClient].contains(name.lowercased())
+    || [ControlTexts.you, ControlTexts.commandLine].contains { $0.lowercased() == shown }
+  return reserved ? nil : name
 }
 
 // A universal app's default slice can differ from the one this Mac runs, and Apple's apps have no team id,
@@ -194,12 +220,20 @@ struct DecisionRecord: Identifiable, Equatable {
   let client: String?
 }
 
-// The latest answers first, from the decision log.
+// A record is a few hundred bytes; a longer line is not one the app wrote, and is skipped.
+private let maxDecisionRecordBytes = 4096
+
+// The latest answers first, from the end of the decision log. Lines that do not parse are skipped.
 func recentDecisions(limit: Int) -> [DecisionRecord] {
-  guard let text = try? String(contentsOfFile: Configuration.directories.decisionLogPath, encoding: .utf8) else { return [] }
-  let lines = text.split(separator: "\n").suffix(limit).reversed()
-  return lines.enumerated().compactMap { index, line in
-    guard let data = line.data(using: .utf8), let entry = try? JSONSerialization.jsonObject(with: data) as? JSON,
+  guard let handle = FileHandle(forReadingAtPath: Configuration.directories.decisionLogPath) else { return [] }
+  defer { try? handle.close() }
+  let size = (try? handle.seekToEnd()) ?? 0
+  let start = size - min(size, UInt64(limit * maxDecisionRecordBytes))
+  guard (try? handle.seek(toOffset: start)) != nil, let data = try? handle.readToEnd() else { return [] }
+  // Reading from the middle of the file starts inside a record.
+  let lines = data.split(separator: 0x0a).dropFirst(start > 0 ? 1 : 0).filter { $0.count <= maxDecisionRecordBytes }
+  return lines.suffix(limit).reversed().enumerated().compactMap { index, line in
+    guard let entry = try? JSONSerialization.jsonObject(with: Data(line)) as? JSON,
       let bundleId = entry["app"] as? String, let decision = entry["decision"] as? String
     else { return nil }
     return DecisionRecord(
@@ -212,20 +246,25 @@ func recentDecisions(limit: Int) -> [DecisionRecord] {
 private let decisionLogLock = NSLock()
 
 // Who changed the list, as the Activity tab shows it: the window, or a request to the socket such as the
-// command line, which an agent with a shell can also send.
+// command line, which an agent with a shell can also send. A client cannot name itself either (sessionClientName).
 let settingsClient = "settings", commandLineClient = "command_line"
 
-// The log keeps its newest records only: past this size, about two thousand of them, it is cut back to the newest
-// thousand in one rewrite, so a write rarely costs more than an append.
-private let decisionLogLimit = 200_000
+// The log keeps its newest records only: past this size it is cut back, in one rewrite, to the newest thousand
+// that fit in half of it, so a write rarely costs more than an append.
+let decisionLogLimit = 200_000
 private let keptDecisions = 1000
 
 private func trimDecisionLog(at path: String) {
-  guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return }
-  let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
-  let kept = lines.suffix(keptDecisions).joined(separator: "\n") + "\n"
+  guard let data = FileManager.default.contents(atPath: path) else { return }
+  var kept: [Data] = []
+  var bytes = 0
+  for line in data.split(separator: 0x0a).reversed() where line.count <= maxDecisionRecordBytes {
+    guard kept.count < keptDecisions, bytes + line.count + 1 <= decisionLogLimit / 2 else { break }
+    kept.append(Data(line) + [0x0a])
+    bytes += line.count + 1
+  }
   let staging = path + ".trim"
-  guard FileManager.default.createFile(atPath: staging, contents: Data(kept.utf8), attributes: [.posixPermissions: 0o600]),
+  guard FileManager.default.createFile(atPath: staging, contents: Data(kept.reversed().joined()), attributes: [.posixPermissions: 0o600]),
         rename(staging, path) == 0
   else {
     unlink(staging)
@@ -237,7 +276,7 @@ func writeDecisionLog(client: String?, bundleId: String, decision: String) {
   let entry: JSON = [
     "time": ISO8601DateFormatter().string(from: Date()), "client": client ?? NSNull(), "app": bundleId, "decision": decision,
   ]
-  guard var data = try? JSONSerialization.data(withJSONObject: entry) else { return }
+  guard var data = try? JSONSerialization.data(withJSONObject: entry), data.count < maxDecisionRecordBytes else { return }
   data.append(0x0a)
   let path = Configuration.directories.decisionLogPath
   decisionLogLock.lock()
@@ -273,11 +312,26 @@ func addToList(_ app: AppIdentity, by client: String) throws {
   if app.bundleId.isEmpty || isNeverApproved(app.bundleId) || app.pid == getpid() {
     throw HelperError(code: "not_allowed", message: "\(app.name) is never available to agents.")
   }
-  guard let signer = signingIdentity(of: app) else {
+  guard let signer = try signerToList(app) else {
     throw HelperError(code: "not_allowed", message: "\(app.name) has no valid signature, so it cannot go on the list. Allow every app covers it.")
   }
   try ApprovalStore.add(bundleId: app.bundleId, signer: signer)
   writeDecisionLog(client: client, bundleId: app.bundleId, decision: "added")
+}
+
+// A running app is named by its process while it is still the one asked about. By the time the user answers a
+// request it may have quit, and its pid gone to another process; then the bundle at its path is named, if that
+// still holds the same app.
+private func signerToList(_ app: AppIdentity) throws -> String? {
+  if app.pid > 0 {
+    let signer = signingIdentity(of: app)
+    if (try? requireSameProcess(app)) != nil { return signer }
+  }
+  let bundleId = app.path.flatMap { NSDictionary(contentsOfFile: $0 + "/Contents/Info.plist")?["CFBundleIdentifier"] as? String }
+  guard let path = app.path, bundleId == app.bundleId else {
+    throw HelperError(code: "app_not_found", message: "\(app.name) is no longer installed where it was.")
+  }
+  return signingIdentity(of: AppIdentity(pid: 0, bundleId: app.bundleId, name: app.name, launchDate: nil, path: path))
 }
 
 // Whether agents may use an app right now. list_apps reports it, so an agent can check before any other route.

@@ -9,7 +9,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   switch method {
   case "hello":
     session.lock.withLock {
-      session.clientName = params["client_name"] as? String
+      session.clientName = sessionClientName(params["client_name"])
     }
     // A session handed over from an older command numbers its elements apart from the numbers it held before.
     if let first = params["first_element_number"] as? Int { session.table.startNumbering(at: first) }
@@ -58,14 +58,13 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     return ["revoked": revoked] as JSON
 
   case "approvals_add":
-    let query = try string(params, "app")
-    let app = try (try? resolve(query)) ?? installedIdentity(try installedApp(query))
+    let app = try requestedApp(string(params, "app"))
     return try requestAddition(app, client: session.lock.withLock { session.clientName } ?? commandLineClient)
 
   case "list_apps":
     // With app: that one app, running or only installed, without starting it.
     if let query = params["app"] as? String {
-      let app = try (try? resolve(query)) ?? installedIdentity(try installedApp(query))
+      let app = try requestedApp(query)
       return ["app": ["name": app.name, "bundle_id": app.bundleId, "running": app.pid != 0, "access": ApprovalGate.access(app).rawValue],
               "every_app": Preferences.allowsEveryApp, "screen_locked": isScreenLocked(), "windows_while_locked": Preferences.worksInWindowsWhileLocked] as JSON
     }
@@ -126,6 +125,17 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
       return try lockedWindowRequest(method, app: app, params: params)
     }
     return try performAppRequest(method, app: app, params: params, session: session, connection: connection)
+  }
+}
+
+// An app a request names, running or only installed. A bundle id that is never available is answered as such
+// even when this Mac does not have it.
+private func requestedApp(_ query: String) throws -> AppIdentity {
+  if let app = try? resolve(query) { return app }
+  do {
+    return try installedIdentity(try installedApp(query))
+  } catch where isNeverApproved(query) {
+    return AppIdentity(pid: 0, bundleId: query, name: query, launchDate: nil, path: nil)
   }
 }
 
