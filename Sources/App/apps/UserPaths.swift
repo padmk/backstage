@@ -8,19 +8,36 @@ let resolvedHome = URL(fileURLWithPath: NSHomeDirectory()).resolvingSymlinksInPa
 // Library holds other apps' data, which macOS guards per app; with Full Disk Access, which the WhatsApp operations
 // need, nothing else would, so only iCloud Drive and cloud storage folders in it are reachable.
 let libraryFolder = resolvedHome + "/Library"
-let reachableInLibrary = ["/Mobile Documents/", "/CloudStorage/"].map { libraryFolder + $0 }
+let reachableInLibrary = reachableFolders(inLibrary: libraryFolder)
 
-func isReachablePath(_ path: String) -> Bool {
-  if path == libraryFolder || path.hasPrefix(libraryFolder + "/") { return reachableInLibrary.contains { path.hasPrefix($0) } }
-  return (path.hasPrefix(resolvedHome + "/") && path != resolvedHome) || path.hasPrefix("/Volumes/")
+private func reachableFolders(inLibrary library: String) -> [String] {
+  ["/Mobile Documents/", "/CloudStorage/"].map { library + $0 }
+}
+
+// The rule on a path as the file system names it, with links resolved; `home` is the resolved home folder.
+func isReachablePath(_ path: String, home: String = resolvedHome) -> Bool {
+  let library = home + "/Library"
+  if path == library || path.hasPrefix(library + "/") { return reachableFolders(inLibrary: library).contains { path.hasPrefix($0) } }
+  if path.hasPrefix(home + "/") { return true }
+  return path.hasPrefix("/Volumes/") && !holdsAnotherLibraryOrBackup(path)
+}
+
+// Another volume can hold a copy of a home folder, such as a mounted system's Data volume, or Time Machine's
+// backups: their Library folders and backup trees are refused whole. A pattern, so iWork's scripts share it.
+let anotherLibraryOrBackup = #"/(users/[^/]+/library|backups\.backupdb|\.timemachine)(/|$)"#
+
+private func holdsAnotherLibraryOrBackup(_ path: String) -> Bool {
+  path.range(of: anotherLibraryOrBackup, options: [.regularExpression, .caseInsensitive]) != nil
 }
 
 // A path an operation may report: one in the reachable set, links resolved; nil for anything else, so a listing
 // does not reveal files outside it.
-func reportablePath(_ path: String) -> String? {
-  guard !path.isEmpty else { return nil }
-  let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-  return isReachablePath(resolved) ? path : nil
+func reportablePath(_ path: String) -> String? { reportablePath(path, home: resolvedHome) }
+
+func reportablePath(_ path: String, home: String) -> String? {
+  guard path.hasPrefix("/") else { return nil }
+  let resolved = resolvingExistingFolders(URL(fileURLWithPath: path).standardizedFileURL).path
+  return isReachablePath(resolved, home: home) ? path : nil
 }
 
 // Resolves links in the deepest folder that exists, since resolving skips a path that does not exist and a
@@ -35,22 +52,51 @@ private func resolvingExistingFolders(_ url: URL) -> URL {
   return rest.reduce(existing.resolvingSymlinksInPath()) { $0.appendingPathComponent($1) }
 }
 
+// An existing entry under the name the file system keeps for it, without following a link: a volume that ignores
+// case also finds ~/LIBRARY, which must meet the rule as Library. (File URLs give every name in one Unicode form.)
+private func onDiskName(_ url: URL) -> URL {
+  let given = url.lastPathComponent
+  guard let stored = try? url.resourceValues(forKeys: [.nameKey]).name, stored != given,
+    stored.compare(given, options: [.caseInsensitive]) == .orderedSame
+  else { return url }
+  return url.deletingLastPathComponent().appendingPathComponent(stored)
+}
+
+// The folder macOS guards as a whole that holds a path, such as Documents, iCloud Drive or a volume, to name it
+// when macOS keeps the helper out.
+private func guardedFolder(of path: String, home: String) -> String {
+  guard let base = [home, "/Volumes"].first(where: { path.hasPrefix($0 + "/") }) else { return (path as NSString).deletingLastPathComponent }
+  let depth = path.hasPrefix(home + "/Library/") ? 2 : 1
+  let parts = path.dropFirst(base.count).split(separator: "/").prefix(depth)
+  return ([base] + parts.map(String.init)).joined(separator: "/")
+}
+
+// Whether something exists at a path, without following a final link. A path macOS keeps from the helper, such as
+// a file in Documents before the user allows it, fails with permission_missing rather than passing for missing.
+func entryExists(_ path: String, home: String = resolvedHome) throws -> Bool {
+  var status = stat()
+  guard lstat(path, &status) != 0 else { return true }
+  guard [EPERM, EACCES].contains(errno) else { return false }
+  let folder = guardedFolder(of: path, home: home)
+  throw HelperError(code: "permission_missing", message: "macOS does not let Backstage reach \(folder). Ask the user to allow Backstage access to it in System Settings > Privacy & Security > Files and Folders, then try again.")
+}
+
 // Only the user's own files and external volumes; the home folder itself and anything else are refused. With
 // followingLink, a link is checked by where it leads, for operations that open what it points to; otherwise the
 // link itself is acted on, so only its folder is resolved.
-func userPath(_ arguments: JSON, key: String = "path", mustExist: Bool = true, followingLink: Bool = false) throws -> URL {
+func userPath(_ arguments: JSON, key: String = "path", mustExist: Bool = true, followingLink: Bool = false, home: String = resolvedHome) throws -> URL {
   let text = try string(arguments, key)
   let expanded = (text as NSString).expandingTildeInPath
   guard expanded.hasPrefix("/") else { throw HelperError(code: "invalid_arguments", message: "\(key) must be absolute or start with ~.") }
   let given = URL(fileURLWithPath: expanded).standardizedFileURL
   let url = followingLink
     ? resolvingExistingFolders(given)
-    : resolvingExistingFolders(given.deletingLastPathComponent()).appendingPathComponent(given.lastPathComponent)
+    : onDiskName(resolvingExistingFolders(given.deletingLastPathComponent()).appendingPathComponent(given.lastPathComponent))
   let path = url.path
-  guard isReachablePath(path) else {
+  guard isReachablePath(path, home: home) else {
     throw HelperError(code: "not_allowed", message: "Only files in your home folder, outside Library except iCloud Drive and cloud storage, or on external volumes are reachable.")
   }
-  if mustExist, (try? FileManager.default.attributesOfItem(atPath: path)) == nil { throw HelperError(code: "not_found", message: "\(path) does not exist.") }
+  if mustExist, try !entryExists(path, home: home) { throw HelperError(code: "not_found", message: "\(path) does not exist.") }
   return url
 }
 
@@ -78,17 +124,19 @@ func newCopyFolder(_ kind: CopyFolder) throws -> URL {
 
 // A file an allowed app may be handed: one of the user's own reachable files, or a copy Backstage made, such as a
 // recording, with links resolved.
-func openableFile(_ text: String) throws -> URL {
+func openableFile(_ text: String) throws -> URL { try openableFile(text, home: resolvedHome) }
+
+func openableFile(_ text: String, home: String) throws -> URL {
   let expanded = (text as NSString).expandingTildeInPath
   guard expanded.hasPrefix("/") else { throw HelperError(code: "invalid_arguments", message: "Each file must be absolute or start with ~.") }
   let url = URL(fileURLWithPath: expanded).standardizedFileURL.resolvingSymlinksInPath()
   let path = url.path
   let isCopy = CopyFolder.allCases.contains { path.hasPrefix("\(resolvedTemporaryFolder)/\($0.rawValue)/") }
-  guard isReachablePath(path) || isCopy else {
+  guard isReachablePath(path, home: home) || isCopy else {
     throw HelperError(code: "not_allowed", message: "\(text) is not reachable: only files in your home folder, outside Library except iCloud Drive and cloud storage, on external volumes, or copies Backstage made can be opened.")
   }
   var isFolder: ObjCBool = false
-  guard FileManager.default.fileExists(atPath: path, isDirectory: &isFolder), !isFolder.boolValue else {
+  guard try entryExists(path, home: home), FileManager.default.fileExists(atPath: path, isDirectory: &isFolder), !isFolder.boolValue else {
     throw HelperError(code: "not_found", message: "\(text) is not a file.")
   }
   return url
