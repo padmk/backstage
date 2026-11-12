@@ -60,10 +60,23 @@ jobs:
           path: out/
           if-no-files-found: error
 
+  tap-token:
+    # The formula is how users install, so a release without the tap token stops here, before anything is published.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions: {}
+    env:
+      HAS_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+    steps:
+      - name: Require the tap token
+        run: |
+          [ "$HAS_TAP_TOKEN" = true ] || { echo "HOMEBREW_TAP_TOKEN is not set in the release environment" >&2; exit 1; }
+
   publish:
     # Creates the GitHub release with the notes; runs none of the project's code.
     if: github.event_name == 'push'
-    needs: app
+    needs: [app, tap-token]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -107,16 +120,12 @@ jobs:
     environment: release
     permissions:
       contents: read
-    env:
-      HAS_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           sparse-checkout: packaging/homebrew
       - name: Update the Homebrew formula
-        # Skipped until the tap token is set up for this repository.
-        if: env.HAS_TAP_TOKEN == 'true'
         env:
           # git asks gh for credentials, so the token stays out of URLs and git config.
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
