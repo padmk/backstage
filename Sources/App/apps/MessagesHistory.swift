@@ -29,8 +29,8 @@ func messagesHistoryGranted() -> Bool {
   appGrants.first { $0.id == "messages-history" }.map { grantState($0) == .granted } ?? false
 }
 
-private func openDatabase() throws -> ReadOnlyDatabase {
-  let database = try ReadOnlyDatabase(path: messagesDatabasePath, appName: "Messages")
+func openMessagesDatabase(at path: String = messagesDatabasePath) throws -> ReadOnlyDatabase {
+  let database = try ReadOnlyDatabase(path: path, appName: "Messages")
   _ = try database.requireColumns(requiredColumns)
   return database
 }
@@ -48,27 +48,45 @@ private func text(_ value: Any??) -> String? {
 }
 
 // A chat by the id list_chats gives (its guid), else by the one handle or group id it is known by, else by its name;
-// more than one match is refused.
-private func chat(_ database: ReadOnlyDatabase, _ wanted: String) throws -> (key: Int64, id: String, name: String) {
+// more than one match is refused. A person reached over several services, such as iMessage and SMS, has a chat for
+// each under the same handle: those read as one conversation, addressed by the handle.
+private func chat(_ database: ReadOnlyDatabase, _ wanted: String) throws -> (keys: [Int64], id: String, name: String) {
   let rows = try database.rows("SELECT ROWID, guid, chat_identifier, display_name FROM chat")
   let tiers: [([String: Any?]) -> Bool] = [
     { text($0["guid"]) == wanted },
     { text($0["chat_identifier"]) == wanted },
     { text($0["display_name"])?.caseInsensitiveCompare(wanted) == .orderedSame },
   ]
-  for matches in tiers.map({ rows.filter($0) }) where !matches.isEmpty {
-    guard matches.count == 1, let row = matches.first, let key = int(row["ROWID"]) else {
-      throw HelperError(code: "ambiguous", message: "\(matches.count) chats match \(wanted). Use the id from list_chats.")
+  for (tier, matches) in tiers.map({ rows.filter($0) }).enumerated() where !matches.isEmpty {
+    let keys = matches.compactMap { int($0["ROWID"]) }
+    if matches.count == 1, let row = matches.first, let key = keys.first {
+      return ([key], text(row["guid"]) ?? "", text(row["display_name"]) ?? text(row["chat_identifier"]) ?? "")
     }
-    return (key, text(row["guid"]) ?? "", text(row["display_name"]) ?? text(row["chat_identifier"]) ?? "")
+    if tier == 1, keys.count == matches.count, try oneToOne(database, keys) {
+      return (keys, wanted, matches.lazy.compactMap { text($0["display_name"]) }.first ?? wanted)
+    }
+    throw HelperError(code: "ambiguous", message: "\(matches.count) chats match \(wanted). Use the id from list_chats.")
   }
   throw HelperError(code: "not_found", message: "No chat has the id, handle or name \(wanted). Use list_chats.")
+}
+
+// Whether none of the chats has more than one other participant, so chats sharing a handle are one person's.
+private func oneToOne(_ database: ReadOnlyDatabase, _ keys: [Int64]) throws -> Bool {
+  let rows = try database.rows("""
+    SELECT COUNT(*) AS participants FROM chat_handle_join WHERE chat_id IN (\(placeholders(keys.count))) GROUP BY chat_id
+    """, keys)
+  return rows.allSatisfy { (int($0["participants"]) ?? 0) <= 1 }
+}
+
+// ?1 to ?count, for a list of values bound first.
+private func placeholders(_ count: Int) -> String {
+  (1...count).map { "?\($0)" }.joined(separator: ", ")
 }
 
 // The chats as list_chats gives them, latest first, from the database: ids, names, participants' handles and when
 // the last message came.
 func messagesChatList(query: String?, limit: Int) throws -> JSON {
-  let database = try openDatabase()
+  let database = try openMessagesDatabase()
   let chats = try database.rows("""
     SELECT c.ROWID AS key, c.guid AS id, c.display_name AS name, c.chat_identifier AS identifier,
       (SELECT MAX(m.date) FROM chat_message_join j JOIN message m ON m.ROWID = j.message_id WHERE j.chat_id = c.ROWID) AS last
@@ -104,11 +122,15 @@ let messagesReadChat = Operation(
     Argument(name: "limit", kind: .integer, required: false, description: "Most messages to return, the latest in the range; default \(defaultMessages)", minimum: 1, maximum: maxMessages),
   ]
 ) { arguments in
-  let database = try openDatabase()
+  try readMessagesChat(openMessagesDatabase(), arguments)
+}
+
+func readMessagesChat(_ database: ReadOnlyDatabase, _ arguments: JSON) throws -> JSON {
   let found = try chat(database, try string(arguments, "chat"))
+  let inChat = "m.ROWID IN (SELECT message_id FROM chat_message_join WHERE chat_id IN (\(placeholders(found.keys.count))))"
   // Reactions and other messages that point at another one are left out; they are not messages of their own.
-  var conditions = ["j.chat_id = ?1", "IFNULL(m.associated_message_type, 0) = 0"]
-  var bindings: [Any?] = [found.key]
+  var conditions = [inChat, "IFNULL(m.associated_message_type, 0) = 0"]
+  var bindings: [Any?] = found.keys
   // Times are compared in seconds, whatever unit the database stores.
   let when = "(CASE WHEN m.date > \(Int64(nanosecondDates)) THEN m.date / 1000000000.0 ELSE m.date END)"
   for (key, comparison) in [("since", ">="), ("until", "<")] {
@@ -119,7 +141,7 @@ let messagesReadChat = Operation(
   }
   // By date, then id, as the messages are ordered, so messages sharing a time are neither skipped nor repeated.
   if let before = arguments["before"] as? Int {
-    let rows = try database.rows("SELECT \(when) AS at FROM message m JOIN chat_message_join j ON j.message_id = m.ROWID WHERE m.ROWID = ?1 AND j.chat_id = ?2", [before, found.key])
+    let rows = try database.rows("SELECT \(when) AS at FROM message m WHERE \(inChat) AND m.ROWID = ?\(found.keys.count + 1)", found.keys + [before])
     // Seconds come back as whole numbers from a database that stored them so.
     guard let at = rows.first.flatMap({ seconds($0["at"]) }) else {
       throw HelperError(code: "not_found", message: "Message \(before) is not in this chat.")
@@ -134,7 +156,7 @@ let messagesReadChat = Operation(
   let rows = try database.rows("""
     SELECT m.ROWID AS id, m.text AS body, m.attributedBody AS archived, m.date AS at, m.is_from_me AS mine,
       m.item_type AS kind, m.cache_has_attachments AS attached, h.id AS sender
-    FROM message m JOIN chat_message_join j ON j.message_id = m.ROWID LEFT JOIN handle h ON h.ROWID = m.handle_id
+    FROM message m LEFT JOIN handle h ON h.ROWID = m.handle_id
     WHERE \(conditions.joined(separator: " AND ")) ORDER BY \(when) DESC, m.ROWID DESC LIMIT \(count + 1)
     """, bindings)
   let attachmentsReadable = (try? database.requireColumns(attachmentColumns)) != nil
@@ -167,7 +189,7 @@ let messagesSaveAttachment = Operation(
     Argument(name: "index", kind: .integer, required: false, description: "Which of its attachments, from 0; default 0", minimum: 0),
   ]
 ) { arguments in
-  let database = try openDatabase()
+  let database = try openMessagesDatabase()
   _ = try database.requireColumns(attachmentColumns)
   let id = arguments["message"] as? Int ?? 0
   let rows = try database.rows("""

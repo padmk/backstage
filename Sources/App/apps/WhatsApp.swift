@@ -20,10 +20,16 @@ private let requiredColumns: [String: Set<String>] = [
   "ZWAMESSAGE": ["Z_PK", "ZCHATSESSION", "ZISFROMME", "ZMESSAGEDATE", "ZTEXT", "ZMESSAGETYPE"],
 ]
 
-private func openDatabase() throws -> (ReadOnlyDatabase, [String: Set<String>]) {
-  let database = try ReadOnlyDatabase(path: whatsAppDatabasePath, appName: "WhatsApp")
+// The database with the columns each table has.
+struct WhatsAppDatabase {
+  let database: ReadOnlyDatabase
+  let columns: [String: Set<String>]
+}
+
+func openWhatsAppDatabase(at path: String = whatsAppDatabasePath) throws -> WhatsAppDatabase {
+  let database = try ReadOnlyDatabase(path: path, appName: "WhatsApp")
   let found = try database.requireColumns(requiredColumns, optional: ["ZWAGROUPMEMBER", "ZWAMEDIAITEM", "ZWAPROFILEPUSHNAME"])
-  return (database, found)
+  return WhatsAppDatabase(database: database, columns: found)
 }
 
 // MARK: Values
@@ -65,7 +71,11 @@ private let listChats = Operation(
   name: "list_chats", summary: "List chats, latest first, with their ids, names and last message time", effect: .reads,
   arguments: [Argument(name: "query", kind: .string, required: false, description: "Only chats whose name or id contains this, ignoring case"), limitArgument]
 ) { arguments in
-  let (database, columns) = try openDatabase()
+  try whatsAppChatList(openWhatsAppDatabase(), arguments)
+}
+
+func whatsAppChatList(_ opened: WhatsAppDatabase, _ arguments: JSON) throws -> JSON {
+  let (database, columns) = (opened.database, opened.columns)
   let session = columns["ZWACHATSESSION"] ?? []
   let extras = ["ZUNREADCOUNT", "ZARCHIVED", "ZREMOVED"].filter(session.contains)
   // Removed chats stay in the database and are left out; chats without any message yet too, and the status
@@ -113,7 +123,11 @@ private let readChat = Operation(
     Argument(name: "limit", kind: .integer, required: false, description: "Most messages to return, the latest in the range; default \(defaultMessages)", minimum: 1, maximum: maxMessages),
   ]
 ) { arguments in
-  let (database, columns) = try openDatabase()
+  try whatsAppReadChat(openWhatsAppDatabase(), arguments)
+}
+
+func whatsAppReadChat(_ opened: WhatsAppDatabase, _ arguments: JSON) throws -> JSON {
+  let (database, columns) = (opened.database, opened.columns)
   let chat = try chatKey(database, try string(arguments, "chat"))
   let message = columns["ZWAMESSAGE"] ?? []
   let member = columns["ZWAGROUPMEMBER"] ?? []
@@ -192,7 +206,8 @@ private let saveMedia = Operation(
   name: "save_media", summary: "Copy a message's photo, video, audio or document to a temporary file and give its path", effect: .reads,
   arguments: [Argument(name: "message", kind: .integer, required: true, description: "Message id from read_chat, of a message with media: true", minimum: 1)]
 ) { arguments in
-  let (database, columns) = try openDatabase()
+  let opened = try openWhatsAppDatabase()
+  let (database, columns) = (opened.database, opened.columns)
   guard (columns["ZWAMESSAGE"] ?? []).contains("ZMEDIAITEM"), (columns["ZWAMEDIAITEM"] ?? []).isSuperset(of: ["Z_PK", "ZMEDIALOCALPATH"]) else {
     throw HelperError(code: "unsupported_format", message: "This WhatsApp version keeps attachments in a format Backstage does not know.")
   }
