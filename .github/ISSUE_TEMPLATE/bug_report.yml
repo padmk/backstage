@@ -1,0 +1,45 @@
+name: Bug report
+description: Something in the app, the command or a tool does not work as described.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you or the agent did, step by step, what you expected and what happened instead. Include the tool call and its reply when a tool misbehaves.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `backstage doctor`
+      description: It lists the apps on your list with their grants; remove any you do not want to show.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Backstage version
+      description: The output of `backstage version`.
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      description: The output of `sw_vers -productVersion`.
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: MCP client
+      description: The client and its version, such as Claude Code or Codex and what its `--version` prints.
+    validations:
+      required: true
+  - type: input
+    id: app
+    attributes:
+      label: App being operated
+      description: The app and its version, if the problem is with one app.

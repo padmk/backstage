@@ -1,0 +1,7 @@
+# Proposes updates of the pinned GitHub Actions; the package has no dependencies.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

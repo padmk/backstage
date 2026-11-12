@@ -8,9 +8,16 @@ on:
 permissions:
   contents: read
 
+# macOS runners are expensive, so a newer push to the same branch or pull request cancels the run before it.
+# release.yml requires the tagged commit's run to have passed: tag the latest commit of main, or rerun its ci.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
-    runs-on: macos-latest
+    # The package needs macOS 26 and Swift 6.2, which this image's Xcode 26 provides.
+    runs-on: macos-26
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
