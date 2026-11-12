@@ -3,6 +3,7 @@
 // waits on the Apps tab until the user adds or declines it there. Removing an app narrows access and stays direct.
 
 import AppKit
+import HelperLink
 
 struct ApprovalRequest: Identifiable, Equatable {
   let app: AppIdentity
@@ -32,15 +33,26 @@ enum ApprovalRequests {
     }
   }
 
-  static func remove(_ bundleId: String) {
-    lock.withLock { waiting.removeAll { $0.app.bundleId == bundleId } }
+  // Returns whether the request was still waiting, so each one is answered once.
+  @discardableResult
+  static func remove(_ bundleId: String) -> Bool {
+    lock.withLock {
+      let before = waiting.count
+      waiting.removeAll { $0.app.bundleId == bundleId }
+      return waiting.count != before
+    }
   }
 }
 
+// Only a bare build started with --home has a home of its own; any other uses the user's files.
+private var hasTestHome: Bool {
+  Bundle.main.bundleIdentifier == nil && Configuration.directories.approvalsPath != Directories().approvalsPath
+}
+
 // An app asked for over the socket: a test build in a home of its own, which holds no permissions, adds it at once;
-// the app itself shows the request for the user to answer.
+// any other build shows the request for the user to answer.
 func requestAddition(_ app: AppIdentity, client: String?) throws -> JSON {
-  if Bundle.main.bundleIdentifier == nil {
+  if hasTestHome {
     try addToList(app, by: commandLineClient)
     return ["added": app.bundleId, "name": app.name] as JSON
   }
