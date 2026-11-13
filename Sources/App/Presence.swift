@@ -17,7 +17,13 @@ private let ownInputMarginSeconds = 0.1
 
 private let inputLock = NSLock()
 private var ownSystemInputAt = Date.distantPast
-private var lastBackgroundInput: (location: CGPoint, time: Date)?
+// The apps whose window on top took the user's scrolling, dragging or clicking, with when it last did.
+private var backgroundInputTimes: [pid_t: Date] = [:]
+// The last event's point and app, reused while the pointer stays put, as during a scroll, and through a drag, so the
+// window list is not read for every event. Touched on the main thread only.
+private var lastInputTarget: (location: CGPoint, pid: pid_t, time: Date)?
+private let sameTargetSeconds = 0.25
+private let sameTargetDistance = 4.0
 private var backgroundInputMonitor: Any?
 
 // When Backstage last posted input to the whole system (a click with foreground) or put the pointer back.
@@ -33,8 +39,8 @@ private func secondsSinceOwnSystemInput() -> Double {
   return Date().timeIntervalSince(ownSystemInputAt)
 }
 
-// A window in the background takes scrolling, dragging and clicks without its app coming forward, so where each
-// went is kept as it happens: the window under that point tells the app, not where the pointer is now. Moving the
+// A window in the background takes scrolling, dragging and clicks without its app coming forward, so the app each
+// went to is noted as it happens, from the window on top at its point then, not from where the pointer is now. Moving the
 // pointer across a window on the way elsewhere is not counted. Events Backstage posted carry its process id and are
 // left out. Started once, on the main thread.
 func startWatchingBackgroundInput() {
@@ -43,8 +49,22 @@ func startWatchingBackgroundInput() {
     .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
   backgroundInputMonitor = NSEvent.addGlobalMonitorForEvents(matching: types) { event in
     guard let input = event.cgEvent, input.getIntegerValueField(.eventSourceUnixProcessID) != ownPid else { return }
+    let now = Date()
+    let location = input.location
+    let pid: pid_t?
+    // A drag goes on to the window its press went to, wherever the pointer moves.
+    let isDrag = [.leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(event.type)
+    if let last = lastInputTarget, now.timeIntervalSince(last.time) < sameTargetSeconds,
+      isDrag || hypot(last.location.x - location.x, last.location.y - location.y) < sameTargetDistance {
+      pid = last.pid
+    } else {
+      pid = topWindowOwner(at: location)
+    }
+    guard let pid else { return }
+    lastInputTarget = (location, pid, now)
     inputLock.lock()
-    lastBackgroundInput = (input.location, Date())
+    backgroundInputTimes = backgroundInputTimes.filter { now.timeIntervalSince($0.value) < userActiveSeconds }
+    backgroundInputTimes[pid] = now
     inputLock.unlock()
   }
 }
@@ -60,30 +80,29 @@ private func secondsSinceUserInput(_ types: [CGEventType]) -> Double {
   }.min() ?? .infinity
 }
 
-// The visible window at a point, top first, belongs to the app.
-private func topWindow(at location: CGPoint, belongsTo pid: pid_t) -> Bool {
+// The app of the visible window on top at a point.
+private func topWindowOwner(at location: CGPoint) -> pid_t? {
   guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [JSON]
-  else { return false }
+  else { return nil }
   let top = windows.first { window in
     guard (window[kCGWindowAlpha as String] as? Double ?? 1) > 0,
       let bounds = window[kCGWindowBounds as String] as? NSDictionary,
       let frame = CGRect(dictionaryRepresentation: bounds) else { return false }
     return frame.contains(location)
   }
-  return (top?[kCGWindowOwnerPID as String] as? Int).map { pid_t($0) == pid } ?? false
+  return (top?[kCGWindowOwnerPID as String] as? Int).map { pid_t($0) }
 }
 
 private func pointerIsOverWindow(of pid: pid_t) -> Bool {
   guard let location = CGEvent(source: nil)?.location else { return false }
-  return topWindow(at: location, belongsTo: pid)
+  return topWindowOwner(at: location) == pid
 }
 
 private func recentBackgroundInput(in pid: pid_t) -> Bool {
   inputLock.lock()
-  let input = lastBackgroundInput
+  let time = backgroundInputTimes[pid]
   inputLock.unlock()
-  guard let input, Date().timeIntervalSince(input.time) < userActiveSeconds else { return false }
-  return topWindow(at: input.location, belongsTo: pid)
+  return time.map { Date().timeIntervalSince($0) < userActiveSeconds } ?? false
 }
 
 // In the front app the user's typing and clicking count wherever the pointer is, and pointer input over its window on
