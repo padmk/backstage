@@ -32,9 +32,10 @@ private let writeSeconds: TimeInterval = 10
 // Run through sh, whose quoting Fish, zsh and Bash pass on alike, whatever the login shell there is.
 private let remoteCommand: String = {
   let commands = Product.appLocations.map { location in
-    location.replacingOccurrences(of: NSHomeDirectory(), with: "$HOME") + "/" + Product.commandRelativePath
+    "\"" + location.replacingOccurrences(of: NSHomeDirectory(), with: "$HOME") + "/" + Product.commandRelativePath + "\""
   }
-  return "/bin/sh -c 'for command in \(commands.joined(separator: " ")); do test -x $command && exec $command mcp; done; "
+  // Quoted, so a home folder with a space in its path stays one path.
+  return "/bin/sh -c 'for command in \(commands.joined(separator: " ")); do test -x \"$command\" && exec \"$command\" mcp; done; "
     + "echo \(Product.appName) is not installed there >&2; exit 127'"
 }()
 
