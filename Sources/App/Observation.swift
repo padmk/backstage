@@ -126,7 +126,7 @@ func windowState(app: AppIdentity, params: JSON, session: ApprovalSession) throw
     do {
       // The window the tree came from, also when it was a subtree.
       let root = try (params["root"] as? Int).map { try session.table.element($0, pid: app.pid) }
-      let window = try root.flatMap { attribute($0, kAXWindowAttribute).map { $0 as! AXUIElement } }
+      let window = try root.flatMap { elementAttribute($0, kAXWindowAttribute) }
         ?? selectWindow(try applicationElement(app), params: params)
       reply.merge(try captureWindow(pid: app.pid, window: window)) { current, _ in current }
     } catch let error as HelperError {

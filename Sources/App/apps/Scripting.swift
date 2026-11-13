@@ -37,6 +37,7 @@ func runScript(_ body: String, arguments: JSON = [:], target: String, timeout: T
   let child = try runChild(osascript, ["-l", "JavaScript", "-e", source], input: input, target: target, timeout: timeout)
   return try reportingChange(child, target: target) {
     let text = child.output.trimmingCharacters(in: .whitespacesAndNewlines)
+    // An answer that does not parse is reported as unreadable; the parser's reason names no fix.
     guard let data = text.data(using: .utf8), let value = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
       throw HelperError(code: "action_failed", message: "\(target) gave an answer that could not be read.")
     }
@@ -67,6 +68,7 @@ func runAppleScript(_ source: String, arguments: [String], target: String, timeo
 
 // A string as a JavaScript literal.
 private func jsonText(_ text: String) -> String {
+  // An array of one string always serializes.
   let data = (try? JSONSerialization.data(withJSONObject: [text], options: [.fragmentsAllowed])) ?? Data("[\"\"]".utf8)
   return String(String(decoding: data, as: UTF8.self).dropFirst().dropLast())
 }
@@ -90,6 +92,7 @@ private func reportingChange<Value>(_ child: ChildRun, target: String, details g
   } catch let error as HelperError {
     guard let mark = marks.last, error.code != "outcome_unknown" else { throw error }
     var details = mark.dropFirst(changeMarker.count).trimmingCharacters(in: .whitespaces)
+    // The details come from the catalog's own scripts as strings and numbers, which serialize.
     if details.isEmpty || details == "{}", !given.isEmpty, let data = try? JSONSerialization.data(withJSONObject: given, options: [.sortedKeys]) {
       details = String(decoding: data, as: UTF8.self)
     }
@@ -146,7 +149,9 @@ func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target:
   if let input, let inputPipe {
     _ = fcntl(inputPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
     DispatchQueue.global().async {
+      // A child that ended first fails the write; its exit status reports what happened.
       try? inputPipe.fileHandleForWriting.write(contentsOf: input)
+      // A child that ended first fails the write; its exit status reports what happened.
       try? inputPipe.fileHandleForWriting.close()
     }
   }

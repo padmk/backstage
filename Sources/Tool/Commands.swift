@@ -45,6 +45,7 @@ private func register() -> Bool {
   let server = [installedCommandPath, "mcp"]
   for client in mcpClients {
     guard let command = findCommand(client.command) else { continue }
+    // Removing first only clears an old entry; one that is not there fails harmlessly.
     _ = try? runProcess(command, client.remove(Product.commandName), timeout: 60, allowFailure: true)
     let arguments = client.add(Product.commandName, server)
     do {
@@ -61,6 +62,7 @@ private func register() -> Bool {
 }
 
 private func openPane(_ pane: String) {
+  // Opening System Settings only helps; the printed text says where to go.
   _ = try? runProcess("/usr/bin/open", [Product.privacyPaneURL(pane)], timeout: 15, allowFailure: true)
 }
 
@@ -82,6 +84,7 @@ private func waitForAccessibility(_ helper: HelperClient) -> Bool {
   let started = Date()
   var shownPane = false
   while Date().timeIntervalSince(started) < grantWait {
+    // A helper that does not answer yet is asked again until the deadline.
     if let current = try? helper.request("status") as? JSON, current["accessibility"] as? Bool == true { return true }
     if !shownPane {
       openPane("Privacy_Accessibility")
@@ -96,6 +99,7 @@ private func waitForAccessibility(_ helper: HelperClient) -> Bool {
 }
 
 private func resetGrant(_ service: String) {
+  // The failure is printed; tccutil's reason adds nothing the user can act on.
   if (try? runProcess("/usr/bin/tccutil", ["reset", service, Product.bundleIdentifier], timeout: 30)) == nil {
     printLine("Could not reset \(service).")
   }
@@ -141,9 +145,11 @@ private func setup(register shouldRegister: Bool) throws -> Int32 {
   } else if granted {
     // A running helper would only bring back its last tab, so a fresh one is opened on Apps.
     let helper = client()
+    // A helper that is not running has nothing to quit.
     _ = try? helper.request("quit")
     helper.close()
     Thread.sleep(forTimeInterval: 0.5)
+    // Opening the window only helps; setup has finished either way.
     _ = try? runProcess("/usr/bin/open", [Product.installedAppPath, "--args", Product.tabArgument, "apps"], timeout: 15, allowFailure: true)
     printLine("\(Product.appName) is open: on the Apps tab, add the apps agents may use, or turn on Allow every app. macOS asks once for what an added app's ready operations need. Screen Recording, for screenshots, is optional, on the Setup tab.")
   }
@@ -228,11 +234,13 @@ private func uninstall(reset: Bool) throws -> Int32 {
     return 1
   }
   let helper = HelperClient(directories: directories, managesHelper: false, expectedBuild: nil)
+  // A helper that is not running has nothing to prepare.
   _ = try? helper.request("prepare_uninstall")
   helper.close()
   Thread.sleep(forTimeInterval: 0.5)
   for client in mcpClients {
     guard let command = findCommand(client.command) else { continue }
+    // Only the clients whose entry was removed are reported; the others are left as they are.
     if (try? runProcess(command, client.remove(Product.commandName), timeout: 60)) != nil {
       printLine("Removed the \"\(Product.commandName)\" MCP server from \(client.name).")
     }
@@ -251,7 +259,9 @@ private func uninstall(reset: Bool) throws -> Int32 {
       try FileManager.default.trashItem(at: URL(fileURLWithPath: directory), resultingItemURL: nil)
       printLine("Moved \(directory) to the Trash.")
     }
+    // Nothing to delete is no failure of an uninstall.
     _ = try? runProcess("/usr/bin/defaults", ["delete", Product.bundleIdentifier], timeout: 15, allowFailure: true)
+    // Nothing to reset is no failure of an uninstall.
     _ = try? runProcess("/usr/bin/tccutil", ["reset", "All", Product.bundleIdentifier], timeout: 30, allowFailure: true)
     printLine("Removed the macOS permissions of \(Product.appName) and what macOS keeps for it, such as window sizes.")
   } else {

@@ -144,7 +144,9 @@ private enum Fetched {
 // that arrives after that changes nothing.
 private func fetch(_ resource: PHAssetResource, to url: URL, network: Bool) -> Fetched {
   guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]),
+    // The failure is reported; the reason adds nothing the agent can act on.
     let file = try? FileHandle(forWritingTo: url) else { return .failed("The copy could not be written.") }
+  // Writes are not buffered, so a failed close loses nothing.
   defer { try? file.close() }
   let options = PHAssetResourceRequestOptions()
   options.isNetworkAccessAllowed = network
@@ -240,19 +242,23 @@ private let export = Operation(
   var outcome = fetch(resource, to: original, network: false)
   if case .needsNetwork = outcome {
     downloaded = true
+    // Only the downloaded original; the copy made from it is the result.
     try? FileManager.default.removeItem(at: original)
     outcome = fetch(resource, to: original, network: true)
   }
   switch outcome {
   case .done: break
   case .needsNetwork, .failed:
+    // A folder left behind on failure holds no result and only takes space.
     try? FileManager.default.removeItem(at: folder)
     if case .failed(let reason) = outcome { throw HelperError(code: "action_failed", message: "The item could not be copied: \(reason)") }
     throw HelperError(code: "not_found", message: "The item is in iCloud and could not be downloaded.")
   case .tooLarge:
+    // A folder left behind on failure holds no result and only takes space.
     try? FileManager.default.removeItem(at: folder)
     throw HelperError(code: "action_failed", message: "The item is larger than \(maxExportBytes >> 30) GB, so it was not copied.")
   case .timedOut:
+    // A folder left behind on failure holds no result and only takes space.
     try? FileManager.default.removeItem(at: folder)
     throw HelperError(code: "timeout", message: "Copying the item took longer than \(Int(exportSeconds)) s\(downloaded ? ", downloading it from iCloud" : "").")
   }
@@ -263,6 +269,7 @@ private let export = Operation(
     // Drawn from the original with its orientation applied and no metadata, so no location travels with it.
     path = folder.appendingPathComponent(((name as NSString).deletingPathExtension) + ".jpg")
     let pixels = arguments["max_pixels"] as? Int ?? defaultJPEGPixels
+    // Only the original the JPEG is made from; the JPEG is the result.
     defer { try? FileManager.default.removeItem(at: original) }
     guard let source = CGImageSourceCreateWithURL(original as CFURL, nil),
       let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
@@ -271,11 +278,13 @@ private let export = Operation(
       ] as CFDictionary),
       let destination = CGImageDestinationCreateWithURL(path as CFURL, UTType.jpeg.identifier as CFString, 1, nil)
     else {
+      // A folder left behind on failure holds no result and only takes space.
       try? FileManager.default.removeItem(at: folder)
       throw HelperError(code: "action_failed", message: "The photo could not be turned into a JPEG.")
     }
     CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
     guard CGImageDestinationFinalize(destination) else {
+      // A folder left behind on failure holds no result and only takes space.
       try? FileManager.default.removeItem(at: folder)
       throw HelperError(code: "action_failed", message: "The JPEG could not be written.")
     }
@@ -292,8 +301,10 @@ private let export = Operation(
       result["may_contain_location"] = true
     }
   }
+  // A file whose size cannot be read counts as empty, which fails the export.
   let size = (try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? Int) ?? 0
   guard size > 0 else {
+    // A folder left behind on failure holds no result and only takes space.
     try? FileManager.default.removeItem(at: folder)
     throw HelperError(code: "action_failed", message: "The copy came out empty.")
   }

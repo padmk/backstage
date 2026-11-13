@@ -72,6 +72,7 @@ let permissionStatesArgument = "--permission-states"
 
 func printPermissionStates() {
   let states = Dictionary(uniqueKeysWithValues: SystemPermission.allCases.map { ($0.rawValue, permissionState($0).rawValue) })
+  // A dictionary of strings always serializes.
   if let data = try? JSONSerialization.data(withJSONObject: states) { FileHandle.standardOutput.write(data) }
 }
 
@@ -85,9 +86,11 @@ func permissionStatesNow() -> [SystemPermission: PermissionState]? {
   let output = Pipe()
   process.standardOutput = output
   process.standardError = FileHandle.nullDevice
+  // nil is "could not tell", which callers treat as not granted yet.
   guard (try? process.run()) != nil else { return nil }
   let data = output.fileHandleForReading.readDataToEndOfFile()
   process.waitUntilExit()
+  // nil is "could not tell", which callers treat as not granted yet.
   guard let states = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return nil }
   return Dictionary(uniqueKeysWithValues: states.compactMap { key, value in
     SystemPermission(rawValue: key).flatMap { permission in PermissionState(rawValue: value).map { (permission, $0) } }

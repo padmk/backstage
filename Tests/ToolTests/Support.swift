@@ -24,6 +24,7 @@ final class TemporaryHome {
     path = template.withUnsafeMutableBufferPointer { String(cString: mkdtemp($0.baseAddress!)) }
   }
 
+  // A temporary folder left behind only takes space.
   deinit { try? FileManager.default.removeItem(atPath: path) }
 
   var socketPath: String { path + "/helper.sock" }
@@ -45,6 +46,7 @@ struct TestFailure: Error, CustomStringConvertible {
 }
 
 func parseLine(_ line: String) -> Object? {
+  // A line that is not JSON is no message; callers wait for one that is.
   (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? Object
 }
 
@@ -197,6 +199,7 @@ final class ServerProcess: @unchecked Sendable {
 
   func write(_ text: String) { input.fileHandleForWriting.write(Data((text + "\n").utf8)) }
 
+  // The server may have closed it already.
   func closeInput() { try? input.fileHandleForWriting.close() }
 
   func waitForExit(timeout: TimeInterval = 10) throws -> (status: Int32, reason: Process.TerminationReason) {

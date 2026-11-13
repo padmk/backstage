@@ -286,6 +286,7 @@ final class RemoteLink: @unchecked Sendable {
   }
 
   private func receive(_ line: String) {
+    // Lines that are no reply, such as a login banner, are skipped.
     guard let message = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? JSON,
       let id = (message["id"] as? NSNumber)?.intValue else { return }
     lock.withLock { waiting.removeValue(forKey: id) }?(message)

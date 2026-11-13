@@ -352,6 +352,7 @@ private func serve(_ descriptor: Int32) {
         write(["id": NSNull(), "error": ["code": "request_too_large", "message": "A request is larger than \(maxFrameBytes >> 20) MB."]], to: connection)
         continue
       }
+      // Answered as invalid_request; the parser's detail does not help a client fix it.
       guard let request = try? JSONSerialization.jsonObject(with: line) as? JSON else {
         write(["id": NSNull(), "error": ["code": "invalid_request", "message": "Not a JSON object."]], to: connection)
         continue
@@ -385,6 +386,7 @@ private func serve(_ descriptor: Int32) {
 // then renamed into place, so a client that sees the file can connect.
 private func listen(at path: String) -> Int32? {
   let directory = (path as NSString).deletingLastPathComponent
+  // A directory that cannot be made fails the bind below, which reports it.
   try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
   func address(_ path: String) -> sockaddr_un? {
     var address = sockaddr_un()

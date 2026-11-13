@@ -44,11 +44,13 @@ private final class RemoteSetup {
   }
 
   var sshRuns: [String] {
+    // No log yet means ssh never ran.
     ((try? String(contentsOfFile: sshLog, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
   }
 
   // Ends the other Mac's server, as a dropped connection would.
   func dropConnection() throws {
+    // No pid file yet means the other Mac's server has not started; until tries again.
     let pid = try until { (try? String(contentsOfFile: remotePidFile, encoding: .utf8)).flatMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) } }
     kill(pid, SIGKILL)
   }
@@ -104,6 +106,7 @@ private final class RemoteSetup {
     try setup.dropConnection()
     try until { setup.remoteHelper.all("list_apps").count == 1 ? true : nil }
     let reopened = try until { () -> Object? in
+      // A call before the connection opened again fails and is tried again.
       let result = try? setup.server.call("list_apps", ["computer": "mbp"])
       return result.flatMap { textOf($0).contains("opened again") ? $0 : nil }
     }

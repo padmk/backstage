@@ -11,12 +11,15 @@ private let loadCommandUUID: UInt32 = 0x1B
 // The UUID of a thin 64-bit Mach-O file, or nil when the file is missing or is not one.
 public func buildIdentity(ofExecutableAt path: String) -> String? {
   guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+  // Closing a handle that was only read from loses nothing.
   defer { try? handle.close() }
+  // A file that cannot be read has no identity, as the comment above says.
   guard let header = try? handle.read(upToCount: MemoryLayout<mach_header_64>.size), header.count == MemoryLayout<mach_header_64>.size else { return nil }
   let magic = header.withUnsafeBytes { $0.load(fromByteOffset: 0, as: UInt32.self) }
   guard magic == MH_MAGIC_64 else { return nil }
   let commandCount = header.withUnsafeBytes { $0.load(fromByteOffset: 16, as: UInt32.self) }
   let commandsSize = header.withUnsafeBytes { $0.load(fromByteOffset: 20, as: UInt32.self) }
+  // A file that cannot be read has no identity, as the comment above says.
   guard commandsSize < 1 << 20, let commands = try? handle.read(upToCount: Int(commandsSize)), commands.count == Int(commandsSize) else { return nil }
   var offset = 0
   for _ in 0..<commandCount {

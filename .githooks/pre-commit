@@ -1,0 +1,13 @@
+#!/bin/bash
+# Lints the Swift files a commit changes with the rules in .swiftlint.yml, as CI does. `make hooks` installs it.
+set -euo pipefail
+
+files=()
+while IFS= read -r -d '' file; do files+=("$file"); done < <(git diff --cached --name-only --diff-filter=ACMR -z -- '*.swift')
+[ ${#files[@]} -eq 0 ] && exit 0
+
+if ! command -v swiftlint >/dev/null 2>&1; then
+  echo "pre-commit: swiftlint is not installed; install it with 'brew install swiftlint', or commit with --no-verify to skip." >&2
+  exit 1
+fi
+swiftlint lint --strict --quiet --force-exclude -- "${files[@]}"

@@ -53,6 +53,7 @@ private func resolvingExistingFolders(_ url: URL) -> URL {
 // case also finds ~/LIBRARY, which must meet the rule as Library. (File URLs give every name in one Unicode form.)
 private func onDiskName(_ url: URL) -> URL {
   let given = url.lastPathComponent
+  // A name that cannot be read is checked as given, which the rule refuses when it should.
   guard let stored = try? url.resourceValues(forKeys: [.nameKey]).name, stored != given,
     stored.compare(given, options: [.caseInsensitive]) == .orderedSame
   else { return url }

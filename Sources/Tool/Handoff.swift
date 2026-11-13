@@ -38,6 +38,7 @@ func toolsDigest() -> String {
 // Writes the state and the input to an unlinked private file and execs the installed command with it. Returns only
 // when that fails, leaving this process as it was.
 func execInstalledCommand(state: HandoffState, input: Data, directories: Directories) -> Bool {
+  // Without the directory there is no handoff, and the session stays with this command.
   guard (try? ensurePrivateDirectory(directories.state)) != nil else { return false }
   let template = directories.state + "/handoff.XXXXXX"
   var path = Array(template.utf8CString)
@@ -97,6 +98,7 @@ func readResume(arguments: [String]) -> (HandoffState, Data)? {
     contents.append(contentsOf: buffer[0..<count])
   }
   guard let end = contents.firstIndex(of: 0x0A),
+    // A state file that does not parse is not resumed, and the session starts anew.
     let header = try? JSONSerialization.jsonObject(with: contents[contents.startIndex..<end]) as? JSON else { return nil }
   let state = HandoffState(clientName: header["client_name"] as? String, toolsDigest: header["tools_digest"] as? String ?? "",
                            generation: header["generation"] as? Int ?? 1, computers: header["computers"] as? [String] ?? [],

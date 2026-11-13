@@ -39,6 +39,7 @@ final class Fixture {
   }
 
   func events() -> [Object] {
+    // No log yet means no events yet.
     guard let text = try? String(contentsOfFile: logPath, encoding: .utf8) else { return [] }
     return text.split(separator: "\n").compactMap { parseLine(String($0)) }
   }
@@ -46,6 +47,7 @@ final class Fixture {
   func events(_ name: String) -> [Object] { events().filter { $0["event"] as? String == name } }
 
   deinit {
+    // A fixture that is not running has nothing to stop.
     _ = try? run("/usr/bin/pkill", ["-f", bundle + "/Contents/MacOS/fixture"])
   }
 }
@@ -54,6 +56,7 @@ final class Fixture {
 // certificate across builds; ad hoc otherwise.
 private func sign(_ bundle: String) throws {
   let data = NSHomeDirectory() + "/.local/share/backstage"
+  // No identity file means no Backstage certificate on this Mac; the fixture stays signed ad hoc.
   if let hash = try? String(contentsOfFile: data + "/signing.identity", encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
      FileManager.default.fileExists(atPath: data + "/signing.keychain-db") {
     try run("/usr/bin/security", ["unlock-keychain", "-p", "", data + "/signing.keychain-db"])
@@ -263,12 +266,14 @@ struct LiveTests {
     #expect(!textOf(modal).contains("action_failed"))
     let listed = parseLine(textOf(try server.call("list_apps", app: nil)))?["apps"] as? [Object] ?? []
     #expect(listed.contains { $0["bundle_id"] as? String == fixtureBundleId })
+    // A read that fails is reported through the findings below.
     let afterModal = (try? server.read(["window": 0])) ?? ""
     if let close = afterModal.split(separator: "\n").first(where: { $0.contains("Close Modal") }) {
       _ = try server.call("press", ["element": Int(close.trimmingCharacters(in: .whitespaces).split(separator: " ")[0])!])
     } else {
       _ = try server.call("press_key", ["key": "return"])
     }
+    // The timeout is the finding.
     if (try? until(timeout: 8) { fixture.events("modal_closed").count == 1 ? true : nil }) == nil { findings.append("Could not close the modal in the background.") }
     Thread.sleep(forTimeInterval: 0.5)
     #expect(try frontApp() == frontBefore)

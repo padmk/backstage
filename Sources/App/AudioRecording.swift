@@ -134,6 +134,7 @@ func showAudioCapturePrompt() {
   var tap = AudioObjectID(kAudioObjectUnknown)
   guard AudioHardwareCreateProcessTap(description, &tap) == noErr else { return }
   defer { AudioHardwareDestroyProcessTap(tap) }
+  // Only the prompt is wanted; without a device macOS shows none, and the Setup tab still says what to allow.
   guard let device = try? aggregateDevice(tapping: description) else { return }
   defer { AudioHardwareDestroyAggregateDevice(device) }
   var procedure: AudioDeviceIOProcID?
@@ -297,6 +298,7 @@ func recordAudio(app: AppIdentity, params: JSON, session: ApprovalSession, conne
     try recorder.start(writingTo: url)
   } catch {
     recorder.stop()
+    // A folder left behind on failure holds no result and only takes space.
     try? FileManager.default.removeItem(at: folder)
     throw error
   }
@@ -320,12 +322,14 @@ func recordAudio(app: AppIdentity, params: JSON, session: ApprovalSession, conne
     }
   } catch {
     recorder.stop()
+    // A folder left behind on failure holds no result and only takes space.
     try? FileManager.default.removeItem(at: folder)
     throw error
   }
   recorder.stop()
   let heard = recorder.state
   if let problem = heard.writeError {
+    // A folder left behind on failure holds no result and only takes space.
     try? FileManager.default.removeItem(at: folder)
     throw HelperError(code: "action_failed", message: "The recording could not be written: \(problem)")
   }

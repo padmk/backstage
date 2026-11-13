@@ -2,6 +2,8 @@
 #   make app       build/Backstage.app, signed ad hoc; `setup` signs the installed copy with this Mac's identity
 #   make install   make app, then run its setup: install into /Applications, permissions, MCP registration
 #   make test      the tests (Swift Testing; the live ones need LIVE=1, an installed app and its permissions)
+#   make lint      SwiftLint with .swiftlint.yml (brew install swiftlint)
+#   make hooks     lint the Swift files of each commit before it is made (.githooks/pre-commit)
 #   make live      the live test against the installed app (needs its Accessibility; operates a test app in the background)
 #   make bench     latency against the installed app
 #   make check     what CI runs
@@ -22,7 +24,7 @@ SWIFT_BUILD := swift build -c release --arch arm64 $(SWIFT_BUILD_FLAGS)
 BUILD = $(shell $(SWIFT_BUILD) --show-bin-path)
 APP := build/$(APP_NAME).app
 
-.PHONY: app install test live bench check clean
+.PHONY: app install test lint hooks live bench check clean
 
 app:
 	$(SWIFT_BUILD) --product $(APP_NAME)
@@ -47,13 +49,19 @@ install: app
 test:
 	swift test
 
+lint:
+	swiftlint lint --strict --quiet
+
+hooks:
+	git config core.hooksPath .githooks
+
 live:
 	LIVE=1 swift test --filter LiveTests
 
 bench:
 	BENCH=1 swift test --filter BenchTests
 
-check: app test
+check: lint app test
 
 clean:
 	rm -rf build .build

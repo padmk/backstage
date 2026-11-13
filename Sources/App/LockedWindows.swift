@@ -29,7 +29,7 @@ func lockedWindows(pid: pid_t) -> [LockedWindow] {
     guard info[kCGWindowOwnerPID as String] as? pid_t == pid, info[kCGWindowLayer as String] as? Int == 0,
       info[kCGWindowIsOnscreen as String] as? Bool == true,
       let number = info[kCGWindowNumber as String] as? CGWindowID,
-      let box = info[kCGWindowBounds as String], let bounds = CGRect(dictionaryRepresentation: box as! CFDictionary),
+      let box = info[kCGWindowBounds as String] as? NSDictionary, let bounds = CGRect(dictionaryRepresentation: box as CFDictionary),
       bounds.width > 1, bounds.height > 1
     else { return nil }
     return LockedWindow(number: number, title: info[kCGWindowName as String] as? String ?? "", bounds: bounds)

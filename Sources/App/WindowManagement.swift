@@ -74,7 +74,7 @@ private func serverWindows() -> [ServerWindow] {
     guard info[kCGWindowLayer as String] as? Int == 0,
       let id = info[kCGWindowNumber as String] as? CGWindowID,
       let pid = info[kCGWindowOwnerPID as String] as? pid_t,
-      let box = info[kCGWindowBounds as String], let frame = CGRect(dictionaryRepresentation: box as! CFDictionary),
+      let box = info[kCGWindowBounds as String] as? NSDictionary, let frame = CGRect(dictionaryRepresentation: box as CFDictionary),
       frame.width > 1, frame.height > 1
     else { return nil }
     return ServerWindow(id: id, pid: pid, frame: frame, onScreen: info[kCGWindowIsOnscreen as String] as? Bool == true, order: order,
@@ -393,7 +393,7 @@ func closeWindowOrApp(app: AppIdentity, params: JSON) throws -> JSON {
   }
   let window = try targetWindow(app: app, params: params)
   let number = windowNumber(of: window)
-  guard let button = attribute(window, kAXCloseButtonAttribute).map({ $0 as! AXUIElement }) else {
+  guard let button = elementAttribute(window, kAXCloseButtonAttribute) else {
     throw HelperError(code: "not_settable", message: "This window has no close button.")
   }
   let reference = reference(window)

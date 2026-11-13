@@ -55,7 +55,7 @@ func shortcutText(of item: AXUIElement, reading value: (AXUIElement, String) thr
 // available. `topMenu` reads only the menu bar's menus with that title, when there is one.
 func menuCommands(app: AppIdentity, topMenu: String? = nil) throws -> MenuBarRead {
   let application = try applicationElement(app)
-  guard let bar = attribute(application, kAXMenuBarAttribute).map({ $0 as! AXUIElement }) else {
+  guard let bar = elementAttribute(application, kAXMenuBarAttribute) else {
     throw HelperError(code: "window_not_found", message: "\(app.name) has no menu bar.")
   }
   var read = MenuBarRead()
@@ -163,6 +163,7 @@ private func resolveCommand(_ all: [MenuCommand], params: JSON) throws -> MenuCo
   } else if let key = params["shortcut"] as? String {
     asked = key
     let wanted = try KeyCombination.parse(key)
+    // shortcutText writes what parse reads; a text it cannot read matches no key.
     matches = all.filter { command in command.shortcut.flatMap { try? KeyCombination.parse($0) } == wanted }
   } else {
     throw HelperError(code: "invalid_request", message: "Give command (a path such as File > Export…) or shortcut (such as cmd+shift+s).")

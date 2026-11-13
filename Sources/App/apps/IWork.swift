@@ -123,6 +123,7 @@ private func documentOperations(app: String, name: String) -> [Operation] {
     // then, so a file that appeared meanwhile is never replaced.
     // A short name of its own, so a long destination name still fits the file system's limit.
     let staging = url.deletingLastPathComponent().appendingPathComponent(".export-\(UUID().uuidString).pdf")
+    // A hidden staging file left behind only takes space; each export uses a new name.
     defer { try? FileManager.default.removeItem(at: staging) }
     let document = try checkedDocumentArguments(arguments, app: app, name: name)
     do {
@@ -131,10 +132,12 @@ private func documentOperations(app: String, name: String) -> [Operation] {
     } catch {
       // The app may still finish an export the script gave up on, so the hidden file is removed again later.
       for minutes in [2.0, 10.0] {
+        // The app may still hold the file; the later attempt removes what this one could not.
         DispatchQueue.global().asyncAfter(deadline: .now() + minutes * 60) { try? FileManager.default.removeItem(at: staging) }
       }
       throw error
     }
+    // A file whose size cannot be read counts as empty, which fails the export.
     let size = (try? FileManager.default.attributesOfItem(atPath: staging.path)[.size] as? Int) ?? 0
     guard size > 0 else { throw HelperError(code: "action_failed", message: "\(name) wrote no PDF.") }
     guard renamex_np(staging.path, url.path, UInt32(RENAME_EXCL)) == 0 else {
@@ -264,6 +267,7 @@ private let maxCells = 500
 // The cells set_cells writes: addresses in capitals, each value as the text typed into it.
 func cellValues(_ values: String) throws -> [String: String] {
   guard let data = values.data(using: .utf8),
+    // Values that do not parse are refused as invalid just below.
     let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any], !object.isEmpty
   else { throw HelperError(code: "invalid_arguments", message: "values must be a JSON object of cell address to value.") }
   guard object.count <= maxCells else { throw HelperError(code: "invalid_arguments", message: "values may hold at most \(maxCells) cells.") }

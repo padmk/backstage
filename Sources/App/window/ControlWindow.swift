@@ -270,6 +270,7 @@ private func scheduleReopen() {
   let script = Process()
   script.executableURL = URL(fileURLWithPath: "/bin/sh")
   script.arguments = ["-c", "sleep 1; /usr/bin/open \"$0\"", Bundle.main.bundlePath]
+  // Without the script the app is not reopened at once; the next client starts it.
   try? script.run()
 }
 

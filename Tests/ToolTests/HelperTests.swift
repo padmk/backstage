@@ -48,6 +48,7 @@ func cli(_ home: TemporaryHome, input: String? = nil, _ arguments: String...) th
   try process.run()
   if let input {
     typed.fileHandleForWriting.write(Data(input.utf8))
+    // The child may have ended already; the test checks what it printed.
     try? typed.fileHandleForWriting.close()
   }
   let data = output.fileHandleForReading.readDataToEndOfFile()
@@ -289,8 +290,10 @@ private func apps(_ server: ServerProcess) throws -> [Object] {
     #expect(open.allSatisfy { !$0.ended })
     open.removeLast()
     let later = try until { () -> RawSocket? in
+      // A connection the full listen queue refuses is tried again.
       guard let socket = try? RawSocket(setup.home.socketPath) else { return nil }
       socket.send(line(["id": 2, "method": "list_apps"]))
+      // A connection that gets no answer yet is tried again.
       return (try? until(timeout: 1) { socket.replies.isEmpty ? nil : true }) != nil ? socket : nil
     }
     #expect(later.replies.first?["result"] != nil)
@@ -389,7 +392,8 @@ private func apps(_ server: ServerProcess) throws -> [Object] {
     let listed = parseLine(textOf(try setup.server.call("list_operations")))?["apps"] as? [Object] ?? []
     let withOperations = listed.filter { !($0["operations"] as? [String] ?? []).isEmpty }.compactMap { $0["app"] as? String }
     #expect(!withOperations.isEmpty)
-    let tools = (try setup.server.request("tools/list")["result"] as! Object)["tools"] as! [Object]
+    let toolList = try #require(try setup.server.request("tools/list")["result"] as? Object)
+    let tools = try #require(toolList["tools"] as? [Object])
     let description = tools.first { $0["name"] as? String == "list_operations" }?["description"] as? String ?? ""
     for app in withOperations { #expect(description.contains(app), "\(app)") }
   }
