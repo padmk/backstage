@@ -107,6 +107,7 @@ private let add = Operation(
     }
     item.notes = optionalString(arguments, "notes")
     item.priority = priorities[optionalString(arguments, "priority") ?? "none"] ?? 0
+    try beginEffect()
     try store.save(item, commit: true)
     let saved = try savedReminder(item.calendarItemIdentifier, in: confirming())
     var result = describe(saved)
@@ -140,6 +141,7 @@ private let complete = Operation(
     try requireWritable(item.calendar, kind: "list")
     let wanted = arguments["completed"] as? Bool ?? true
     item.isCompleted = wanted
+    try beginEffect()
     try store.save(item, commit: true)
     let saved = try savedReminder(item.calendarItemIdentifier, in: confirming())
     var result = describe(saved)
@@ -201,6 +203,7 @@ private let update = Operation(
       item.calendar = try calendar(query, among: store.calendars(for: .reminder), kind: "list")
       try requireWritable(item.calendar, kind: "list")
     }
+    try beginEffect()
     try store.save(item, commit: true)
     let saved = try savedReminder(item.calendarItemIdentifier, in: confirming())
     var result = describe(saved)

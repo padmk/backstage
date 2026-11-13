@@ -133,6 +133,7 @@ private let createEvent = Operation(
       throw HelperError(code: "not_found", message: "There is no default calendar. Give one with calendar.")
     }
     try requireWritable(event.calendar, kind: "calendar")
+    try beginEffect()
     try store.save(event, span: .thisEvent, commit: true)
     guard let id = event.eventIdentifier, let saved = confirming().event(withIdentifier: id) else {
       throw HelperError(code: "outcome_unknown", message: "Calendar saved the event but it cannot be read back. List the events before trying again.")
@@ -197,6 +198,7 @@ private let updateEvent = Operation(
       event.calendar = try calendar(query, among: store.calendars(for: .event), kind: "calendar")
       try requireWritable(event.calendar, kind: "calendar")
     }
+    try beginEffect()
     try store.save(event, span: .thisEvent, commit: true)
     guard let savedId = event.eventIdentifier, let saved = confirming().event(withIdentifier: savedId) else {
       throw HelperError(code: "outcome_unknown", message: "Calendar saved the change but the event cannot be read back. List the events before trying again.")

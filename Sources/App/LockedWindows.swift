@@ -60,7 +60,7 @@ func lockedWindowRequest(_ method: String, app: AppIdentity, params: JSON) throw
     guard x >= 0, y >= 0, x <= window.bounds.width, y <= window.bounds.height else {
       throw HelperError(code: "out_of_window", message: "The point is outside the window (\(Int(window.bounds.width))×\(Int(window.bounds.height))).")
     }
-    makeKey(window, app: app)
+    try makeKey(window, app: app)
     try postClick(at: CGPoint(x: window.bounds.minX + x, y: window.bounds.minY + y),
                   target: PointerTarget(window: window.number, origin: window.bounds.origin), pid: app.pid,
                   count: params["count"] as? Int ?? 1, style: style)
@@ -89,9 +89,9 @@ private func lockedReply(_ reply: JSON) -> JSON {
 
 // Chromium and Electron take input only in their key window, so a click makes its window key first, and later keys
 // go to that window.
-private func makeKey(_ window: LockedWindow, app: AppIdentity) {
+private func makeKey(_ window: LockedWindow, app: AppIdentity) throws {
   guard isChromiumApp(path: app.path) else { return }
-  _ = makeKeyInApp(window: window.number, pid: app.pid)
+  _ = makeKeyInApp(window: window.number, pid: app.pid, try beginEffect())
 }
 
 private func lockedWindow(app: AppIdentity, params: JSON) throws -> LockedWindow {

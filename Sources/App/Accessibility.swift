@@ -161,6 +161,7 @@ private let preparedProcesses = Mutex(Set<pid_t>())
 func prepareAccessibility(of application: AXUIElement, pid: pid_t) {
   let isNew = preparedProcesses.withLock { $0.insert(pid).inserted }
   guard isNew else { return }
+  // Not through the effect gate: it only lets the app be read, and reads precede every effect.
   let outcome = AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
   guard outcome == .success else { return }
   let deadline = Date().addingTimeInterval(2)

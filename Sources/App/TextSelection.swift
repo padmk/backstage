@@ -41,7 +41,7 @@ func selectText(app: AppIdentity, params: JSON, session: ApprovalSession) throws
   // A one-line field has a selection only while it has the app's focus. Focusing it inside the app does not bring
   // the app forward.
   if !isSettable(element, kAXSelectedTextRangeAttribute), isSettable(element, kAXFocusedAttribute) {
-    AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+    try setAXAttribute(element, kAXFocusedAttribute, kCFBooleanTrue)
     sleep(seconds: 0.05)
   }
   guard let value = textAttribute(element, kAXValueAttribute), isSettable(element, kAXSelectedTextRangeAttribute) else {
@@ -65,7 +65,7 @@ func selectText(app: AppIdentity, params: JSON, session: ApprovalSession) throws
   guard let rangeValue = AXValueCreate(.cfRange, &range) else {
     throw HelperError(code: "action_failed", message: "Could not describe the range.")
   }
-  let outcome = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, rangeValue)
+  let outcome = try setAXAttribute(element, kAXSelectedTextRangeAttribute, rangeValue)
   guard outcome == .success else { throw axFailure(outcome, "selecting the text") }
   // Typing into a selection the app did not take would change the wrong text, so an unconfirmed one stops here.
   guard let now = selectedRange(of: element), now.location == range.location, now.length == range.length else {

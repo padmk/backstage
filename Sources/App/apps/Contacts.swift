@@ -123,6 +123,7 @@ private let add = Operation(
   return try withContacts { store in
     let request = CNSaveRequest()
     request.add(contact, toContainerWithIdentifier: nil)
+    try beginEffect()
     try store.execute(request)
     // Any failure to read the contact back leaves the save unconfirmed, which is what the error says.
     guard let saved = try? CNContactStore().unifiedContact(withIdentifier: contact.identifier, keysToFetch: detailKeys) else {
