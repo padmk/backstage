@@ -44,8 +44,9 @@ func number(_ params: JSON, _ key: String) throws -> Double {
 }
 
 // A framework object that is not Sendable, such as a contact or event store, used by one thread at a time.
-// Unchecked: the value is reached only inside `withLock`, holding the lock, and callers keep none of it past the
-// closure. Sendable state goes in a Mutex instead, which the compiler checks.
+// Unchecked: the value is reached only inside `withLock`, holding the lock, and callers keep nothing of it past the
+// closure except objects their framework documents as safe to share, such as the CNContact values a fetch returns.
+// Sendable state goes in a Mutex instead, which the compiler checks.
 final class Exclusive<Value>: @unchecked Sendable {
   private let lock = NSLock()
   private var value: Value

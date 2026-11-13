@@ -93,7 +93,7 @@ private let read = Operation(
   return try withContacts { store in
     do {
       return details(try store.unifiedContact(withIdentifier: id, keysToFetch: detailKeys))
-    } catch let error as CNError where error.code == .recordDoesNotExist {
+    } catch let error as CNError where [.recordDoesNotExist, .recordIdentifierInvalid].contains(error.code) {
       throw HelperError(code: "not_found", message: "There is no contact with id \(id).")
     } catch {
       throw contactsFailure(error)
