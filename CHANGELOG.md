@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Messages: `list_chats` and `read_chat` find a person's chats by the name the Messages sidebar shows, taken from Contacts once Contacts is allowed on the Setup tab, and label chats and senders with it (`contact_names`, `from_name`). Without Contacts, a search that finds nothing says so. Backstage never asks for Contacts during a task.
+- `--render-window <folder>` draws the window's tabs into PNG files at 2x for the documentation's pictures, without showing a window.
+
 ## 0.2.0
 
 The first release: Backstage lets AI agents use Mac apps in the background, through any MCP client.
