@@ -10,7 +10,9 @@ private let firstStart: TimeInterval = 120
 
 private let awkward = "quote \" apostrophe ' newline \n backslash \\ dash -- dollar $HOME ✓"
 
-@Suite struct ScriptingTests {
+// One script at a time: osascript's first start on a fresh CI machine is slow, and several at once there did not
+// finish within the limit at all.
+@Suite(.serialized) struct ScriptingTests {
   @Test func javaScriptGetsItsArgumentsUnchanged() throws {
     let arguments: JSON = ["text": awkward, "count": 3, "list": ["a", ""]]
     let echoed = try #require(try runScript("return args;", arguments: arguments, target: "osascript", timeout: firstStart) as? JSON)
