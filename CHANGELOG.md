@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The app and the command are signed with the hardened runtime, so no program can start Backstage with its own library inside (`DYLD_INSERT_LIBRARIES`) and use its permissions. SECURITY.md lists the trade-offs of signing on each Mac until builds are signed with a Developer ID and notarized.
 - `computer` reaches only the Macs on a new list on the Apps tab. The first call for a Mac is refused with `computer_not_approved` and asks in the window; once the user adds it, calls go there. Macs used with 0.2.3 have to be added once.
 - After a connection to another Mac opens again, that Mac numbers elements from a range of its own, so a number read before cannot press a different element there. Backstage in `~/Applications` there is found also when the home folder's path has a space. A connection that fails to open leaves no ssh process behind, and a call to another Mac no longer holds up the move of a session to an updated command.
 - `user_active` also covers an app in the background: scrolling, dragging or clicking over its window in the last 2 s refuses an action there. Scrolling now counts at all; macOS keeps no time for it in the state Backstage read. A click with `foreground: true` no longer counts as the user's own input.

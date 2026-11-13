@@ -128,7 +128,7 @@ Adding an app over the socket, from the command line or by an agent, only asks: 
 
 ## Signing and permissions
 
-`setup` signs the installed app, the command inside it first, with a self-signed certificate kept in a keychain of its own in `~/.local/share/backstage`. macOS ties permissions to the signature's designated requirement (the bundle id and that certificate), so an update signed with the same certificate keeps every grant; an ad hoc signature would lose them on every build. This needs no paid Apple developer account; it also gives no Developer ID trust or notarization, so the app is built on the Mac it runs on. The trade-off, that a process running as the user can sign code as Backstage, is in [SECURITY.md](../SECURITY.md#signing).
+`setup` signs the installed app, the command inside it first, with a self-signed certificate kept in a keychain of its own in `~/.local/share/backstage`. macOS ties permissions to the signature's designated requirement (the bundle id and that certificate), so an update signed with the same certificate keeps every grant; an ad hoc signature would lose them on every build. This needs no paid Apple developer account; it also gives no Developer ID trust or notarization, so the app is built on the Mac it runs on. It signs with the hardened runtime, so no process can load its own code into the app. The trade-offs until builds are signed with a Developer ID, such as a process running as the user being able to sign code as Backstage, are in [SECURITY.md](../SECURITY.md#signing).
 
 ## Files
 
