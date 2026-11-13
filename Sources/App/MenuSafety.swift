@@ -80,14 +80,16 @@ struct MenuReader {
 
   func element(_ element: AXUIElement, _ name: String) throws -> AXUIElement? {
     guard let value = try value(element, name) else { return nil }
-    guard CFGetTypeID(value) == AXUIElementGetTypeID() else { throw unexpected(name) }
-    return (value as! AXUIElement)
+    guard let found = cfCast(value, to: AXUIElement.self, typeID: AXUIElementGetTypeID()) else { throw unexpected(name) }
+    return found
   }
 
   func elements(_ element: AXUIElement, _ name: String = kAXChildrenAttribute) throws -> [AXUIElement] {
     guard let value = try value(element, name) else { return [] }
-    guard let list = value as? [AnyObject], list.allSatisfy({ CFGetTypeID($0) == AXUIElementGetTypeID() }) else { throw unexpected(name) }
-    return list.map { $0 as! AXUIElement }
+    let list = value as? [AnyObject]
+    let found = list?.compactMap { cfCast($0, to: AXUIElement.self, typeID: AXUIElementGetTypeID()) }
+    guard let list, let found, found.count == list.count else { throw unexpected(name) }
+    return found
   }
 
   private func requireTime() throws {
@@ -259,6 +261,7 @@ let appleMenuShortcuts: [KeyCombination] = [
 // items, given as each item's shortcut text and menu.
 func refusedMenu(for combination: KeyCombination, among refused: [(shortcut: String, menu: String)]) -> String? {
   if appleMenuShortcuts.contains(combination) { return "the Apple menu" }
+  // shortcutText writes what parse reads; a text it cannot read names no key an agent can send.
   return refused.first { (try? KeyCombination.parse($0.shortcut)) == combination }?.menu
 }
 

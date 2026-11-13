@@ -17,6 +17,7 @@ final class TemporaryFolder {
     path = url.resolvingSymlinksInPath().path
   }
 
+  // A temporary folder left behind only takes space.
   deinit { try? FileManager.default.removeItem(atPath: path) }
 
   // Makes a file with its folders, and gives its path.

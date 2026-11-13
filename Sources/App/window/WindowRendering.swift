@@ -85,6 +85,7 @@ private struct RenderedWindow: View {
   for tab in ControlTab.allCases {
     let path = (folder as NSString).appendingPathComponent("window-\(tab.rawValue).png")
     guard let data = renderPNG(of: RenderedWindow(model: model, selection: ControlSelection(tab))),
+      // Reported below with the path.
       (try? data.write(to: URL(fileURLWithPath: path))) != nil
     else {
       FileHandle.standardError.write(Data("Could not write \(path)\n".utf8))

@@ -49,6 +49,7 @@ private let run = Operation(
 
   let folder = FileManager.default.temporaryDirectory.appendingPathComponent("shortcut-\(UUID().uuidString)")
   try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+  // A private folder left behind only takes space.
   defer { try? FileManager.default.removeItem(at: folder) }
   let outputFile = folder.appendingPathComponent("output.txt")
   var options = ["run", shortcut.id, "--output-path", outputFile.path, "--output-type", "public.plain-text"]

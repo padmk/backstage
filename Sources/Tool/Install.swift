@@ -23,6 +23,7 @@ struct Installer {
   }
 
   private var certificateHash: String? {
+    // No hash file means no certificate has been made yet.
     guard let text = try? String(contentsOfFile: signingHashFile, encoding: .utf8) else { return nil }
     let hash = text.trimmingCharacters(in: .whitespacesAndNewlines)
     return hash.range(of: "^[0-9A-F]{40}$", options: .regularExpression) != nil ? hash : nil
@@ -32,6 +33,7 @@ struct Installer {
   // the app's place could match it.
   func isSignedHere(_ app: String) -> Bool {
     guard let hash = certificateHash else { return false }
+    // A signature that does not verify is the answer; codesign's output adds nothing.
     return (try? runProcess("/usr/bin/codesign", ["--verify", "--strict", "-R=certificate leaf = H\"\(hash)\"", app])) != nil
   }
 
@@ -56,7 +58,9 @@ struct Installer {
       let target = installTarget()
       let folder = (target as NSString).deletingLastPathComponent
       let staging = "\(folder)/.\(Product.appName).app.incoming-\(getpid())"
+      // A staging copy from an earlier attempt is replaced; finding none is fine.
       try? FileManager.default.removeItem(atPath: staging)
+      // A staging copy left behind only takes space and is replaced next time.
       defer { try? FileManager.default.removeItem(atPath: staging) }
       do {
         try runProcess("/usr/bin/ditto", [source, staging])
@@ -82,6 +86,7 @@ struct Installer {
     if let existing = Product.appLocations.first(where: { FileManager.default.fileExists(atPath: $0) }) { return existing }
     let system = Product.appLocations[0], user = Product.appLocations[1]
     if FileManager.default.isWritableFile(atPath: (system as NSString).deletingLastPathComponent) { return system }
+    // A folder that cannot be made fails the copy into it, which reports it.
     try? FileManager.default.createDirectory(atPath: (user as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
     return user
   }
@@ -99,6 +104,7 @@ struct Installer {
     let signing = try signingArguments() + ["--options", "runtime"]
     let entitlements = directories.data + "/signing-entitlements-\(getpid()).plist"
     try appEntitlements.write(toFile: entitlements, atomically: true, encoding: .utf8)
+    // An entitlements file left behind only takes space; each setup writes its own.
     defer { try? FileManager.default.removeItem(atPath: entitlements) }
     try runProcess("/usr/bin/codesign", ["--force"] + signing + ["--identifier", Product.bundleIdentifier + ".command", app + "/" + Product.commandRelativePath])
     try runProcess("/usr/bin/codesign", ["--force"] + signing + ["--entitlements", entitlements, "--identifier", Product.bundleIdentifier, app])
@@ -145,6 +151,7 @@ struct Installer {
   private func createSigningIdentity() throws {
     let temporary = directories.data + "/signing-\(getpid())-\(UUID().uuidString)"
     try FileManager.default.createDirectory(atPath: temporary, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    // A private temporary folder left behind only takes space.
     defer { try? FileManager.default.removeItem(atPath: temporary) }
     let config = temporary + "/c.cnf", key = temporary + "/k.pem", certificate = temporary + "/c.pem", bundle = temporary + "/i.p12"
     try """
@@ -162,6 +169,7 @@ struct Installer {
     """.write(toFile: config, atomically: true, encoding: .utf8)
     try runProcess("/usr/bin/openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "36500", "-config", config, "-keyout", key, "-out", certificate])
     try runProcess("/usr/bin/openssl", ["pkcs12", "-export", "-inkey", key, "-in", certificate, "-out", bundle, "-passout", "pass:local"])
+    // A keychain from an earlier attempt is replaced; finding none is fine.
     try? FileManager.default.removeItem(atPath: signingKeychain)
     try runProcess("/usr/bin/security", ["create-keychain", "-p", "", signingKeychain])
     try runProcess("/usr/bin/security", ["set-keychain-settings", signingKeychain])
@@ -178,6 +186,7 @@ struct Installer {
   // Tells setup, once, that permission entries for an earlier signature no longer apply.
   func takeSigningChange() -> Bool {
     guard FileManager.default.fileExists(atPath: signingChangedFile) else { return false }
+    // A marker that stays only repeats the notice at the next setup.
     try? FileManager.default.removeItem(atPath: signingChangedFile)
     return true
   }
@@ -190,18 +199,22 @@ struct Installer {
     let started = Date()
     while mkdir(lock, 0o700) != 0 {
       if lockIsAbandoned(lock) {
+        // A lock that cannot be removed makes the mkdir below fail, which waits or reports it as held.
         try? FileManager.default.removeItem(atPath: lock)
         continue
       }
       if Date().timeIntervalSince(started) > lockTimeout { throw HelperFailure(code: nil, message: "\(lock) is held by a running setup.") }
       Thread.sleep(forTimeInterval: 0.2)
     }
+    // Without an owner the lock's age decides when it counts as abandoned.
     try? String(getpid()).write(toFile: lock + "/owner", atomically: true, encoding: .utf8)
+    // A lock left behind is taken over once its owner is gone.
     defer { try? FileManager.default.removeItem(atPath: lock) }
     return try action()
   }
 
   private func lockIsAbandoned(_ lock: String) -> Bool {
+    // Without a readable owner, the lock's age decides below.
     if let text = try? String(contentsOfFile: lock + "/owner", encoding: .utf8), let owner = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), owner > 0 {
       return kill(owner, 0) != 0 && errno == ESRCH
     }

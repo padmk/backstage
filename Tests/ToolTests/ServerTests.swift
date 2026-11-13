@@ -26,7 +26,7 @@ private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
 @Suite struct ServerTests {
   @Test func answersInitializeWithTheClientsProtocolVersionAndItsOwnName() throws {
     let setup = try Setup()
-    let result = try setup.server.initialize("claude-code", "2025-03-26")["result"] as! Object
+    let result = try #require(try setup.server.initialize("claude-code", "2025-03-26")["result"] as? Object)
     #expect(result["protocolVersion"] as? String == "2025-03-26")
     #expect((result["serverInfo"] as? Object)?["name"] as? String == "backstage")
     #expect((result["capabilities"] as? Object)?["tools"] != nil)
@@ -34,33 +34,34 @@ private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
 
   @Test func fallsBackToAProtocolItKnows() throws {
     let setup = try Setup()
-    let result = try setup.server.initialize("x", "1999-01-01")["result"] as! Object
+    let result = try #require(try setup.server.initialize("x", "1999-01-01")["result"] as? Object)
     #expect(result["protocolVersion"] as? String == "2025-11-25")
   }
 
   @Test func answersDiscoverWithoutInitializeAndRefusesARevisionItDoesNotServeThatWay() throws {
     let setup = try Setup()
-    let result = try setup.server.request("server/discover", ["_meta": statelessMeta()])["result"] as! Object
+    let result = try #require(try setup.server.request("server/discover", ["_meta": statelessMeta()])["result"] as? Object)
     #expect(result["resultType"] as? String == "complete")
     #expect((result["supportedVersions"] as? [String])?.contains("2026-07-28") == true)
     #expect((result["capabilities"] as? Object)?["tools"] != nil)
     #expect(((result["_meta"] as? Object)?["io.modelcontextprotocol/serverInfo"] as? Object)?["name"] as? String == "backstage")
-    let error = try setup.server.request("server/discover", ["_meta": statelessMeta("1999-01-01")])["error"] as! Object
+    let error = try #require(try setup.server.request("server/discover", ["_meta": statelessMeta("1999-01-01")])["error"] as? Object)
     #expect(error["code"] as? Int == -32022)
     #expect((error["data"] as? Object)?["requested"] as? String == "1999-01-01")
   }
 
   @Test func runsAToolForARequestThatCarriesItsRevisionNamingTheClientFromIt() throws {
     let setup = try Setup()
-    let result = try setup.server.request("tools/call", ["name": "list_apps", "arguments": [:] as Object, "_meta": statelessMeta()])["result"] as! Object
+    let result = try #require(try setup.server.request("tools/call", ["name": "list_apps", "arguments": [:] as Object, "_meta": statelessMeta()])["result"] as? Object)
     #expect(result["resultType"] as? String == "complete")
     #expect((setup.helper.first("hello")?["params"] as? Object)?["client_name"] as? String == "modern-client")
   }
 
   @Test func listsToolsWithSchemasThatRejectUnknownArguments() throws {
     let setup = try Setup()
-    let tools = (try setup.server.request("tools/list")["result"] as! Object)["tools"] as! [Object]
-    #expect(tools.map { $0["name"] as! String } == ["list_apps", "launch_app", "list_operations", "run_operation", "get_window_state", "read_text", "screenshot", "press", "set_value", "type_text", "select_text", "press_key", "scroll", "drag", "click_at", "list_windows", "set_window", "set_app_state", "close", "list_menu_commands", "run_menu_command", "wait_for", "record_audio", "run_actions"])
+    let listed = try #require(try setup.server.request("tools/list")["result"] as? Object)
+    let tools = try #require(listed["tools"] as? [Object])
+    #expect(tools.map { $0["name"] as? String } == ["list_apps", "launch_app", "list_operations", "run_operation", "get_window_state", "read_text", "screenshot", "press", "set_value", "type_text", "select_text", "press_key", "scroll", "drag", "click_at", "list_windows", "set_window", "set_app_state", "close", "list_menu_commands", "run_menu_command", "wait_for", "record_audio", "run_actions"])
     for tool in tools { #expect((tool["inputSchema"] as? Object)?["additionalProperties"] as? Bool == false) }
   }
 
@@ -110,7 +111,7 @@ private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
 
   @Test func refusesArgumentsThatAreNotAnObject() throws {
     let setup = try Setup()
-    let result = try setup.server.request("tools/call", ["name": "press", "arguments": [1]])["result"] as! Object
+    let result = try #require(try setup.server.request("tools/call", ["name": "press", "arguments": [1]])["result"] as? Object)
     #expect(result["isError"] as? Bool == true)
   }
 
@@ -140,7 +141,7 @@ private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
   @Test func returnsAScreenshotAsAnImage() throws {
     let setup = try Setup { _ in ["result": ["png_base64": "QUJD", "width": 2, "height": 3]] }
     let result = try setup.server.call("screenshot", ["app": "Notes"])
-    let content = result["content"] as! [Object]
+    let content = try #require(result["content"] as? [Object])
     #expect(content[0]["type"] as? String == "image")
     #expect(content[0]["data"] as? String == "QUJD")
     #expect(content[0]["mimeType"] as? String == "image/png")
@@ -181,7 +182,7 @@ private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
     setup.server.write(line(["jsonrpc": "2.0", "id": 99, "method": "tools/call", "params": ["name": "press", "arguments": ["app": "Notes", "element": 1]]]))
     _ = try until { setup.helper.first("press") }
     setup.helper.disconnectAll()
-    let reply = try until { setup.server.received.first { ($0["id"] as? Int) == 99 } }["result"] as! Object
+    let reply = try #require(try until { setup.server.received.first { ($0["id"] as? Int) == 99 } }["result"] as? Object)
     #expect(reply["isError"] as? Bool == true)
     #expect(textOf(reply).contains("may or may not have run"))
     Thread.sleep(forTimeInterval: 0.05)
@@ -198,7 +199,7 @@ private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
     let large = String(repeating: "x", count: 5 << 20)
     let refused = try setup.server.call("run_operation", ["app": "Notes", "operation": "create", "arguments": ["body": large]])
     #expect(textOf(refused).hasPrefix("request_too_large"))
-    let pressed = try until { setup.server.received.first { ($0["id"] as? Int) == 100 } }["result"] as! Object
+    let pressed = try #require(try until { setup.server.received.first { ($0["id"] as? Int) == 100 } }["result"] as? Object)
     #expect(textOf(pressed).contains("ok"))
     #expect(setup.helper.first("run_operation") == nil)
   }
@@ -228,6 +229,7 @@ private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
     #expect(textOf(result).hasPrefix("timeout:"))
     #expect(textOf(result).contains("may or may not have run"))
     #expect(textOf(try until { () -> Object? in
+      // A call while the helper restarts fails and is tried again.
       let next = try? server.call("list_apps")
       return next?["isError"] as? Bool == true ? nil : next
     }).contains("ok"))
@@ -240,6 +242,7 @@ private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
     _ = try setup.server.call("list_apps")
     setup.helper.disconnectAll()
     _ = try until { () -> Object? in
+      // A call while the helper restarts fails and is tried again.
       let next = try? setup.server.call("list_apps")
       return next?["isError"] as? Bool == true ? nil : next
     }

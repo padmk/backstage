@@ -124,6 +124,7 @@ private let add = Operation(
     let request = CNSaveRequest()
     request.add(contact, toContainerWithIdentifier: nil)
     try store.execute(request)
+    // Any failure to read the contact back leaves the save unconfirmed, which is what the error says.
     guard let saved = try? CNContactStore().unifiedContact(withIdentifier: contact.identifier, keysToFetch: detailKeys) else {
       throw HelperError(code: "outcome_unknown", message: "Contacts saved the contact but it cannot be read back. Search before trying again.")
     }
@@ -201,6 +202,7 @@ private var nameKeys: [CNKeyDescriptor] {
 // request and follow the list.
 func contactLookup() -> ContactLookup? {
   guard CNContactStore.authorizationStatus(for: .contacts) == .authorized,
+    // Contacts missing or unreadable as an app is not on the list, so no names are looked up.
     let contacts = try? installedIdentity(installedApp(contactsKnowledge.bundleId)), ApprovalGate.access(contacts) == .allowed
   else { return nil }
   var known: [ContactHandle: HandleContact?] = [:]

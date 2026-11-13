@@ -39,6 +39,7 @@ private func ask(_ home: TemporaryHome, _ method: String, _ params: Object, afte
       let added = try ask(home, "approvals_add", ["app": bundleId])
       #expect((added["error"] as? Object)?["code"] as? String == "not_allowed", "\(bundleId): \(added)")
     }
+    // A list that is not there is an empty one.
     let list = (try? String(contentsOfFile: home.path + "/approvals.json", encoding: .utf8)) ?? ""
     #expect(neverAvailable.allSatisfy { !list.contains($0) })
     withExtendedLifetime(helper) {}

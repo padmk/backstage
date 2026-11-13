@@ -18,6 +18,7 @@ enum HelperMain {
       exit(renderControlWindow(into: arguments[index + 1]) ? 0 : 1)
     }
     for directory in [Configuration.configHome, Configuration.stateHome] {
+      // A directory that cannot be made fails the socket's start, which reports it.
       try? ensurePrivateDirectory(directory)
     }
 

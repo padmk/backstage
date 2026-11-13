@@ -175,6 +175,7 @@ func requestGrant(_ grant: AppGrant) {
     // macOS asks only about a running app, so one that is not running starts hidden, behind the user's work.
     if automationState(bundleId, ask: false) == .unknown,
       let url = onMain({ NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) }) {
+      // An app that does not start is not running, and the check below then reports its state as unknown.
       _ = try? startAppHidden(at: url.path, name: grant.name)
     }
     _ = automationState(bundleId, ask: true)

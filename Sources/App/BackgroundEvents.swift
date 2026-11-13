@@ -49,7 +49,7 @@ func windowNumber(of window: AXUIElement) -> CGWindowID? {
 func pointerTarget(for element: AXUIElement) -> PointerTarget {
   let window = stringAttribute(element, kAXRoleAttribute) == kAXWindowRole
     ? element
-    : attribute(element, kAXWindowAttribute).map { $0 as! AXUIElement }
+    : elementAttribute(element, kAXWindowAttribute)
   guard let window, let box = frame(of: window) else { return PointerTarget(window: nil, origin: .zero) }
   return PointerTarget(window: windowNumber(of: window), origin: box.origin)
 }
@@ -101,6 +101,7 @@ func isChromiumApp(path: String?) -> Bool {
   guard let path else { return false }
   if let known = chromiumApps.withLock({ $0[path] }) { return known }
   let frameworks = path + "/Contents/Frameworks"
+  // Frameworks that cannot be listed count as not Chromium's, which only leaves out the key records.
   let names = (try? FileManager.default.contentsOfDirectory(atPath: frameworks)) ?? []
   let found = names.contains("Electron Framework.framework") || names.contains { name in
     name.hasSuffix(" Framework.framework")

@@ -41,6 +41,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
 
   // Before the app goes to the Trash: it no longer starts at login or shows in the menu bar, and it quits.
   case "prepare_uninstall":
+    // Uninstalling goes on: a login item left behind points at a removed app, which macOS skips.
     if Preferences.isInstalledCopy, LaunchAtLogin.state != .off { try? LaunchAtLogin.set(false) }
     Preferences.showsMenuBarItem = false
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -136,6 +137,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
 // An app a request names, running or only installed. A bundle id that is never available is answered as such
 // even when this Mac does not have it.
 private func requestedApp(_ query: String) throws -> AppIdentity {
+  // resolve fails only for an app that is not running; the installed app answers for it.
   if let app = try? resolve(query) { return app }
   do {
     return try installedIdentity(try installedApp(query))

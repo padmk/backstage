@@ -1,0 +1,32 @@
+# Lint rules for the kinds of defects this project's history shows. CI and the pre-commit hook run `swiftlint lint
+# --strict`; docs/development.md says how to install the hook.
+only_rules:
+  - force_cast
+  - file_length
+  - function_body_length
+  - custom_rules
+
+included:
+  - Package.swift
+  - Sources
+  - Tests
+
+# A cast to a Core Foundation type cannot be checked by Swift; cfCast in Sources/App/Accessibility.swift compares
+# the type ids first and is the one place that force-casts.
+force_cast: error
+
+file_length:
+  warning: 800
+  error: 800
+
+function_body_length:
+  warning: 200
+  error: 200
+
+custom_rules:
+  # A try? that drops an error says why, in a comment on its line or the line above, or the error is handled.
+  try_without_reason:
+    name: "try? without a reason"
+    regex: '(?<!//[^\n]{0,400})(?<!\n[ \t]{0,40}//[^\n]{0,400}\n[^\n]{0,400})\btry\?(?![^\n]*//)'
+    message: "try? drops the error: handle it, or say in a comment on this line or the line above why dropping it is right."
+    severity: error

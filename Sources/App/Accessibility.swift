@@ -42,6 +42,20 @@ func readAttribute(_ element: AXUIElement, _ name: String) -> AttributeRead {
   return AttributeRead(result, value)
 }
 
+// A Core Foundation value as its type, or nil when it is of another. Swift cannot check a cast to a Core Foundation
+// type, so the type ids are compared first; this is the one place that casts to one.
+func cfCast<T: AnyObject>(_ value: AnyObject?, to type: T.Type, typeID: CFTypeID) -> T? {
+  guard let value, CFGetTypeID(value) == typeID else { return nil }
+  return (value as! T) // swiftlint:disable:this force_cast
+}
+
+// An attribute that holds an element, such as a window or a parent.
+func elementAttribute(_ element: AXUIElement, _ name: String) -> AXUIElement? {
+  cfCast(attribute(element, name), to: AXUIElement.self, typeID: AXUIElementGetTypeID())
+}
+
+func axValue(_ value: AnyObject?) -> AXValue? { cfCast(value, to: AXValue.self, typeID: AXValueGetTypeID()) }
+
 func stringAttribute(_ element: AXUIElement, _ name: String) -> String? {
   guard let text = attribute(element, name) as? String, !text.isEmpty else { return nil }
   return text
@@ -72,14 +86,13 @@ func actions(of element: AXUIElement) -> [String] {
 
 func frame(of element: AXUIElement) -> CGRect? {
   guard let positionValue = attribute(element, kAXPositionAttribute),
-    let sizeValue = attribute(element, kAXSizeAttribute),
-    CFGetTypeID(positionValue) == AXValueGetTypeID(),
-    CFGetTypeID(sizeValue) == AXValueGetTypeID()
+    let sizeValue = attribute(element, kAXSizeAttribute)
   else { return nil }
   var position = CGPoint.zero
   var size = CGSize.zero
-  guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
-    AXValueGetValue(sizeValue as! AXValue, .cgSize, &size)
+  guard let positionValue = axValue(positionValue), let sizeValue = axValue(sizeValue),
+    AXValueGetValue(positionValue, .cgPoint, &position),
+    AXValueGetValue(sizeValue, .cgSize, &size)
   else { return nil }
   return CGRect(origin: position, size: size)
 }
@@ -193,9 +206,9 @@ struct ElementAttributes {
     }
     for (name, value) in zip(lineAttributeNames, list) {
       // An attribute the element lacks comes back as an error value, and so does one the app could not give.
-      if CFGetTypeID(value) == AXValueGetTypeID(), AXValueGetType(value as! AXValue) == .axError {
+      if let errorValue = axValue(value), AXValueGetType(errorValue) == .axError {
         var error = AXError.success
-        _ = AXValueGetValue(value as! AXValue, .axError, &error)
+        _ = AXValueGetValue(errorValue, .axError, &error)
         if name == kAXChildrenAttribute, case .unreadable = AttributeRead(error, nil) { childrenUnreadable = true }
         continue
       }

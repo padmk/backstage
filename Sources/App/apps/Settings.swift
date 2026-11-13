@@ -69,6 +69,7 @@ private let settingsBundleId = "com.apple.systempreferences"
 private let paneOpenSeconds = 5.0
 
 private func installedPanes() -> [(id: String, name: String)] {
+  // Without the folder of panes, only the panes known by name are listed.
   let names = (try? FileManager.default.contentsOfDirectory(atPath: paneExtensions)) ?? []
   return names.filter { $0.hasSuffix(".appex") }.compactMap { name in
     guard let bundle = Bundle(path: "\(paneExtensions)/\(name)"), let id = bundle.bundleIdentifier,

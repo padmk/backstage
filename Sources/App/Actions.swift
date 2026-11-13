@@ -62,14 +62,14 @@ func readTree(app: AppIdentity, params: JSON, session: ApprovalSession, shownToA
   var selected: AXUIElement?
   if let number = params["root"] as? Int {
     roots = [try session.table.element(number, pid: app.pid)]
-  } else if params["menu_bar"] as? Bool == true, let menu = attribute(application, kAXMenuBarAttribute) {
-    roots = [menu as! AXUIElement]
+  } else if params["menu_bar"] as? Bool == true, let menu = elementAttribute(application, kAXMenuBarAttribute) {
+    roots = [menu]
   } else if params["menu_extras"] as? Bool == true {
     // The app's own items on the right of the menu bar, such as status icons.
-    guard let extras = attribute(application, "AXExtrasMenuBar") else {
+    guard let extras = elementAttribute(application, "AXExtrasMenuBar") else {
       throw HelperError(code: "window_not_found", message: "\(app.name) has no items in the menu bar. System items such as Wi-Fi and Sound belong to Control Center.")
     }
-    roots = [extras as! AXUIElement]
+    roots = [extras]
   } else {
     selected = try selectWindow(application, params: params)
     roots = [selected!] + openMenus(of: application)
@@ -145,7 +145,7 @@ func press(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> J
   guard let box = frame(of: element) else {
     throw HelperError(code: "action_failed", message: "The element has no action and no position.")
   }
-  prepareInput(app: app, window: attribute(element, kAXWindowAttribute).map { $0 as! AXUIElement })
+  prepareInput(app: app, window: elementAttribute(element, kAXWindowAttribute))
   try postAllowedClick(at: CGPoint(x: box.midX, y: box.midY), app: app, target: pointerTarget(for: element), count: 1)
   return ["delivery": "pointer_event", "verified": false]
 }
@@ -157,7 +157,7 @@ private func selectableSelfOrRow(_ element: AXUIElement) -> AXUIElement? {
   if isSettable(element, kAXSelectedAttribute) { return element }
   var current = element
   for _ in 0..<rowSearchDepth {
-    guard let parent = attribute(current, kAXParentAttribute).map({ $0 as! AXUIElement }) else { return nil }
+    guard let parent = elementAttribute(current, kAXParentAttribute) else { return nil }
     if stringAttribute(parent, kAXRoleAttribute) == kAXRowRole { return isSettable(parent, kAXSelectedAttribute) ? parent : nil }
     current = parent
   }
@@ -340,7 +340,7 @@ func typeText(app: AppIdentity, params: JSON, session: ApprovalSession) throws -
 
   // Keys go wherever the app's focus is, so they are sent only once it is on this element.
   try requireTextForKeys(text)
-  prepareInput(app: app, window: attribute(element, kAXWindowAttribute).map { $0 as! AXUIElement })
+  prepareInput(app: app, window: elementAttribute(element, kAXWindowAttribute))
   AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
   sleep(seconds: 0.05)
   let focused = attribute(AXUIElementCreateApplication(app.pid), kAXFocusedUIElementAttribute)
@@ -365,7 +365,7 @@ func scroll(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> 
 
   let barName = vertical ? kAXVerticalScrollBarAttribute : kAXHorizontalScrollBarAttribute
   let settableBar = { (area: AXUIElement) -> AXUIElement? in
-    guard let bar = attribute(area, barName).map({ $0 as! AXUIElement }), attribute(bar, kAXValueAttribute) is Double,
+    guard let bar = elementAttribute(area, barName), attribute(bar, kAXValueAttribute) is Double,
       isSettable(bar, kAXValueAttribute) else { return nil }
     return bar
   }
@@ -398,7 +398,7 @@ private func selfOrAncestor(of element: AXUIElement, where matches: (AXUIElement
   for _ in 0..<12 {
     guard let candidate = current else { return nil }
     if matches(candidate) { return candidate }
-    current = attribute(candidate, kAXParentAttribute).map { $0 as! AXUIElement }
+    current = elementAttribute(candidate, kAXParentAttribute)
   }
   return nil
 }
@@ -434,7 +434,7 @@ func prepareInput(app: AppIdentity, window: AXUIElement?) {
   guard isChromiumApp(path: app.path),
         onMain({ NSRunningApplication(processIdentifier: app.pid)?.isActive }) == false else { return }
   let application = AXUIElementCreateApplication(app.pid)
-  let target = window ?? attribute(application, kAXMainWindowAttribute).map { $0 as! AXUIElement } ?? windows(of: application).first
+  let target = window ?? elementAttribute(application, kAXMainWindowAttribute) ?? windows(of: application).first
   guard let target, let number = windowNumber(of: target) else { return }
   _ = makeKeyInApp(window: number, pid: app.pid)
 }
@@ -448,7 +448,7 @@ func clickAt(app: AppIdentity, params: JSON, session: ApprovalSession) throws ->
   if let number = params["element"] as? Int {
     let element = try session.table.element(number, pid: app.pid)
     guard let box = frame(of: element) else { throw HelperError(code: "action_failed", message: "The element has no position.") }
-    window = try attribute(element, kAXWindowAttribute).map { $0 as! AXUIElement } ?? selectWindow(application, params: params)
+    window = try elementAttribute(element, kAXWindowAttribute) ?? selectWindow(application, params: params)
     point = CGPoint(x: box.midX, y: box.midY)
   } else {
     guard params["x"] != nil, params["y"] != nil else {
@@ -480,7 +480,7 @@ private func dragPoint(_ end: String, app: AppIdentity, params: JSON, session: A
   if let number = params["\(end)_element"] as? Int {
     let element = try session.table.element(number, pid: app.pid)
     guard let box = frame(of: element) else { throw HelperError(code: "action_failed", message: "The \(end) element has no position.") }
-    let owner = attribute(element, kAXWindowAttribute).map { $0 as! AXUIElement } ?? window
+    let owner = elementAttribute(element, kAXWindowAttribute) ?? window
     return (CGPoint(x: box.midX, y: box.midY), owner)
   }
   guard let x = params["\(end)_x"] as? Double, let y = params["\(end)_y"] as? Double else {

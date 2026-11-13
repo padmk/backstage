@@ -9,12 +9,16 @@ func log(_ event: String, _ detail: String = "") {
   let entry: [String: Any] = [
     "event": event, "detail": detail, "active": NSApp.isActive, "key_window": NSApp.keyWindow?.title ?? "",
   ]
+  // A dictionary of strings always serializes.
   guard var data = try? JSONSerialization.data(withJSONObject: entry) else { return }
   data.append(0x0a)
   if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
   guard let handle = FileHandle(forWritingAtPath: logPath) else { return }
+  // The fixture's log is read by the live test, which reports what is missing from it.
   _ = try? handle.seekToEnd()
+  // The fixture's log is read by the live test, which reports what is missing from it.
   try? handle.write(contentsOf: data)
+  // Writes are not buffered, so a failed close loses nothing.
   try? handle.close()
 }
 

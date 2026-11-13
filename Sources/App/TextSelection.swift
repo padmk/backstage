@@ -21,9 +21,9 @@ private func occurrences(of text: String, in value: String, prefix: String, suff
 }
 
 private func selectedRange(of element: AXUIElement) -> CFRange? {
-  guard let value = attribute(element, kAXSelectedTextRangeAttribute), CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+  guard let value = axValue(attribute(element, kAXSelectedTextRangeAttribute)) else { return nil }
   var range = CFRange()
-  return AXValueGetValue(value as! AXValue, .cfRange, &range) ? range : nil
+  return AXValueGetValue(value, .cfRange, &range) ? range : nil
 }
 
 func selectText(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {

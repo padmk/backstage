@@ -123,6 +123,7 @@ private let neverAvailable = [
 private func withTemporaryHome(_ body: () throws -> Void) throws {
   let path = FileManager.default.temporaryDirectory.appendingPathComponent("list-tests-" + UUID().uuidString).path
   try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+  // A temporary folder left behind only takes space.
   defer { try? FileManager.default.removeItem(atPath: path) }
   try Configuration.$testDirectories.withValue(Directories(testHome: path)) { try body() }
 }

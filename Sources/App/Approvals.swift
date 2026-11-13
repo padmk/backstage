@@ -165,6 +165,7 @@ enum ApprovalStore {
   // Each entry on its own, so one malformed entry does not hide, and on the next write drop, all the others.
   private static func read() -> [[String: String]] {
     guard let data = FileManager.default.contents(atPath: path),
+      // An unreadable list is an empty one: nothing is allowed until the user adds apps again.
       let object = try? JSONSerialization.jsonObject(with: data) as? JSON,
       let entries = object["approvals"] as? [Any]
     else { return [] }
@@ -227,13 +228,17 @@ private let maxDecisionRecordBytes = 4096
 // The latest answers first, from the end of the decision log. Lines that do not parse are skipped.
 func recentDecisions(limit: Int) -> [DecisionRecord] {
   guard let handle = FileHandle(forReadingAtPath: Configuration.directories.decisionLogPath) else { return [] }
+  // Closing a handle that was only read from loses nothing.
   defer { try? handle.close() }
+  // A log whose size cannot be read is read from its start.
   let size = (try? handle.seekToEnd()) ?? 0
   let start = size - min(size, UInt64(limit * maxDecisionRecordBytes))
+  // The Activity tab shows no records rather than part of a log it could not read.
   guard (try? handle.seek(toOffset: start)) != nil, let data = try? handle.readToEnd() else { return [] }
   // Reading from the middle of the file starts inside a record.
   let lines = data.split(separator: 0x0a).dropFirst(start > 0 ? 1 : 0).filter { $0.count <= maxDecisionRecordBytes }
   return lines.suffix(limit).reversed().enumerated().compactMap { index, line in
+    // A line that is no record, such as one a full disk cut short, is skipped.
     guard let entry = try? JSONSerialization.jsonObject(with: Data(line)) as? JSON,
       let bundleId = entry["app"] as? String, let decision = entry["decision"] as? String
     else { return nil }
@@ -345,6 +350,7 @@ func addToList(_ app: AppIdentity, by client: String) throws {
 private func signerToList(_ app: AppIdentity) throws -> String? {
   if app.pid > 0 {
     let signer = signingIdentity(of: app)
+    // A process that quit or changed is not the app asked about; its bundle is checked below.
     if (try? requireSameProcess(app)) != nil { return signer }
   }
   let bundleId = app.path.flatMap { NSDictionary(contentsOfFile: $0 + "/Contents/Info.plist")?["CFBundleIdentifier"] as? String }

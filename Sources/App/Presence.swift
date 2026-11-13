@@ -75,6 +75,7 @@ private let menuRoles: Set<String> = ["AXMenuBar", "AXMenuBarItem", "AXMenu", "A
 
 private func worksWhileLocked(_ method: String, params: JSON, app: AppIdentity, session: ApprovalSession) -> Bool {
   func isMenu(_ number: Any?) -> Bool {
+    // An element that cannot be found is not a menu, so the request stays refused while locked.
     guard let number = number as? Int, let element = try? session.table.element(number, pid: app.pid) else { return false }
     return stringAttribute(element, kAXRoleAttribute).map(menuRoles.contains) ?? false
   }

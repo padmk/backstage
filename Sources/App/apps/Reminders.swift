@@ -121,6 +121,7 @@ private let add = Operation(
 // After a save succeeded, a reminder that cannot be read back may still have been saved, so the agent is told to
 // look before trying again rather than that it does not exist.
 private func savedReminder(_ id: String, in checking: EKEventStore) throws -> EKReminder {
+  // Any failure to read the reminder back leaves the save unconfirmed, which is what the error says.
   guard let saved = try? reminder(id, in: checking) else {
     throw HelperError(code: "outcome_unknown", message: "Reminders saved the change but reminder \(id) cannot be read back. List the reminders before trying again.")
   }

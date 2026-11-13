@@ -324,7 +324,7 @@ func validateArguments(_ name: String, _ arguments: Any, keys: [String]? = nil) 
     guard let value = arguments[key] else { continue }
     guard let rule = tool.rule(for: key) else { return "unknown argument \(key)" }
     if let found = problem(key, value, rule) { return found }
-    if key == computerArgument, let found = ComputerName.problem(with: value as! String) { return found }
+    if key == computerArgument, let text = value as? String, let found = ComputerName.problem(with: text) { return found }
   }
   if name == "run_actions", let steps = arguments["steps"] as? [Any] { return problemWithSteps(steps) }
   return nil

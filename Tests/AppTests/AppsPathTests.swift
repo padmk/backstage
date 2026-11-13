@@ -82,6 +82,7 @@ private final class Home {
     try home.folder.file("Home/Locked/inner/secret.txt")
     let locked = home.path + "/Locked"
     try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: locked)
+    // Restoring the permissions only lets the temporary folder be removed.
     defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked) }
     let error = helperError("permission_missing") { try home.user("/Locked/inner/secret.txt") }
     #expect(error?.message.contains(locked + ".") == true)

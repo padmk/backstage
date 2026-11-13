@@ -312,6 +312,7 @@ final class HelperClient: @unchecked Sendable {
       throw differsFromInstalled()
     }
     return try withStartLock {
+      // The old helper may already be gone; the restart goes on.
       _ = try? send(socket, "quit", [:], ticket: nil)
       socket.shut()
       waitForSocketToClose()

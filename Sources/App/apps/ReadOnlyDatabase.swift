@@ -23,6 +23,7 @@ final class ReadOnlyDatabase {
   deinit { sqlite3_close(handle) }
 
   func columns(of table: String) -> Set<String> {
+    // A table that cannot be inspected has no known columns, which requireColumns then reports.
     Set((try? rows("SELECT name FROM pragma_table_info(?)", [table]))?.compactMap { $0["name"] as? String } ?? [])
   }
 
