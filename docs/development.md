@@ -8,7 +8,10 @@ Backstage is one Swift package with three modules: the helper app (`Sources/App`
 make app       # build/Backstage.app: release build, bundle assembly, ad hoc signature (Command Line Tools are enough)
 make install   # make app, then its setup: install into /Applications signed for this Mac, Accessibility, MCP registration
 make test      # swift test
-make check     # what CI runs: make app, then the tests
+make tsan      # swift test under the thread sanitizer; fails on any report, also from the helper and command the tests start
+make lint      # SwiftLint with .swiftlint.yml (brew install swiftlint)
+make hooks     # lint the staged Swift files before each commit (.githooks/pre-commit)
+make check     # what CI runs: make lint, make app, then the tests
 make live      # LIVE=1: the installed app operates the fixture app in the background
 make bench     # BENCH=1: latency against the installed app
 make clean     # remove build/ and .build/
@@ -23,6 +26,21 @@ The window's pictures in `docs/images` are drawn offscreen at 2x, each tab at it
 `backstage version` prints `Product.version` from `Sources/HelperLink/Product.swift`, which `make app` also writes into the bundle's `Info.plist`; the Homebrew formula's test checks it.
 
 `SWIFT_BUILD_FLAGS` passes extra flags to every `swift build` the Makefile runs; the formula passes `--disable-sandbox`, because SwiftPM's own sandbox cannot start inside Homebrew's build sandbox.
+
+## Checks
+
+Every target, the tests included, builds in the Swift 6 language mode, so the compiler checks for data races, and any warning fails the build. `ALLOW_WARNINGS=1` (`make app ALLOW_WARNINGS=1`, or in the environment of `swift build`) keeps warnings warnings; the Homebrew formula passes it, so warnings a newer Xcode adds never stop an install.
+
+Shared mutable state follows these rules, which the compiler holds the code to:
+
+- State behind a lock lives in one `Mutex<State>` (`Synchronization`) holding all of it, so a check and the change it allows happen in one `withLock`.
+- A framework object that is not `Sendable`, such as a contact or event store, is reached only through `Exclusive` (`Sources/App/Common.swift`), and nothing of it is kept past the closure.
+- `@unchecked Sendable` and `nonisolated(unsafe)` appear only with a comment that says what guards the value. JSON handed to another thread goes in `SharedJSON` (`Sources/HelperLink/SharedJSON.swift`), which checks in debug builds that it holds only JSON values.
+- AppKit code is `@MainActor`; work from another thread reaches it through `onMain` or `DispatchQueue.main`.
+
+SwiftLint (`.swiftlint.yml`) enables only `force_cast`, `file_length` and `function_body_length` (800 and 200 lines), and `try_without_reason`: a `try?` says in a comment on its line or the line above why dropping the error is right. Casts to Core Foundation types go through `cfCast` in `Sources/App/Accessibility.swift`, which compares type ids first and is the one force cast. CI and the pre-commit hook run `swiftlint lint --strict`.
+
+The app writes failures no request hears about, such as a write to the activity log or the settings that did not happen, to the unified log through `appLog`: `log show --last 1h --predicate 'subsystem == "app.foreverbeta.backstage"'`.
 
 ## Environment variables
 
@@ -42,7 +60,7 @@ Only a bare build outside a bundle honors `--home`; any copy of the app bundle u
 
 ## CI
 
-CI (`.github/workflows/ci.yml`) runs on `macos-26` on every push to `main` and every pull request, and cancels a run that a newer push to the same branch supersedes: it prints the Swift version, builds and assembles the app (`make app`), type-checks the fixture app and runs `swift test`. The live test needs real permissions, so it runs only locally. Dependabot proposes updates of the pinned GitHub Actions once a month.
+CI (`.github/workflows/ci.yml`) runs on `macos-26` on every push to `main` and every pull request, and cancels a run that a newer push to the same branch supersedes. One job prints the Swift version, lints with SwiftLint's release (checked against its published digest), builds and assembles the app (`make app`), type-checks the fixture app and runs `swift test`; a second runs the tests under the thread sanitizer, with the reports of the helper and the command the tests start written to files, and fails on any report. The live test needs real permissions, so it runs only locally. Dependabot proposes updates of the pinned GitHub Actions once a month.
 
 ## Releasing
 
@@ -59,12 +77,14 @@ The tag starts `.github/workflows/release.yml`. It builds the app and runs the t
 | Path | Responsibility |
 |---|---|
 | `Package.swift`, `Makefile`, `packaging/Info.plist` | The Swift package, and assembling and installing the app bundle |
+| `.swiftlint.yml`, `.githooks/pre-commit` | The lint rules ([Checks](#checks)) and the hook that runs them on each commit |
 | `packaging/homebrew/backstage.rb.tmpl` | The template of the formula, rendered into the tap at each release |
 | `.github/workflows/ci.yml`, `release.yml` | CI, and the release from a `v<version>` tag ([Releasing](#releasing)) |
 | `.github/ISSUE_TEMPLATE/`, `.github/dependabot.yml` | The bug report form and the pointer to private vulnerability reports; updates of the pinned actions |
 | `assets/` | The app icon |
 | `Sources/HelperLink/Product.swift` | The product's name, version, bundle id, install locations, handoff revision and directories; the steps `run_actions` takes |
 | `Sources/HelperLink/BuildIdentity.swift`, `Framing.swift` | The build identity (the linker's UUID); line-delimited JSON for the socket and stdio |
+| `Sources/HelperLink/PipeReader.swift`, `SharedJSON.swift` | Reading a child's output to its end; JSON handed to another thread |
 | `Sources/HelperLink/ComputerName.swift` | Which names `computer` takes, checked by the command and the app alike |
 | `Sources/Tool/ToolMain.swift`, `Commands.swift` | The command's entry; `setup`, `doctor`, `approvals`, `uninstall`, `version` |
 | `Sources/Tool/Install.swift` | Installing and signing the app for this Mac |
