@@ -138,17 +138,10 @@ private let killGraceSeconds = 2.0
 // that overruns or is cancelled is stopped before this returns, so it never outlives the request and the app's lock
 // that it ran under: see `stopChild`.
 func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target: String, timeout: TimeInterval) throws -> ChildRun {
-  let process = Process()
-  process.executableURL = URL(fileURLWithPath: path)
-  process.arguments = arguments
   let output = Pipe()
   let errors = Pipe()
-  process.standardOutput = output
-  process.standardError = errors
   let inputPipe = input.map { _ in Pipe() }
-  process.standardInput = inputPipe ?? FileHandle.nullDevice
   let watch = ChildWatch()
-  process.terminationHandler = { _ in watch.noteExit() }
   // A request cancelled or out of time before this point starts nothing. A child ends before the request's deadline,
   // leaving time for the reply.
   let connection = currentConnection()
@@ -156,8 +149,8 @@ func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target:
   let timeLeft = connection?.timeLeftForWork
   if let timeLeft, timeLeft <= 0 { throw expiredError }
   let limit = min(timeout, timeLeft ?? timeout)
-  try process.run()
-  let pid = process.processIdentifier
+  let pid = try spawnInOwnGroup(path, arguments, input: inputPipe, output: output, errors: errors, target: target)
+  watchExit(of: pid, watch)
   // A cancelled request ends its child, so a long script or shortcut does not hold the connection.
   let stopWatching = connection?.onCancel { watch.noteCancel() }
   defer { stopWatching?() }
@@ -183,7 +176,7 @@ func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target:
     // Only a child the cancel actually stopped counts as interrupted; one that finished first keeps its result.
     if !stopChild(pid, watch: watch) {
       end = .unstoppable
-    } else if process.terminationReason == .uncaughtSignal {
+    } else if watch.diedOfSignal {
       end = .interrupted
     }
   case .timedOut:
@@ -195,15 +188,65 @@ func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target:
   let out = outputReader.data(by: outputDeadline)
   let err = errorReader.data(by: outputDeadline)
   if end == .exited, out == nil || err == nil { end = .outputHeldOpen }
-  return ChildRun(end: end, status: watch.hasExited ? process.terminationStatus : -1,
+  return ChildRun(end: end, status: watch.exitStatus ?? -1,
                   output: out.map { String(decoding: $0, as: UTF8.self) } ?? "", errors: err.map { String(decoding: $0, as: UTF8.self) } ?? "",
                   timeout: timeout, pid: pid)
 }
 
+// Starts the child as the leader of a new process group (POSIX_SPAWN_SETPGROUP), so `stopChild` reaches it and what
+// it starts through the group, whatever Foundation's Process would do (it made a group on macOS 27 but not on the
+// macOS 26 CI runners). Only its standard input, output and error are inherited; signals start at their defaults.
+private func spawnInOwnGroup(_ path: String, _ arguments: [String], input: Pipe?, output: Pipe, errors: Pipe, target: String) throws -> pid_t {
+  var actions: posix_spawn_file_actions_t?
+  var attributes: posix_spawnattr_t?
+  posix_spawn_file_actions_init(&actions)
+  posix_spawnattr_init(&attributes)
+  defer {
+    posix_spawn_file_actions_destroy(&actions)
+    posix_spawnattr_destroy(&attributes)
+  }
+  if let input {
+    posix_spawn_file_actions_adddup2(&actions, input.fileHandleForReading.fileDescriptor, STDIN_FILENO)
+  } else {
+    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
+  }
+  posix_spawn_file_actions_adddup2(&actions, output.fileHandleForWriting.fileDescriptor, STDOUT_FILENO)
+  posix_spawn_file_actions_adddup2(&actions, errors.fileHandleForWriting.fileDescriptor, STDERR_FILENO)
+  var defaults = sigset_t()
+  sigfillset(&defaults)
+  var noMask = sigset_t()
+  sigemptyset(&noMask)
+  posix_spawnattr_setsigdefault(&attributes, &defaults)
+  posix_spawnattr_setsigmask(&attributes, &noMask)
+  posix_spawnattr_setpgroup(&attributes, 0)
+  posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
+  let argv = ([path] + arguments).map { strdup($0) } + [nil]
+  defer { argv.forEach { free($0) } }
+  var pid: pid_t = 0
+  let result = posix_spawn(&pid, path, &actions, &attributes, argv, environ)
+  // The child holds its own copies; the helper keeps only its ends, so the readers see the end when the child's go.
+  try? output.fileHandleForWriting.close() // Closing a pipe end the helper owns fails only if already closed.
+  try? errors.fileHandleForWriting.close() // Closing a pipe end the helper owns fails only if already closed.
+  try? input?.fileHandleForReading.close() // Closing a pipe end the helper owns fails only if already closed.
+  guard result == 0 else {
+    throw HelperError(code: "action_failed", message: "\(target) could not be started: \(String(cString: strerror(result))).")
+  }
+  return pid
+}
+
+// Reaps the child on a thread of its own and reports how it ended.
+private func watchExit(of pid: pid_t, _ watch: ChildWatch) {
+  Thread.detachNewThread {
+    var status: Int32 = 0
+    while waitpid(pid, &status, 0) == -1, errno == EINTR {}
+    watch.noteExit(status: status)
+  }
+}
+
 // Stops a child and what it started: SIGTERM to its process group, then SIGKILL to the group once the grace period
 // passes, and SIGKILL to the group again after the child is gone, for processes it started that ignored SIGTERM.
-// Foundation starts each child as the leader of a process group of its own (observed on macOS 27: the child's pgid
-// is its pid), so the group holds the child and every process it started that did not leave it. A process that
+// `spawnInOwnGroup` makes the child the leader of a process group of its own, so the group holds the child and every
+// process it started that did not leave it. A process that
 // left the group (setsid, a daemon) or one launchd starts for it (open, an app) is out of reach and is not
 // stopped. Returns whether the child itself is confirmed gone.
 private func stopChild(_ pid: pid_t, watch: ChildWatch) -> Bool {
@@ -238,14 +281,16 @@ private func unstoppable(_ target: String, pid: pid_t) -> HelperError {
 private final class ChildWatch: Sendable {
   enum Event { case exited, cancelled, timedOut }
   private struct State {
-    var exited = false
+    // The wait status, once the child is reaped.
+    var status: Int32?
     var cancelled = false
+    var exited: Bool { status != nil }
   }
   private let state = Mutex(State())
   private let changed = DispatchSemaphore(value: 0)
 
-  func noteExit() {
-    state.withLock { $0.exited = true }
+  func noteExit(status: Int32) {
+    state.withLock { $0.status = status }
     changed.signal()
   }
 
@@ -255,6 +300,13 @@ private final class ChildWatch: Sendable {
   }
 
   var hasExited: Bool { state.withLock { $0.exited } }
+
+  // The exit code of a child that exited, or the wait status's own encoding of the signal that ended it.
+  var exitStatus: Int32? {
+    state.withLock { state in state.status.map { $0 & 0x7f == 0 ? ($0 >> 8) & 0xff : $0 & 0x7f } }
+  }
+
+  var diedOfSignal: Bool { state.withLock { $0.status.map { $0 & 0x7f != 0 && $0 & 0x7f != 0x7f } ?? false } }
 
   // The first of an exit, a cancel and the deadline; an exit wins over a cancel that came with it.
   func wait(until deadline: DispatchTime) -> Event {
