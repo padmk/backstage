@@ -191,6 +191,8 @@ private final class FakeMenus {
     let servicesItem: AXUIElement
     let service: AXUIElement
     let save: AXUIElement
+    let fileTop: AXUIElement
+    let lockScreen: AXUIElement
   }
 
   func app() -> App {
@@ -215,14 +217,16 @@ private final class FakeMenus {
     let appleTop = top("Apple"), appTop = top("Example"), fileTop = top("File")
     set(bar, kAXChildrenAttribute, [appleTop, appTop, fileTop] as NSArray)
     set(application, kAXMenuBarAttribute, bar)
-    menu(in: appleTop, [item("About This Mac"), item("Lock Screen", key: "q", modifiers: 4)])
+    let lockScreen = item("Lock Screen", key: "q", modifiers: 4)
+    menu(in: appleTop, [item("About This Mac"), lockScreen])
     let servicesItem = item("Services")
     menu(in: appTop, [item("About Example"), servicesItem, item("Quit Example", key: "q")])
     let service = item("Make Sticky", key: "y", modifiers: 1)
     menu(in: servicesItem, [service])
     let save = item("Save", key: "s")
     menu(in: fileTop, [save])
-    return App(application: application, bar: bar, appleTop: appleTop, appTop: appTop, servicesItem: servicesItem, service: service, save: save)
+    return App(application: application, bar: bar, appleTop: appleTop, appTop: appTop, servicesItem: servicesItem, service: service, save: save,
+               fileTop: fileTop, lockScreen: lockScreen)
   }
 }
 
@@ -313,5 +317,104 @@ private func keyCheck(_ text: String, _ menus: FakeMenus, _ app: FakeMenus.App, 
     let list = try #require(try reader().element(app.service, kAXParentAttribute))
     menus.set(list, kAXParentAttribute, .unreadable(.cannotComplete))
     #expect(code { try requireAllowedMenu(app.service, in: app.application, reader: reader()) } == "timeout")
+  }
+}
+
+// The way up from an item decides only when it ends at the menu bar, a window or the app; one that cannot be
+// followed there is refused, since the item could be in any menu.
+@Suite struct MenuPlaceTests {
+  private func check(_ element: AXUIElement, _ menus: FakeMenus, _ app: FakeMenus.App) -> String? {
+    code { try requireAllowedMenu(element, in: app.application, reader: MenuReader(appName: "Example", copy: menus.copy)) }
+  }
+
+  // A chain of `levels` submenus under `top`, each item opening the next; the last item is returned.
+  private func nested(under top: AXUIElement, first title: String, levels: Int, _ menus: FakeMenus) -> AXUIElement {
+    var parent = top
+    var item = top
+    for level in 0..<levels {
+      let list = menus.element([kAXRoleAttribute: kAXMenuRole as NSString, kAXParentAttribute: parent])
+      item = menus.element([kAXRoleAttribute: kAXMenuItemRole as NSString, kAXTitleAttribute: (level == 0 ? title : "Level \(level)") as NSString,
+                            kAXParentAttribute: list])
+      menus.set(list, kAXChildrenAttribute, [item] as NSArray)
+      menus.set(parent, kAXChildrenAttribute, [list] as NSArray)
+      parent = item
+    }
+    return item
+  }
+
+  @Test func allowsItemsAndControlsWhosePlaceIsKnown() {
+    let menus = FakeMenus()
+    let app = menus.app()
+    #expect(check(app.save, menus, app) == nil)
+    #expect(check(app.lockScreen, menus, app) == "not_allowed")
+    // A button deep in a window's content.
+    let window = menus.element([kAXRoleAttribute: kAXWindowRole as NSString, kAXParentAttribute: app.application])
+    var parent = window
+    for _ in 0..<60 { parent = menus.element([kAXRoleAttribute: kAXGroupRole as NSString, kAXParentAttribute: parent]) }
+    let button = menus.element([kAXRoleAttribute: kAXButtonRole as NSString, kAXTitleAttribute: "OK" as NSString, kAXParentAttribute: parent])
+    #expect(check(button, menus, app) == nil)
+    // An ordinary item of a context menu, which the app holds outside its menu bar.
+    let context = menus.element([kAXRoleAttribute: kAXMenuRole as NSString, kAXParentAttribute: app.application])
+    let copy = menus.element([kAXRoleAttribute: kAXMenuItemRole as NSString, kAXTitleAttribute: "Copy" as NSString, kAXParentAttribute: context])
+    #expect(check(copy, menus, app) == nil)
+    // An item of the app's own status menu.
+    let extras = menus.element([kAXRoleAttribute: kAXMenuBarRole as NSString, kAXParentAttribute: app.application])
+    menus.set(app.application, "AXExtrasMenuBar", extras)
+    let status = menus.element([kAXRoleAttribute: kAXMenuBarItemRole as NSString, kAXParentAttribute: extras])
+    menus.set(extras, kAXChildrenAttribute, [status] as NSArray)
+    let quit = nested(under: status, first: "Quit", levels: 1, menus)
+    #expect(check(quit, menus, app) == nil)
+  }
+
+  @Test func refusesAnItemWithoutAParent() {
+    let menus = FakeMenus()
+    let app = menus.app()
+    let orphan = menus.element([kAXRoleAttribute: kAXMenuItemRole as NSString, kAXTitleAttribute: "Restart…" as NSString])
+    #expect(check(orphan, menus, app) == "not_allowed")
+    // Its menu kept, but the menu's own parent gone.
+    let list = menus.element([kAXRoleAttribute: kAXMenuRole as NSString, kAXChildrenAttribute: [orphan] as NSArray])
+    menus.set(orphan, kAXParentAttribute, list)
+    #expect(check(orphan, menus, app) == "not_allowed")
+  }
+
+  // The Apple menu reached through a menu bar whose items leave it out, or through a menu bar not the app's.
+  @Test func refusesAnAppleMenuItemTheMenuBarDoesNotList() {
+    let menus = FakeMenus()
+    let app = menus.app()
+    menus.set(app.bar, kAXChildrenAttribute, [app.appTop, app.fileTop] as NSArray)
+    #expect(check(app.lockScreen, menus, app) == "not_allowed")
+    let other = FakeMenus()
+    let otherApp = other.app()
+    other.set(otherApp.application, kAXMenuBarAttribute, .absent)
+    #expect(check(otherApp.lockScreen, other, otherApp) == "not_allowed")
+  }
+
+  @Test func refusesAnItemUnderAShareMenuBeyondTheDepthBound() {
+    let menus = FakeMenus()
+    let app = menus.app()
+    let near = nested(under: app.fileTop, first: "Share", levels: 3, menus)
+    #expect(check(near, menus, app) == "not_allowed")
+    let far = nested(under: app.fileTop, first: "Share", levels: 140, menus)
+    #expect(check(far, menus, app) == "not_allowed")
+    let ordinary = nested(under: app.fileTop, first: "Export", levels: 3, menus)
+    #expect(check(ordinary, menus, app) == nil)
+  }
+
+  // A key that confirms a selection deeper than the search reads would confirm an item nobody checked.
+  @Test func refusesAConfirmingKeyWhenTheSelectionNestsTooDeep() throws {
+    let menus = FakeMenus()
+    let app = menus.app()
+    var item = app.fileTop
+    menus.set(app.fileTop, kAXSelectedAttribute, kCFBooleanTrue)
+    var parent = app.fileTop
+    for level in 0..<20 {
+      let list = menus.element([kAXRoleAttribute: kAXMenuRole as NSString, kAXParentAttribute: parent])
+      item = menus.element([kAXRoleAttribute: kAXMenuItemRole as NSString, kAXTitleAttribute: "Level \(level)" as NSString,
+                            kAXParentAttribute: list, kAXSelectedAttribute: kCFBooleanTrue])
+      menus.set(list, kAXChildrenAttribute, [item] as NSArray)
+      menus.set(parent, kAXChildrenAttribute, [list] as NSArray)
+      parent = item
+    }
+    #expect(try keyCheck("return", menus, app) == "not_allowed")
   }
 }
