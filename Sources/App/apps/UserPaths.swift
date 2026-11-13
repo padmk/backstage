@@ -50,13 +50,20 @@ private func resolvingExistingFolders(_ url: URL) -> URL {
 }
 
 // An existing entry under the name the file system keeps for it, without following a link: a volume that ignores
-// case also finds ~/LIBRARY, which must meet the rule as Library. (File URLs give every name in one Unicode form.)
-private func onDiskName(_ url: URL) -> URL {
+// case also finds ~/LIBRARY, which must meet the rule as Library. (File URLs give every name in one Unicode form; the
+// folders above it come resolved, which gives them their names on disk.) Only an entry that is not there keeps the
+// name as given; one whose name cannot be read is refused, as permission_missing when macOS keeps the helper out,
+// since the rule cannot be checked on it.
+private func onDiskName(_ url: URL, home: String) throws -> URL {
   let given = url.lastPathComponent
-  // A name that cannot be read is checked as given, which the rule refuses when it should.
-  guard let stored = try? url.resourceValues(forKeys: [.nameKey]).name, stored != given,
-    stored.compare(given, options: [.caseInsensitive]) == .orderedSame
-  else { return url }
+  let stored: String
+  do {
+    stored = try url.resourceValues(forKeys: [.nameKey]).name ?? given
+  } catch {
+    if try !entryExists(url.path, home: home) { return url }
+    throw HelperError(code: "not_allowed", message: "The name \(url.path) has on disk cannot be read, so it cannot be checked against the rule for which files are reachable.")
+  }
+  guard stored != given, stored.compare(given, options: [.caseInsensitive]) == .orderedSame else { return url }
   return url.deletingLastPathComponent().appendingPathComponent(stored)
 }
 
@@ -89,7 +96,7 @@ func userPath(_ arguments: JSON, key: String = "path", mustExist: Bool = true, f
   let given = URL(fileURLWithPath: expanded).standardizedFileURL
   let url = followingLink
     ? resolvingExistingFolders(given)
-    : onDiskName(resolvingExistingFolders(given.deletingLastPathComponent()).appendingPathComponent(given.lastPathComponent))
+    : try onDiskName(resolvingExistingFolders(given.deletingLastPathComponent()).appendingPathComponent(given.lastPathComponent), home: home)
   let path = url.path
   guard isReachablePath(path, home: home) else {
     throw HelperError(code: "not_allowed", message: "Only files in your home folder, outside Library except iCloud Drive and cloud storage, or on external volumes are reachable.")
