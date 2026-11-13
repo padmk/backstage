@@ -7,7 +7,7 @@ private let target = "Messages"
 
 private let listChats = Operation(
   name: "list_chats", summary: "List chats with their ids, names and participants' handles", effect: .reads,
-  arguments: [Argument(name: "query", kind: .string, required: false, description: "Only chats whose name or a participant's handle contains this, ignoring case; from Messages' data with Contacts allowed, also a participant's name in Contacts, ignoring accents too"), limitArgument]
+  arguments: [Argument(name: "query", kind: .string, required: false, description: "Only chats whose name or a participant's handle contains this, ignoring case; from Messages' data with Contacts on the list and allowed, also a participant's name in Contacts, ignoring accents too"), limitArgument]
 ) { arguments in
   // With the Messages history grant the database answers, without starting anything; otherwise scripting does.
   if messagesHistoryGranted() {
