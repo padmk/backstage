@@ -83,7 +83,7 @@ func installedIdentity(_ url: URL) throws -> AppIdentity {
 
 // With files, the app opens them, started if it is not running. Apps often come forward to show a file they were
 // handed, so the app the user was in gets the focus back then too.
-func launch(_ query: String, files: [URL] = [], session: ApprovalSession, connection: Connection) throws -> JSON {
+func launch(_ query: String, files paths: [String] = [], session: ApprovalSession, connection: Connection) throws -> JSON {
   let url = try installedApp(query)
   guard let bundle = Bundle(url: url), let bundleId = bundle.bundleIdentifier else {
     throw HelperError(code: "app_not_found", message: "\(query) has no bundle identifier.")
@@ -92,6 +92,8 @@ func launch(_ query: String, files: [URL] = [], session: ApprovalSession, connec
     ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? url.deletingPathExtension().lastPathComponent
   let approved = AppIdentity(pid: 0, bundleId: bundleId, name: name, launchDate: nil, path: url.path)
   try ApprovalGate.require(approved, session: session)
+  // Paths are looked at only for an allowed app, so a refusal says nothing about which files exist.
+  let files = try paths.map(openableFile)
   guard !files.isEmpty else {
     // Opening a running app sends it a reopen event, which can show a window and take the focus, so it is left as it is.
     if let running = runningApp(bundleId) {

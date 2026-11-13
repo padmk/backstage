@@ -87,16 +87,43 @@ func requireAllowedMenu(_ element: AXUIElement, app: AppIdentity) throws {
   throw refusal(menu)
 }
 
+private let pointRoles: Set<String> = [kAXMenuItemRole, kAXMenuBarItemRole, kAXButtonRole, kAXMenuButtonRole]
+
 // What lies under a point on the screen, checked when it is part of a menu or a button, since a click there acts
-// on it as a press would.
+// on it as a press would. The hit may be a part of the item, such as its image or text, so its ancestors up to the
+// window are looked at too.
 func requireAllowedPoint(_ point: CGPoint, app: AppIdentity) throws {
   let application = AXUIElementCreateApplication(app.pid)
   var found: AXUIElement?
   guard AXUIElementCopyElementAtPosition(application, Float(point.x), Float(point.y), &found) == .success,
-    let found else { return }
-  let role = stringAttribute(found, kAXRoleAttribute) ?? ""
-  guard [kAXMenuItemRole, kAXMenuBarItemRole, kAXButtonRole, kAXMenuButtonRole].contains(role) else { return }
-  try requireAllowedMenu(found, app: app)
+    let found else {
+    try requireNoMenuUnder(point, app: app, application: application)
+    return
+  }
+  var element = found
+  for _ in 0..<maxMenuDepth {
+    let role = stringAttribute(element, kAXRoleAttribute) ?? ""
+    if pointRoles.contains(role) { return try requireAllowedMenu(element, app: app) }
+    guard role != kAXWindowRole, let parent = attribute(element, kAXParentAttribute).map({ $0 as! AXUIElement }) else { return }
+    element = parent
+  }
+}
+
+// When Accessibility cannot tell what is under a point, as in many custom views and web content, the click goes on
+// unless one of the app's menus is open or one of its windows at menu level covers the point: the item there cannot
+// be checked then.
+private func requireNoMenuUnder(_ point: CGPoint, app: AppIdentity, application: AXUIElement) throws {
+  let menuLevel = Int(CGWindowLevelForKey(.popUpMenuWindow))
+  let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]) ?? []
+  let menuWindow = windows.contains { info in
+    guard (info[kCGWindowOwnerPID as String] as? Int).map({ pid_t($0) }) == app.pid,
+      (info[kCGWindowLayer as String] as? Int ?? 0) >= menuLevel,
+      let bounds = info[kCGWindowBounds as String] as? NSDictionary,
+      let frame = CGRect(dictionaryRepresentation: bounds) else { return false }
+    return frame.contains(point)
+  }
+  guard menuWindow || !shownMenus(of: application).isEmpty else { return }
+  throw HelperError(code: "not_allowed", message: "\(app.name) has a menu open and what lies under that point cannot be read, so nothing was clicked: it could be an item in the Apple, Services or Share menu. Close the menu with press_key escape, or choose its item with press.")
 }
 
 // Every click and drag goes out through these, wherever its point came from (coordinates or an element's

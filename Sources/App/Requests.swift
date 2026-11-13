@@ -88,8 +88,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     guard params["files"] == nil || params["files"] is [String] else {
       throw HelperError(code: "invalid_arguments", message: "files must be a list of paths.")
     }
-    let files = try (params["files"] as? [String] ?? []).map(openableFile)
-    return try launch(string(params, "app"), files: files, session: session, connection: connection)
+    return try launch(string(params, "app"), files: params["files"] as? [String] ?? [], session: session, connection: connection)
 
   case "list_operations":
     return try listOperations(params)
