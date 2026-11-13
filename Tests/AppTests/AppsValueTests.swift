@@ -109,3 +109,26 @@ private func littleEndian(_ value: Int, bytes: Int) -> [UInt8] { (0..<bytes).map
     }
   }
 }
+
+@Suite struct ContactHandleTests {
+  @Test func phoneNumbersKeepTheirDigitsAndLeadingPlus() {
+    #expect(ContactHandle("+48 600-100-200") == .phone("+48600100200"))
+    #expect(ContactHandle("600 100 200") == .phone("600100200"))
+    #expect(ContactHandle("(022) 123.45.67") == .phone("0221234567"))
+    #expect(ContactHandle("8080") == .phone("8080"))
+  }
+
+  @Test func emailAddressesAreLowercased() {
+    #expect(ContactHandle(" Anna@Example.COM ") == .email("anna@example.com"))
+  }
+
+  @Test func namesAndIdsAreNoHandles() {
+    for other in ["Orange", "INFO-SMS", "chat123456789", "48+111", "+48 +111", "", "١٢٣", "a b@c"] {
+      #expect(ContactHandle(other) == nil, "\(other)")
+    }
+  }
+
+  @Test func searchIgnoresCaseAccentsAndStrokes() {
+    #expect(searchFolded("Łódź ZOË Đorđe Øystein") == "lodz zoe dorde oystein")
+  }
+}
