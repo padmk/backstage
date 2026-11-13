@@ -10,8 +10,10 @@ private let launchQuietSeconds = 1.5
 // How long an app started hidden for an operation may take to finish starting.
 private let startSeconds = 20.0
 
-func onMain<T>(_ work: () -> T) -> T {
-  Thread.isMainThread ? work() : DispatchQueue.main.sync(execute: work)
+// Runs AppKit work on the main thread, at once when already there, and waits for its result.
+func onMain<T: Sendable>(_ work: @MainActor () throws -> T) rethrows -> T {
+  if Thread.isMainThread { return try MainActor.assumeIsolated(work) }
+  return try DispatchQueue.main.sync { try MainActor.assumeIsolated(work) }
 }
 
 func describe(_ app: NSRunningApplication) -> JSON {

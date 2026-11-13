@@ -29,7 +29,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
 let controlWindowWidth: CGFloat = 640
 private let controlWindowHeight: CGFloat = 600
 
-final class ControlSelection: ObservableObject {
+@MainActor final class ControlSelection: ObservableObject {
   @Published var tab: ControlTab {
     didSet { Preferences.lastTab = tab.rawValue }
   }
@@ -121,7 +121,7 @@ struct ControlView: View {
 // toolbar instead gets no clicks: the toolbar takes them there to move the window.
 private let tabsItem = NSToolbarItem.Identifier("tabs")
 
-private final class TabsToolbar: NSObject, NSToolbarDelegate {
+@MainActor private final class TabsToolbar: NSObject, NSToolbarDelegate {
   private let tabs: NSView
 
   init(tabs: NSView) { self.tabs = tabs }
@@ -279,7 +279,7 @@ func restartApp() {
   exit(0)
 }
 
-private final class ControlWindowCloser: NSObject, NSWindowDelegate {
+@MainActor private final class ControlWindowCloser: NSObject, NSWindowDelegate {
   func windowWillClose(_ notification: Notification) {
     // Back to having no Dock icon, as the background helper it also is.
     DispatchQueue.main.async {
@@ -291,16 +291,16 @@ private final class ControlWindowCloser: NSObject, NSWindowDelegate {
   }
 }
 
-private let closer = ControlWindowCloser()
-private var controlWindow: NSWindow?
-private var controlSelection: ControlSelection?
+@MainActor private let closer = ControlWindowCloser()
+@MainActor private var controlWindow: NSWindow?
+@MainActor private var controlSelection: ControlSelection?
 // The toolbar holds its delegate weakly.
-private var controlToolbar: TabsToolbar?
+@MainActor private var controlToolbar: TabsToolbar?
 
 var isControlWindowOpen: Bool { onMain { controlWindow != nil } }
 
 // Standard keys for a window with a Dock icon. Quitting closes the window, because the app also serves agents.
-private func controlMenu() -> NSMenu {
+@MainActor private func controlMenu() -> NSMenu {
   let bar = NSMenu()
   let appItem = NSMenuItem()
   let appMenu = NSMenu()
@@ -333,7 +333,7 @@ private final class FirstClickHostingView<Content: View>: NSHostingView<Content>
 
 // The window's frame: an opaque title bar band in the gradient's top color, holding the traffic lights and the
 // tabs, with the content below it.
-private func makeControlWindow(content: NSView, toolbar: TabsToolbar) -> NSWindow {
+@MainActor private func makeControlWindow(content: NSView, toolbar: TabsToolbar) -> NSWindow {
   let window = OwnInputIgnoringWindow(
     contentRect: NSRect(x: 0, y: 0, width: controlWindowWidth, height: controlWindowHeight),
     styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -359,7 +359,7 @@ private func makeControlWindow(content: NSView, toolbar: TabsToolbar) -> NSWindo
 }
 
 // The tab is the one asked for, or the last one chosen; Setup while Accessibility is missing.
-func showControlWindow(tab: ControlTab? = nil) {
+@MainActor func showControlWindow(tab: ControlTab? = nil) {
   NSApp.setActivationPolicy(.regular)
   NSApp.mainMenu = controlMenu()
   let missing = !AXIsProcessTrusted()

@@ -3,6 +3,7 @@
 
 import AppKit
 import ApplicationServices
+import Synchronization
 
 // The longest an action waits for the app to settle, for example while it shows a spinner.
 private let settleLimitSeconds = 5.0
@@ -33,11 +34,10 @@ private let maxRememberedReads = 32
 // each request that reads or acts in an app holds that app's lock until its report is done. Other apps go on. The
 // lock is the bundle id's, so an operation that starts a closed app holds the same lock as window work in it.
 enum AppLocks {
-  private static let guardLock = NSLock()
-  private static var locks: [String: NSLock] = [:]
+  private static let locks = Mutex<[String: NSLock]>([:])
 
   static func with<T>(_ bundleId: String, connection: Connection, _ body: () throws -> T) throws -> T {
-    let lock = guardLock.withLock { () -> NSLock in
+    let lock = locks.withLock { locks -> NSLock in
       if let known = locks[bundleId] { return known }
       let made = NSLock()
       locks[bundleId] = made
@@ -61,9 +61,8 @@ private let watchedNotifications = [
 // The Accessibility notifications an app sends while an action takes effect, delivered on the thread that made the
 // watch, in a run loop mode of its own, so nothing else runs while it waits.
 final class ChangeWatch {
-  private static let lock = NSLock()
   // Apps seen sending a notification, whose silence therefore means nothing changed.
-  private static var notifying: Set<String> = []
+  private static let notifying = Mutex(Set<String>())
 
   let bundleId: String
   private let observer: AXObserver
@@ -95,13 +94,13 @@ final class ChangeWatch {
   }
 
   private func noticed() {
-    if count == 0 { _ = Self.lock.withLock { Self.notifying.insert(bundleId) } }
+    if count == 0 { _ = Self.notifying.withLock { $0.insert(bundleId) } }
     count += 1
     lastAt = Date()
   }
 
   // Whether the app's notifications can be relied on: it sent one now or before.
-  var appNotifies: Bool { count > 0 || Self.lock.withLock { Self.notifying.contains(bundleId) } }
+  var appNotifies: Bool { count > 0 || Self.notifying.withLock { $0.contains(bundleId) } }
 
   // Waits until `deadline`, or less when a notification arrives.
   func wait(until deadline: Date) {

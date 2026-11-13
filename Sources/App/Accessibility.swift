@@ -2,8 +2,15 @@
 
 import AppKit
 import ApplicationServices
+import Synchronization
 
 let maxTextLength = 300
+
+// Whether macOS trusts this app with Accessibility, showing its prompt when it does not. The key is the value of
+// kAXTrustedCheckOptionPrompt, a C global variable that strict concurrency checking does not let Swift read.
+func isTrustedAskingForAccessibility() -> Bool {
+  AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+}
 
 func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
   var value: AnyObject?
@@ -136,11 +143,10 @@ func windows(of application: AXUIElement) -> [AXUIElement] {
 }
 
 // Electron builds its accessibility tree only when asked to, and asynchronously.
-private var preparedProcesses = Set<pid_t>()
-private let preparedLock = NSLock()
+private let preparedProcesses = Mutex(Set<pid_t>())
 
 func prepareAccessibility(of application: AXUIElement, pid: pid_t) {
-  let isNew = preparedLock.withLock { preparedProcesses.insert(pid).inserted }
+  let isNew = preparedProcesses.withLock { $0.insert(pid).inserted }
   guard isNew else { return }
   let outcome = AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
   guard outcome == .success else { return }

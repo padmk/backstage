@@ -148,7 +148,7 @@ func messagesChatList(_ database: ReadOnlyDatabase, query: String?, limit: Int, 
     """)
   let members = try participants(database)
   let wanted = query.map(searchFolded).flatMap { $0.isEmpty ? nil : $0 }
-  func describe(_ row: JSON, contacts: ContactLookup?) -> JSON? {
+  func describe(_ row: [String: Any?], contacts: ContactLookup?) -> JSON? {
     let handles = members[int(row["key"]) ?? -1] ?? []
     let identifier = text(row["identifier"])
     var chat: JSON = ["id": text(row["id"]) ?? "", "name": text(row["name"]) ?? "", "participants": handles]

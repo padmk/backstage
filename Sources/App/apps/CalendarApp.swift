@@ -33,7 +33,7 @@ private let getEvent = Operation(
   arguments: [Argument(name: "id", kind: .string, required: true, description: "Event id from list_events")]
 ) { arguments in
   let id = try string(arguments, "id")
-  return try withEventStore(.event) { store -> JSON in
+  return try withEventStore(.event) { store, _ -> JSON in
     guard let event = store.event(withIdentifier: id) else { throw HelperError(code: "not_found", message: "There is no event with id \(id).") }
     var result = describe(event)
     result["notes"] = event.notes ?? ""
@@ -66,7 +66,7 @@ private func statusName(_ status: EKParticipantStatus) -> String {
 }
 
 private let listCalendars = Operation(name: "list_calendars", summary: "List calendars with their ids", effect: .reads, arguments: []) { _ in
-  try withEventStore(.event) { store in
+  try withEventStore(.event) { store, _ in
     let defaultId = store.defaultCalendarForNewEvents?.calendarIdentifier
     return ["calendars": store.calendars(for: .event).map { describe($0, isDefault: $0.calendarIdentifier == defaultId) }]
   }
@@ -88,7 +88,7 @@ private let listEvents = Operation(
   guard end.timeIntervalSince(start) <= maxRangeDays * 86400 else {
     throw HelperError(code: "invalid_arguments", message: "The range may span at most 366 days.")
   }
-  return try withEventStore(.event) { store -> JSON in
+  return try withEventStore(.event) { store, _ -> JSON in
     let calendars = try optionalString(arguments, "calendar").map { [try calendar($0, among: store.calendars(for: .event), kind: "calendar")] }
     let found = store.events(matching: store.predicateForEvents(withStart: start, end: end, calendars: calendars))
       .sorted { $0.startDate < $1.startDate }
@@ -117,7 +117,7 @@ private let createEvent = Operation(
   guard allDay ? end.date >= start.date : end.date > start.date else {
     throw HelperError(code: "invalid_arguments", message: "end must be after start.")
   }
-  return try withEventStore(.event) { store -> JSON in
+  return try withEventStore(.event) { store, confirming -> JSON in
     let event = EKEvent(eventStore: store)
     event.title = try string(arguments, "title")
     event.isAllDay = allDay
@@ -134,7 +134,7 @@ private let createEvent = Operation(
     }
     try requireWritable(event.calendar, kind: "calendar")
     try store.save(event, span: .thisEvent, commit: true)
-    guard let id = event.eventIdentifier, let saved = confirmingStore().event(withIdentifier: id) else {
+    guard let id = event.eventIdentifier, let saved = confirming().event(withIdentifier: id) else {
       throw HelperError(code: "outcome_unknown", message: "Calendar saved the event but it cannot be read back. List the events before trying again.")
     }
     var result = describe(saved)
@@ -163,7 +163,7 @@ private let updateEvent = Operation(
   guard !fields.isEmpty else { throw HelperError(code: "invalid_arguments", message: "Give at least one field to change.") }
   let start = try optionalString(arguments, "start").map { try moment($0, key: "start") }
   let end = try optionalString(arguments, "end").map { try moment($0, key: "end") }
-  return try withEventStore(.event) { store -> JSON in
+  return try withEventStore(.event) { store, confirming -> JSON in
     let id = try string(arguments, "id")
     guard let event = store.event(withIdentifier: id) else { throw HelperError(code: "not_found", message: "There is no event with id \(id).") }
     // Every occurrence of a recurring event shares the id, so a change could reach the whole series.
@@ -198,7 +198,7 @@ private let updateEvent = Operation(
       try requireWritable(event.calendar, kind: "calendar")
     }
     try store.save(event, span: .thisEvent, commit: true)
-    guard let savedId = event.eventIdentifier, let saved = confirmingStore().event(withIdentifier: savedId) else {
+    guard let savedId = event.eventIdentifier, let saved = confirming().event(withIdentifier: savedId) else {
       throw HelperError(code: "outcome_unknown", message: "Calendar saved the change but the event cannot be read back. List the events before trying again.")
     }
     var result = describe(saved)

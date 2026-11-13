@@ -127,7 +127,8 @@ private func validStaticCode(of app: AppIdentity) -> SecStaticCode? {
 
 // Code that Apple signed as part of macOS. Apple's own apps have no team id, and their code hash changes with
 // every system update, so they are named by this anchor instead.
-private let appleAnchor: SecRequirement? = {
+// Unsafe only to the compiler: a SecRequirement never changes once made, and Security lets threads share one.
+nonisolated(unsafe) private let appleAnchor: SecRequirement? = {
   var requirement: SecRequirement?
   return SecRequirementCreateWithString("anchor apple" as CFString, [], &requirement) == errSecSuccess ? requirement : nil
 }()
@@ -294,7 +295,9 @@ func writeDecisionLog(client: String?, bundleId: String, decision: String) {
 // MARK: Session state
 
 // Outlives a connection, so a reconnecting server keeps its element numbers and reads.
-final class ApprovalSession {
+// Unchecked: the apps used, the reads and the client's name are read and written holding `lock`, the connection
+// count and the time it fell to none holding the session registry's lock, and the element table guards itself.
+final class ApprovalSession: @unchecked Sendable {
   let lock = NSLock()
   // Apps this session has used, so Activity records each app once per session rather than every action.
   var usedApps = Set<String>()

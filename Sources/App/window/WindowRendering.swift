@@ -53,7 +53,7 @@ private struct RenderedWindow: View {
 
 // An NSHostingView in a borderless window that is never ordered in draws AppKit-backed controls such as the
 // switches, which ImageRenderer leaves out.
-private func renderPNG(of view: some View) -> Data? {
+@MainActor private func renderPNG(of view: some View) -> Data? {
   let hosting = NSHostingView(rootView: view)
   hosting.frame.size = hosting.fittingSize
   let window = NSWindow(contentRect: hosting.frame, styleMask: .borderless, backing: .buffered, defer: false)
@@ -77,7 +77,7 @@ private func renderPNG(of view: some View) -> Data? {
 }
 
 // Writes window-apps.png, window-setup.png and window-activity.png into the folder; false when one failed.
-func renderControlWindow(into folder: String) -> Bool {
+@MainActor func renderControlWindow(into folder: String) -> Bool {
   let application = NSApplication.shared
   application.setActivationPolicy(.prohibited)
   let model = ControlModel()

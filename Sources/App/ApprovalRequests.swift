@@ -4,6 +4,7 @@
 
 import AppKit
 import HelperLink
+import Synchronization
 
 struct ApprovalRequest: Identifiable, Equatable {
   let app: AppIdentity
@@ -14,16 +15,15 @@ struct ApprovalRequest: Identifiable, Equatable {
 }
 
 enum ApprovalRequests {
-  private static let lock = NSLock()
-  private static var waiting: [ApprovalRequest] = []
+  private static let waitingRequests = Mutex<[ApprovalRequest]>([])
   // A client asking again and again must not grow the list or keep bringing the window forward.
   private static let maxWaiting = 20
 
-  static var all: [ApprovalRequest] { lock.withLock { waiting } }
+  static var all: [ApprovalRequest] { waitingRequests.withLock { $0 } }
 
   // Returns whether the request is new, so the window comes forward only once for it.
   static func add(_ app: AppIdentity, client: String?) throws -> Bool {
-    try lock.withLock {
+    try waitingRequests.withLock { waiting in
       if waiting.contains(where: { $0.app.bundleId == app.bundleId }) { return false }
       guard waiting.count < maxWaiting else {
         throw HelperError(code: "busy", message: "Too many apps are waiting for the user's answer in the Backstage window.")
@@ -36,7 +36,7 @@ enum ApprovalRequests {
   // Returns whether the request was still waiting, so each one is answered once.
   @discardableResult
   static func remove(_ bundleId: String) -> Bool {
-    lock.withLock {
+    waitingRequests.withLock { waiting in
       let before = waiting.count
       waiting.removeAll { $0.app.bundleId == bundleId }
       return waiting.count != before

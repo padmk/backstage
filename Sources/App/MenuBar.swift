@@ -6,7 +6,7 @@ import AppKit
 private let menuAppLimit = 10
 private let menuIconSize: CGFloat = 16
 
-final class MenuBarItem: NSObject, NSMenuDelegate {
+@MainActor final class MenuBarItem: NSObject, NSMenuDelegate {
   static let shared = MenuBarItem()
   private var item: NSStatusItem?
 

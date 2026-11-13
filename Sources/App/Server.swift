@@ -3,6 +3,7 @@
 
 import AppKit
 import HelperLink
+import Synchronization
 
 private let idleExitSeconds: TimeInterval = 120
 // Bounds that keep one client from exhausting the helper: a frame no request needs (type_text takes 100,000
@@ -13,47 +14,50 @@ private let maxSessions = 256
 // Long enough for a client to reconnect and keep what the user decided.
 private let detachedSessionSeconds: TimeInterval = 600
 
-final class Connections {
-  private let lock = NSLock()
-  private var count = 0
-  private var lastClosed = Date()
+final class Connections: Sendable {
+  private struct State {
+    var count = 0
+    var lastClosed = Date()
+  }
+
+  private let state = Mutex(State())
 
   // Takes a place for a new connection, or refuses one beyond the limit.
   func open() -> Bool {
-    lock.withLock {
-      guard count < maxConnections else { return false }
-      count += 1
+    state.withLock { state in
+      guard state.count < maxConnections else { return false }
+      state.count += 1
       return true
     }
   }
 
   func closed() {
-    lock.withLock {
-      count -= 1
-      lastClosed = Date()
+    state.withLock { state in
+      state.count -= 1
+      state.lastClosed = Date()
     }
   }
 
   var shouldExit: Bool {
-    lock.withLock { count == 0 && Date().timeIntervalSince(lastClosed) > idleExitSeconds }
+    state.withLock { $0.count == 0 && Date().timeIntervalSince($0.lastClosed) > idleExitSeconds }
   }
 }
 
 let connections = Connections()
 
-// A session id outlives a connection, so a reconnecting server keeps its approvals.
-private var sessions: [String: ApprovalSession] = [:]
-private let sessionsLock = NSLock()
+// A session id outlives a connection, so a reconnecting server keeps its approvals. Held also while a session's
+// count of connections changes.
+private let sessions = Mutex<[String: ApprovalSession]>([:])
 
 // The agents with a connection open now, by the names their clients give.
 func connectedClients() -> [String] {
-  let attached = sessionsLock.withLock { sessions.values.filter { $0.attachedConnections > 0 } }
+  let attached = sessions.withLock { $0.values.filter { $0.attachedConnections > 0 } }
   let names = attached.map { session in session.lock.withLock { session.clientName } }.map { readableClientName($0) ?? "An agent" }
   return Array(Set(names)).sorted()
 }
 
 private func attachSession(id: String) -> ApprovalSession {
-  sessionsLock.withLock {
+  sessions.withLock { sessions in
     // Past the limit, the sessions detached longest go first; attached ones stay.
     if sessions[id] == nil, sessions.count >= maxSessions {
       let detached = sessions.filter { $0.value.attachedConnections == 0 }.sorted { $0.value.detachedAt < $1.value.detachedAt }
@@ -67,63 +71,73 @@ private func attachSession(id: String) -> ApprovalSession {
 }
 
 private func detach(_ session: ApprovalSession) {
-  sessionsLock.withLock {
+  sessions.withLock { _ in
     session.attachedConnections -= 1
     session.detachedAt = Date()
   }
 }
 
 private func forgetDetachedSessions() {
-  sessionsLock.withLock {
+  sessions.withLock { sessions in
     sessions = sessions.filter {
       $0.value.attachedConnections > 0 || Date().timeIntervalSince($0.value.detachedAt) < detachedSessionSeconds
     }
   }
 }
 
-final class Connection {
+final class Connection: Sendable {
   let descriptor: Int32
   // The reader and the worker both answer on this socket, so one reply is written whole before the next starts.
   let writeLock = NSLock()
-  private let lock = NSLock()
-  private var generation = 0
-  private var isClosed = false
-  private var cancelHandlers: [UUID: () -> Void] = [:]
-  // Requests from the moment they are queued until they finish, those of them cancelled, and the one running now.
-  private var outstandingIds = Set<String>()
-  private var cancelledIds = Set<String>()
-  private var runningId: String?
-  private var runningDeadline: Date?
-  private var queued = 0
-  private var currentSession: ApprovalSession
-  private var adoptedSession: ApprovalSession?
-  private var requestGeneration = 0
 
-  var session: ApprovalSession { lock.withLock { currentSession } }
+  private struct State {
+    var generation = 0
+    var isClosed = false
+    var cancelHandlers: [UUID: @Sendable () -> Void] = [:]
+    // Requests from the moment they are queued until they finish, those of them cancelled, and the one running now.
+    var outstandingIds = Set<String>()
+    var cancelledIds = Set<String>()
+    var runningId: String?
+    var runningDeadline: Date?
+    var queued = 0
+    var currentSession: ApprovalSession
+    var adoptedSession: ApprovalSession?
+    var requestGeneration = 0
+
+    // The connection closed, a cancel of all its requests came after the running one began, or the running one
+    // was cancelled by its id.
+    var isCancelled: Bool { isClosed || requestGeneration != generation || runningId.map(cancelledIds.contains) == true }
+
+    mutating func takeCancelHandlers() -> [@Sendable () -> Void] {
+      defer { cancelHandlers.removeAll() }
+      return Array(cancelHandlers.values)
+    }
+  }
+
+  private let state: Mutex<State>
+
+  var session: ApprovalSession { state.withLock { $0.currentSession } }
 
   // Registered from the start, so approvals given to a client that never says hello are listed and revocable too.
   init(descriptor: Int32) {
     self.descriptor = descriptor
     let own = attachSession(id: "connection-\(UUID().uuidString)")
-    currentSession = own
-    adoptedSession = own
+    state = Mutex(State(currentSession: own, adoptedSession: own))
   }
 
   func adopt(sessionId: String) {
     let adopted = attachSession(id: sessionId)
-    let previous = lock.withLock { () -> ApprovalSession? in
+    let previous = state.withLock { state -> ApprovalSession? in
       defer {
-        currentSession = adopted
-        adoptedSession = adopted
+        state.currentSession = adopted
+        state.adoptedSession = adopted
       }
-      return adoptedSession
+      return state.adoptedSession
     }
     if let previous { detach(previous) }
   }
 
-  var isCancelled: Bool {
-    lock.withLock { isClosed || requestGeneration != generation || runningId.map(cancelledIds.contains) == true }
-  }
+  var isCancelled: Bool { state.withLock { $0.isCancelled } }
 
   func throwIfCancelled() throws {
     if isCancelled {
@@ -132,90 +146,84 @@ final class Connection {
   }
 
   func begin(generation captured: Int, id: String?, deadline: Date?) {
-    lock.withLock {
-      requestGeneration = captured
-      runningId = id
-      runningDeadline = deadline
+    state.withLock { state in
+      state.requestGeneration = captured
+      state.runningId = id
+      state.runningDeadline = deadline
     }
   }
 
   // When the client gives up on the running request, if it said.
-  var deadline: Date? { lock.withLock { runningDeadline } }
+  var deadline: Date? { state.withLock { $0.runningDeadline } }
 
   // Takes a place in this connection's queue, or refuses one beyond the limit.
   func enqueue(id: String?) -> Bool {
-    lock.withLock {
-      guard queued < maxQueuedRequests else { return false }
-      queued += 1
-      if let id { outstandingIds.insert(id) }
+    state.withLock { state in
+      guard state.queued < maxQueuedRequests else { return false }
+      state.queued += 1
+      if let id { state.outstandingIds.insert(id) }
       return true
     }
   }
 
   func finish(id: String?) {
-    lock.withLock {
-      queued -= 1
+    state.withLock { state in
+      state.queued -= 1
       if let id {
-        cancelledIds.remove(id)
-        outstandingIds.remove(id)
+        state.cancelledIds.remove(id)
+        state.outstandingIds.remove(id)
       }
-      runningId = nil
-      runningDeadline = nil
+      state.runningId = nil
+      state.runningDeadline = nil
     }
   }
 
-  var currentGeneration: Int { lock.withLock { generation } }
+  var currentGeneration: Int { state.withLock { $0.generation } }
 
-  func onCancel(_ handler: @escaping () -> Void) -> () -> Void {
+  // Runs the handler when the running request is cancelled, at once when it already is. The returned function
+  // removes it.
+  func onCancel(_ handler: @escaping @Sendable () -> Void) -> @Sendable () -> Void {
     let id = UUID()
-    let cancelledAlready = lock.withLock { () -> Bool in
-      if isClosed || requestGeneration != generation || runningId.map(cancelledIds.contains) == true { return true }
-      cancelHandlers[id] = handler
+    let cancelledAlready = state.withLock { state -> Bool in
+      if state.isCancelled { return true }
+      state.cancelHandlers[id] = handler
       return false
     }
     if cancelledAlready { handler() }
     return { [weak self] in
-      self?.lock.withLock { _ = self?.cancelHandlers.removeValue(forKey: id) }
+      self?.state.withLock { _ = $0.cancelHandlers.removeValue(forKey: id) }
     }
-  }
-
-  private func fireCancelHandlers() {
-    let handlers = lock.withLock { () -> [() -> Void] in
-      let all = Array(cancelHandlers.values)
-      cancelHandlers.removeAll()
-      return all
-    }
-    handlers.forEach { $0() }
   }
 
   func cancelRequests() {
-    lock.withLock { generation += 1 }
-    fireCancelHandlers()
+    let handlers = state.withLock { state in
+      state.generation += 1
+      return state.takeCancelHandlers()
+    }
+    handlers.forEach { $0() }
   }
 
   // One request: if it runs now, its waits end; if it is queued, it will not run. A request
   // that has already finished is not marked, so its id cannot cancel a later one. Requests run one at a time, so
   // the handlers registered belong to the running one, and they are taken in the same step as that check.
   func cancel(requestId: String) {
-    let handlers = lock.withLock { () -> [() -> Void] in
-      guard outstandingIds.contains(requestId) else { return [] }
-      cancelledIds.insert(requestId)
-      guard runningId == requestId else { return [] }
-      let all = Array(cancelHandlers.values)
-      cancelHandlers.removeAll()
-      return all
+    let handlers = state.withLock { state -> [@Sendable () -> Void] in
+      guard state.outstandingIds.contains(requestId) else { return [] }
+      state.cancelledIds.insert(requestId)
+      guard state.runningId == requestId else { return [] }
+      return state.takeCancelHandlers()
     }
     handlers.forEach { $0() }
   }
 
   func close() {
-    let adopted = lock.withLock { () -> ApprovalSession? in
-      isClosed = true
-      defer { adoptedSession = nil }
-      return adoptedSession
+    let (adopted, handlers) = state.withLock { state in
+      state.isClosed = true
+      defer { state.adoptedSession = nil }
+      return (state.adoptedSession, state.takeCancelHandlers())
     }
     if let adopted { detach(adopted) }
-    fireCancelHandlers()
+    handlers.forEach { $0() }
   }
 }
 
@@ -238,30 +246,33 @@ private func write(_ reply: JSON, to connection: Connection) {
 // How many requests run now, so a restart for a new grant waits until none does. None starts once the restart is
 // planned, so requests that keep coming cannot hold it off.
 enum RequestActivity {
-  private static let lock = NSLock()
-  private static var count = 0
-  private static var restartPlanned = false
+  private struct State {
+    var running = 0
+    var restartPlanned = false
+  }
+
+  private static let state = Mutex(State())
 
   // False once the app is about to restart: the request is not run.
   static func started() -> Bool {
-    lock.withLock {
-      if restartPlanned { return false }
-      count += 1
+    state.withLock { state in
+      if state.restartPlanned { return false }
+      state.running += 1
       return true
     }
   }
 
-  static func ended() { lock.withLock { count -= 1 } }
+  static func ended() { state.withLock { $0.running -= 1 } }
 
   // True for the first caller only, so one restart waits however often it is asked for.
   static func planRestart() -> Bool {
-    lock.withLock {
-      defer { restartPlanned = true }
-      return !restartPlanned
+    state.withLock { state in
+      defer { state.restartPlanned = true }
+      return !state.restartPlanned
     }
   }
 
-  static var isIdle: Bool { lock.withLock { count == 0 } }
+  static var isIdle: Bool { state.withLock { $0.running == 0 } }
 }
 
 let expiredError = HelperError(code: "expired", message: "The request waited too long and was not run.")

@@ -28,8 +28,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     ] as JSON
 
   case "request_permissions":
-    let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-    let accessibility = AXIsProcessTrustedWithOptions(options)
+    let accessibility = isTrustedAskingForAccessibility()
     // Screen Recording is optional and asked for only when the user chooses Allow in the window, never over the socket.
     return ["accessibility": accessibility, "screen_recording": CGPreflightScreenCaptureAccess()] as JSON
 

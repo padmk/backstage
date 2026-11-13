@@ -3,20 +3,22 @@
 
 import AppKit
 import ApplicationServices
+import Synchronization
 
-let skyLight = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_NOW)
+// Unsafe only to the compiler: dlopen's handle is never changed or closed, and dlsym may use it from any thread.
+nonisolated(unsafe) let skyLight = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_NOW)
 
 func lookUp<Function>(_ name: String, as type: Function.Type, in library: UnsafeMutableRawPointer?) -> Function? {
   dlsym(library, name).map { unsafeBitCast($0, to: type) }
 }
 
 private typealias PostToPid = @convention(c) (pid_t, CGEvent) -> Void
-private typealias SetWindowLocation = @convention(c) (CGEvent, CGPoint) -> Void
+typealias SetWindowLocation = @convention(c) (CGEvent, CGPoint) -> Void
 private typealias WindowOfElement = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
 
 // Unlike the public call, it also tells the system the input is live.
 private let postToPid = lookUp("SLEventPostToPid", as: PostToPid.self, in: skyLight)
-let setEventWindowLocation: ((CGEvent, CGPoint) -> Void)? = lookUp("CGEventSetWindowLocation", as: SetWindowLocation.self, in: skyLight)
+let setEventWindowLocation: SetWindowLocation? = lookUp("CGEventSetWindowLocation", as: SetWindowLocation.self, in: skyLight)
 private let windowOfElement = lookUp("_AXUIElementGetWindow", as: WindowOfElement.self, in: dlopen(nil, RTLD_NOW))
 
 // Which private calls this macOS still has; each missing one falls back to a public call or a clear error.
@@ -91,20 +93,19 @@ func makeKeyInApp(window: CGWindowID, pid: pid_t) -> Bool {
   return posted
 }
 
-private var chromiumApps: [String: Bool] = [:]
-private let chromiumAppsLock = NSLock()
+private let chromiumApps = Mutex<[String: Bool]>([:])
 
 // Chromium browsers keep their engine in a framework with helper apps inside it; Electron apps ship
 // Electron Framework. AppKit apps are left alone: there the key records made the app report itself active.
 func isChromiumApp(path: String?) -> Bool {
   guard let path else { return false }
-  if let known = chromiumAppsLock.withLock({ chromiumApps[path] }) { return known }
+  if let known = chromiumApps.withLock({ $0[path] }) { return known }
   let frameworks = path + "/Contents/Frameworks"
   let names = (try? FileManager.default.contentsOfDirectory(atPath: frameworks)) ?? []
   let found = names.contains("Electron Framework.framework") || names.contains { name in
     name.hasSuffix(" Framework.framework")
       && FileManager.default.fileExists(atPath: "\(frameworks)/\(name)/Versions/Current/Helpers")
   }
-  chromiumAppsLock.withLock { chromiumApps[path] = found }
+  chromiumApps.withLock { $0[path] = found }
   return found
 }
