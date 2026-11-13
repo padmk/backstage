@@ -188,7 +188,11 @@ func acting(app: AppIdentity, session: ApprovalSession, _ action: () throws -> J
   }
   defer { _ = returnFocus(to: frontBefore, from: app.pid) }
   if returnFocus(to: frontBefore, from: app.pid) { result["focus_returned"] = true }
-  result["state"] = observeChange(app: app, session: session, watch: watch)
+  let state = observeChange(app: app, session: session, watch: watch)
+  if let appError = result[appErrorKey] as? String, state["changed"] as? Bool == false {
+    throw HelperError(code: "action_failed", message: "\(appError) Nothing changed.")
+  }
+  result["state"] = state
   return result
 }
 

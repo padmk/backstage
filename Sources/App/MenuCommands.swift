@@ -181,13 +181,12 @@ func runMenuCommand(app: AppIdentity, params: JSON, session: ApprovalSession) th
   }
   let before = checked(command.element)
   let outcome = AXUIElementPerformAction(command.element, kAXPressAction as CFString)
-  guard outcome == .success else { throw axFailure(outcome, "running \(command.joinedPath)") }
-  var result: JSON = ["path": command.joinedPath, "delivery": "accessibility"]
+  var result = try pressReply(outcome, "running \(command.joinedPath)", ["path": command.joinedPath, "delivery": "accessibility"])
   // A toggle shows its new state in its checkmark; for other commands the state report below is the evidence.
   sleep(seconds: 0.15)
   if let before, let after = checked(command.element), after != before {
     result["checked"] = after
-    result["verified"] = true
+    if outcome == .success { result["verified"] = true }
   }
   return result
 }

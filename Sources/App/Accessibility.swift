@@ -84,6 +84,21 @@ func axFailure(_ result: AXError, _ doing: String) -> HelperError {
   }
 }
 
+// Where a press reply carries the error the app answered with although the press may have worked.
+let appErrorKey = "app_error"
+
+// The reply to a press. Apps built with SwiftUI answer a press that opens or closes a sheet with a plain failure
+// although it took effect, so that failure is reported with the press and the change report settles it: `acting`
+// turns it into action_failed when nothing changed, and run_actions stops at it.
+func pressReply(_ result: AXError, _ doing: String, _ reply: JSON) throws -> JSON {
+  if result == .success { return reply }
+  guard result == .failure else { throw axFailure(result, doing) }
+  var reply = reply
+  reply["verified"] = false
+  reply[appErrorKey] = "The app reported an error while \(doing) (AX error \(result.rawValue)). Some apps, such as those built with SwiftUI, report one for a press that worked."
+  return reply
+}
+
 func requireAccessibility() throws {
   guard AXIsProcessTrusted() else {
     throw HelperError(code: "permission_missing", message: "Accessibility is not granted to Backstage. Ask the user to open Backstage and allow it on the Setup tab.")

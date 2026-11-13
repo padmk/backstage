@@ -35,6 +35,11 @@ func runActions(app: AppIdentity, params: JSON, session: ApprovalSession) throws
       arguments["app"] = params["app"]
       var outcome = try performAction(method, app: app, params: arguments, session: session)
       outcome["tool"] = method
+      // A press the app answered with an error may have worked or not, so later steps would act on an unknown state.
+      if let appError = outcome[appErrorKey] as? String {
+        failure = ["step": index + 1, "tool": method, "code": "outcome_unknown", "message": appError]
+        break
+      }
       done.append(outcome)
     } catch let error as HelperError {
       if error.code == "interrupted" || error.code == "cancelled" {

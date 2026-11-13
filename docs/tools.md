@@ -22,8 +22,9 @@ If you are an agent using Backstage, this is the shortest path to doing it well:
    A click at the middle of a frame (`x` + `width` / 2, `y` + `height` / 2) lands on that text. Recognized text can be misread and is only an observation: check the effect with another screenshot.
 5. **Wait instead of polling.** After an action that takes time, `wait_for` the text that shows when it is done (or `gone: true` for a progress bar).
 6. **Never retry a change blindly.** `outcome_unknown` means it may have happened: read the state first. Messages `send` cannot be undone.
-7. **Start apps with `launch_app`,** not `open` in a shell, which brings the app forward and takes the user's focus.
-8. **On a locked screen** (`screen_locked` in `list_apps`), use ready operations and the menu bar; never try to unlock the Mac. See [Working while the screen is locked](locked-screen.md).
+7. **Close what you open.** Menus, pop-up buttons, popovers and palettes an action opens show on the user's screen above their work, even with the app in the background. Choose the item or close them with `press_key` `escape` before you move on or end.
+8. **Start apps with `launch_app`,** not `open` in a shell, which brings the app forward and takes the user's focus.
+9. **On a locked screen** (`screen_locked` in `list_apps`), use ready operations and the menu bar; never try to unlock the Mac. See [Working while the screen is locked](locked-screen.md).
 
 The server repeats the essentials in its MCP instructions, so a client that loads them gets the same rules.
 
@@ -113,6 +114,7 @@ Every action reply says how it was delivered and what changed:
 
 - `delivery`: `accessibility`, `value_appended_at_end` (an unfocused one-line field took the text at its end, ignoring the cursor), `key_events`, `pointer_event` or `foreground_pointer_event`.
 - `verified`: `true` when the helper read the result back (a value it set), `false` when delivery could not be confirmed, so check the effect before going on. Absent when the action itself is the confirmation, such as an accessibility press, which macOS accepts or refuses.
+- `app_error`: a press or a menu command the app answered with an error (AX error -25200), which apps built with SwiftUI also do when a press opens or closes a sheet. The reply then has `verified: false` and `state` shows whether anything changed; when nothing did, the reply is `action_failed` instead. In `run_actions` such a step stops the steps as `outcome_unknown`.
 - `state`: the difference from the last read of this app, taken once the app has settled: its Accessibility notifications have paused and a read shortly after shows the same, for up to 5 s while a new busy indicator shows (see [A request, step by step](architecture.md#a-request-step-by-step)). Its fields are `changed`, `added`, `removed` and, when they apply, `renumbered`, `more_changes`, `more_renumbered`, `settled` and `note`.
   - `changed`, `added` and `removed` cover real changes only: lines are compared without their element numbers.
   - `renumbered` lists elements that kept their content and only got a new number, as apps such as System Settings hand out new elements for unchanged ones; use the number shown there. It is present only when not empty.
