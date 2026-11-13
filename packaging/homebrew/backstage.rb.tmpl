@@ -13,8 +13,9 @@ class Backstage < Formula
   depends_on macos: :tahoe
 
   def install
-    # SwiftPM's own sandbox cannot start inside Homebrew's build sandbox.
-    system "make", "app", "SWIFT_BUILD_FLAGS=--disable-sandbox"
+    # SwiftPM's own sandbox cannot start inside Homebrew's build sandbox. Warnings a newer Xcode adds must not
+    # stop an install, so they stay warnings here.
+    system "make", "app", "SWIFT_BUILD_FLAGS=--disable-sandbox", "ALLOW_WARNINGS=1"
     libexec.install "build/Backstage.app"
     bin.write_exec_script libexec/"Backstage.app/Contents/Helpers/backstage"
   end

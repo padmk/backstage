@@ -5,12 +5,15 @@
 
 import Foundation
 import HelperLink
+import Synchronization
 
 let computerArgument = "computer"
-let computerRule: JSON = [
-  "type": "string", "maxLength": ComputerName.maxLength,
-  "description": "Another of the user's Macs, by the name `ssh` reaches it under (a host or an alias in ~/.ssh/config). The call runs there, under that Mac's own app list; file paths are on that Mac. Omit for this Mac",
-]
+var computerRule: JSON {
+  [
+    "type": "string", "maxLength": ComputerName.maxLength,
+    "description": "Another of the user's Macs, by the name `ssh` reaches it under (a host or an alias in ~/.ssh/config). The call runs there, under that Mac's own app list; file paths are on that Mac. Omit for this Mac",
+  ]
+}
 
 // Tests put a stand-in for ssh here, only with a test home.
 private let sshPath: String = {
@@ -37,17 +40,20 @@ private let remoteCommand: String = {
 
 // A call for another Mac from the moment it arrives, so a cancellation that comes before its request reaches that
 // Mac keeps the request from being sent, and one that comes after follows the request there.
-final class RemoteCancellation: @unchecked Sendable {
-  private let lock = NSLock()
-  private var cancelled = false
-  private var sent: (link: RemoteLink, id: Int)?
+final class RemoteCancellation: Sendable {
+  private struct State {
+    var cancelled = false
+    var sent: (link: RemoteLink, id: Int)?
+  }
 
-  var isCancelled: Bool { lock.withLock { cancelled } }
+  private let state = Mutex(State())
+
+  var isCancelled: Bool { state.withLock { $0.cancelled } }
 
   func cancel() {
-    guard let sent = lock.withLock({ () -> (link: RemoteLink, id: Int)? in
-      cancelled = true
-      return self.sent
+    guard let sent = state.withLock({ state -> (link: RemoteLink, id: Int)? in
+      state.cancelled = true
+      return state.sent
     }) else { return }
     // The reader of the client's input calls this, and must never wait on ssh.
     DispatchQueue.global().async { sent.link.notify("notifications/cancelled", ["requestId": sent.id]) }
@@ -55,14 +61,16 @@ final class RemoteCancellation: @unchecked Sendable {
 
   // After the request was written, so the cancellation can never reach that Mac before it.
   fileprivate func requestSent(_ link: RemoteLink, _ id: Int) {
-    let late = lock.withLock { () -> Bool in
-      sent = (link, id)
-      return cancelled
+    let late = state.withLock { state -> Bool in
+      state.sent = (link, id)
+      return state.cancelled
     }
     if late { link.notify("notifications/cancelled", ["requestId": id]) }
   }
 }
 
+// Unchecked: every mutable property is read and written holding `lock`; the per-Mac locks in `opening` are held
+// only while that Mac's connection opens.
 final class RemoteComputers: @unchecked Sendable {
   private let lock = NSLock()
   // One per Mac, held while its connection opens, so two calls for a new Mac open one and a slow Mac holds up no other.
@@ -137,6 +145,8 @@ final class RemoteComputers: @unchecked Sendable {
 }
 
 // The SSH connection to one Mac, running its MCP server, with requests matched to replies by id.
+// Unchecked: the requests waiting, the ids, the end, the error output and the note are read and written holding
+// `lock`, writes to ssh hold `writeLock`, and the other properties are constants.
 final class RemoteLink: @unchecked Sendable {
   let computer: String
   private let process = Process()
