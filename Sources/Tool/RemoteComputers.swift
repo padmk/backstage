@@ -68,8 +68,8 @@ final class RemoteCancellation: @unchecked Sendable {
 
 final class RemoteComputers: @unchecked Sendable {
   private let lock = NSLock()
-  // Held while a connection opens, so two calls for a new Mac open one.
-  private let opening = NSLock()
+  // One per Mac, held while its connection opens, so two calls for a new Mac open one and a slow Mac holds up no other.
+  private var opening: [String: NSLock] = [:]
   private var links: [String: RemoteLink] = [:]
   // The Macs this session has reached, also before a handoff: a new connection to one of them is a new session there,
   // which numbers its elements anew.
@@ -107,6 +107,12 @@ final class RemoteComputers: @unchecked Sendable {
 
   private func link(_ computer: String, clientName: String?) throws -> RemoteLink {
     if let link = lock.withLock({ links[computer] }), link.isOpen { return link }
+    let opening = lock.withLock { () -> NSLock in
+      if let existing = self.opening[computer] { return existing }
+      let created = NSLock()
+      self.opening[computer] = created
+      return created
+    }
     opening.lock()
     defer { opening.unlock() }
     if let link = lock.withLock({ links[computer] }), link.isOpen { return link }

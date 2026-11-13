@@ -148,7 +148,7 @@ func messagesChatList(_ database: ReadOnlyDatabase, query: String?, limit: Int, 
     """)
   let members = try participants(database)
   let wanted = query.map(searchFolded).flatMap { $0.isEmpty ? nil : $0 }
-  let described = chats.compactMap { row -> JSON? in
+  func describe(_ row: JSON, contacts: ContactLookup?) -> JSON? {
     let handles = members[int(row["key"]) ?? -1] ?? []
     let identifier = text(row["identifier"])
     var chat: JSON = ["id": text(row["id"]) ?? "", "name": text(row["name"]) ?? "", "participants": handles]
@@ -167,9 +167,19 @@ func messagesChatList(_ database: ReadOnlyDatabase, query: String?, limit: Int, 
     }
     return chat
   }
-  let shown = Array(described.prefix(limit))
-  var result: JSON = ["total": described.count, "has_more": described.count > shown.count, "chats": shown, "source": "database"]
-  if wanted != nil, described.isEmpty, contacts == nil {
+  // A search matches names, so every chat is looked up; a plain listing looks up only the chats it shows.
+  let total: Int
+  let shown: [JSON]
+  if wanted == nil {
+    total = chats.count
+    shown = chats.prefix(limit).compactMap { describe($0, contacts: contacts) }
+  } else {
+    let matched = chats.compactMap { describe($0, contacts: contacts) }
+    total = matched.count
+    shown = Array(matched.prefix(limit))
+  }
+  var result: JSON = ["total": total, "has_more": total > shown.count, "chats": shown, "source": "database"]
+  if wanted != nil, total == 0, contacts == nil {
     result["note"] = "Messages keeps no names for people; it shows the names in Contacts. Backstage matches names once the user allows Contacts on the Setup tab (after adding Contacts on the Apps tab); until then, search by phone number or email address."
   }
   return result
