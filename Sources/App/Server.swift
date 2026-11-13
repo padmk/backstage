@@ -227,9 +227,27 @@ final class Connection: Sendable {
   }
 }
 
-private func write(_ reply: JSON, to connection: Connection) {
-  guard var data = try? JSONSerialization.data(withJSONObject: reply) else { return }
+// One reply as one line. A reply that is not valid JSON, such as one with a number that is not finite, would raise in
+// JSONSerialization and end the app; the client gets an error for that request instead.
+func encodedReply(_ reply: JSON) -> Data {
+  var data: Data
+  do {
+    guard JSONSerialization.isValidJSONObject(reply) else { throw HelperError(code: "outcome_unknown", message: "The reply is not valid JSON.") }
+    data = try JSONSerialization.data(withJSONObject: reply)
+  } catch {
+    appLog.error("A reply could not be encoded: \(String(describing: error), privacy: .public)")
+    // The id came parsed from the request, so it encodes.
+    let fallback: JSON = ["id": reply["id"] ?? NSNull(),
+                          "error": ["code": "outcome_unknown", "message": "The reply could not be encoded, so the request may or may not have worked. Read the state before trying again."]]
+    data = jsonLine(fallback)
+    data.removeLast()
+  }
   data.append(0x0a)
+  return data
+}
+
+private func write(_ reply: JSON, to connection: Connection) {
+  let data = encodedReply(reply)
   let descriptor = connection.descriptor
   connection.writeLock.lock()
   defer { connection.writeLock.unlock() }
