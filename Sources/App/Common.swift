@@ -2,9 +2,14 @@
 
 import Foundation
 import HelperLink
+import os
 import Synchronization
 
 typealias JSON = [String: Any]
+
+// Failures that no request is waiting to hear about, such as a write to the activity log or the settings, go to the
+// unified log: `log show --predicate 'subsystem == "<bundle id>"'`.
+let appLog = Logger(subsystem: Product.bundleIdentifier, category: "app")
 
 struct HelperError: Error {
   let code: String

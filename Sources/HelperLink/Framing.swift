@@ -32,7 +32,12 @@ public struct LineFramer: Sendable {
 }
 
 // One JSON object as one line. Sorted keys keep the output stable; `/` stays unescaped, as JavaScript writes it.
+// A value that is not JSON, which JSONSerialization would raise on rather than throw, becomes `{}`; the values sent
+// here come parsed from JSON or are built from strings, numbers and booleans.
 public func jsonLine(_ object: Any) -> Data {
+  // In an array, a single string, number or null is checked as well.
+  guard JSONSerialization.isValidJSONObject([object]) else { return Data("{}\n".utf8) }
+  // isValidJSONObject has ruled out what JSONSerialization raises on; what it still throws for becomes `{}`.
   var data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed])) ?? Data("{}".utf8)
   data.append(0x0A)
   return data
