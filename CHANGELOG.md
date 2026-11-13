@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2
 
 - A press or menu command the app answers with AX error -25200 no longer fails at once: apps built with SwiftUI answer so when a press opens or closes a sheet, though it worked. The reply carries `app_error`, `verified: false` and `state`, and is `action_failed` only when nothing changed; in `run_actions` the step stops the steps as `outcome_unknown`.
 - The MCP instructions and [Tools](docs/tools.md) tell agents to close the menus, popovers and palettes they open, which show on the user's screen above their work.
