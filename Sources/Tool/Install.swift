@@ -92,13 +92,40 @@ struct Installer {
     return HelperFailure(code: nil, message: "Cannot install into \(folder): \(reason).\(advice)")
   }
 
-  // The command inside first, then the bundle that seals it.
+  // The command inside first, then the bundle that seals it. Both use the hardened runtime, so dyld ignores
+  // DYLD_INSERT_LIBRARIES and loads no library from outside the system: without it, any process running as the
+  // user could start the app with its own code inside and use the app's permissions.
   private func sign(_ app: String) throws {
-    let signing = try signingArguments()
+    let signing = try signingArguments() + ["--options", "runtime"]
+    let entitlements = directories.data + "/signing-entitlements-\(getpid()).plist"
+    try appEntitlements.write(toFile: entitlements, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(atPath: entitlements) }
     try runProcess("/usr/bin/codesign", ["--force"] + signing + ["--identifier", Product.bundleIdentifier + ".command", app + "/" + Product.commandRelativePath])
-    try runProcess("/usr/bin/codesign", ["--force"] + signing + ["--identifier", Product.bundleIdentifier, app])
+    try runProcess("/usr/bin/codesign", ["--force"] + signing + ["--entitlements", entitlements, "--identifier", Product.bundleIdentifier, app])
     try runProcess("/usr/bin/codesign", ["--verify", "--strict", app])
     guard isSignedHere(app) else { throw HelperFailure(code: nil, message: "The signed copy does not verify against this Mac's certificate.") }
+    let details = try runProcess("/usr/bin/codesign", ["--display", "--verbose", app]).errors
+    guard details.contains("(runtime)") else { throw HelperFailure(code: nil, message: "The signed copy does not use the hardened runtime.") }
+  }
+
+  // What the hardened runtime otherwise withholds from the app: Apple events for the operations' scripts, the
+  // data operations read through EventKit, Contacts and PhotoKit, and audio capture for recordings.
+  private var appEntitlements: String {
+    let keys = [
+      "com.apple.security.automation.apple-events",
+      "com.apple.security.personal-information.addressbook",
+      "com.apple.security.personal-information.calendars",
+      "com.apple.security.personal-information.photos-library",
+      "com.apple.security.device.audio-input",
+    ]
+    return """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0"><dict>
+    \(keys.map { "<key>\($0)</key><true/>" }.joined(separator: "\n"))
+    </dict></plist>
+
+    """
   }
 
   // MARK: The signing identity
