@@ -30,9 +30,10 @@ func runActions(app: AppIdentity, params: JSON, session: ApprovalSession) throws
     if index > 0 { sleep(seconds: stepPauseSeconds) }
     do {
       try currentConnection()?.throwIfCancelled()
-      // The request was checked before the first step; the user may start working, the app quit or the screen lock
-      // while the steps run.
+      // The request was checked before the first step; the user may remove the app from the list or start working in
+      // it, the app may quit and the screen may lock while the steps run.
       if index > 0 {
+        try ApprovalGate.require(app, session: session)
         try requireSameProcess(app)
         try requireScreenUnlocked("run_actions", params: params, app: app, session: session)
         try requireUserNotWorking(in: app)

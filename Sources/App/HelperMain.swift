@@ -48,7 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     MenuBarItem.shared.update()
-    startWatchingBackgroundInput()
+    PointerActivity.start()
     // Clients start the helper with --background, and a launch at login has to stay unseen too.
     let tab = arguments.firstIndex(of: Product.tabArgument).flatMap { arguments.indices.contains($0 + 1) ? ControlTab(rawValue: arguments[$0 + 1]) : nil }
     if !arguments.contains(Product.backgroundArgument), !LaunchAtLogin.launchedAtLogin() { showControlWindow(tab: tab) }

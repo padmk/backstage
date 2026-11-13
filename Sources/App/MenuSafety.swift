@@ -88,6 +88,8 @@ func requireAllowedMenu(_ element: AXUIElement, app: AppIdentity) throws {
 }
 
 private let pointRoles: Set<String> = [kAXMenuItemRole, kAXMenuBarItemRole, kAXButtonRole, kAXMenuButtonRole]
+// A menu item's or button's text and image lie a level or two below it.
+private let pointAncestorDepth = 3
 
 // What lies under a point on the screen, checked when it is part of a menu or a button, since a click there acts
 // on it as a press would. The hit may be a part of the item, such as its image or text, so its ancestors up to the
@@ -106,14 +108,16 @@ func requireAllowedPoint(_ point: CGPoint, app: AppIdentity) throws {
     return try requireNoMenuUnder(point, app: app, application: application)
   }
   var element = found
-  for _ in 0..<maxMenuDepth {
+  for _ in 0..<pointAncestorDepth {
     let role = stringAttribute(element, kAXRoleAttribute) ?? ""
     if pointRoles.contains(role) { return try requireAllowedMenu(element, app: app) }
-    if role == kAXWindowRole { return }
-    guard let parent = attribute(element, kAXParentAttribute).map({ $0 as! AXUIElement }) else { break }
+    guard role != kAXWindowRole, let parent = attribute(element, kAXParentAttribute).map({ $0 as! AXUIElement }) else {
+      // An element outside any window may be part of a menu.
+      if role != kAXWindowRole { try requireNoMenuUnder(point, app: app, application: application) }
+      return
+    }
     element = parent
   }
-  try requireNoMenuUnder(point, app: app, application: application)
 }
 
 // When Accessibility cannot tell what is under a point, as in many custom views and web content, or gives only the
@@ -130,8 +134,12 @@ private func requireNoMenuUnder(_ point: CGPoint, app: AppIdentity, application:
       let frame = CGRect(dictionaryRepresentation: bounds) else { return false }
     return frame.contains(point)
   }
-  guard menuWindow || !shownMenus(of: application).isEmpty else { return }
-  throw HelperError(code: "not_allowed", message: "\(app.name) has a menu open and what lies under that point cannot be read, so nothing was clicked: it could be an item in the Apple, Services or Share menu. Close the menu with press_key escape, or choose its item with press.")
+  if !shownMenus(of: application).isEmpty {
+    throw HelperError(code: "not_allowed", message: "\(app.name) has a menu open and what lies under that point cannot be read, so nothing was clicked: it could be an item in the Apple, Services or Share menu. Close the menu with press_key escape, or choose its item with press.")
+  }
+  if menuWindow {
+    throw HelperError(code: "not_allowed", message: "A window of \(app.name) at menu level covers that point and what lies there cannot be read, so nothing was clicked: it could be an item in the Apple, Services or Share menu. Use press on an element instead, or wait until that window is gone.")
+  }
 }
 
 // Every click and drag goes out through these, wherever its point came from (coordinates or an element's
