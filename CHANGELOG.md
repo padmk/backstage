@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 - The check of the Apple, Services and Share menus refuses an element whose place it cannot prove: one whose way up breaks off at an element without a parent, runs past 256 levels or reaches a menu bar the app does not list, and a menu item its menu bar does not list. Before, such an item passed as if it were in a context menu. Return or space is refused while an open menu's selection nests deeper than the check reads.
 - A cancel or the request's deadline is checked right before every effect, after the reads that prepare it: a press, a menu command, a value, a key, a click, a scroll, a drag, a window change, starting, hiding or quitting an app, and a save to Calendar, Reminders or Contacts. Before, `run_menu_command`, `press` and others read first and then acted even when the client had already given up. Once one effect may have begun, a stop answers `outcome_unknown`, also between the steps of `run_actions`.

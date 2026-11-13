@@ -8,7 +8,7 @@ public enum Product {
   public static let appName = "Backstage"
   public static let commandName = appName.lowercased()
   // The release version, also the app's CFBundleShortVersionString (`make app` reads it from here).
-  public static let version = "0.2.3"
+  public static let version = "0.3.0"
   // Persisted: macOS ties the Accessibility, Screen Recording and other grants to this id. Changing it costs every
   // user those grants once.
   public static let bundleIdentifier = "app.foreverbeta.backstage"
