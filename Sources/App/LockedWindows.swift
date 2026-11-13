@@ -58,7 +58,7 @@ func lockedWindowRequest(_ method: String, app: AppIdentity, params: JSON) throw
     let x = try number(params, "x")
     let y = try number(params, "y")
     guard x >= 0, y >= 0, x <= window.bounds.width, y <= window.bounds.height else {
-      throw HelperError(code: "out_of_window", message: "The point is outside the window (\(Int(window.bounds.width))×\(Int(window.bounds.height))).")
+      throw HelperError(code: "out_of_window", message: "The point is outside the window (\(wholePoints(window.bounds.width))×\(wholePoints(window.bounds.height))).")
     }
     try makeKey(window, app: app)
     try postClick(at: CGPoint(x: window.bounds.minX + x, y: window.bounds.minY + y),

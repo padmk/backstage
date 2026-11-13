@@ -48,7 +48,7 @@ private func displayContaining(_ rect: CGRect, in all: [Display]) -> Display? {
 
 private extension CGRect {
   var area: CGFloat { isNull ? 0 : width * height }
-  var json: [Int] { [Int(minX.rounded()), Int(minY.rounded()), Int(width.rounded()), Int(height.rounded())] }
+  var json: [Int] { [wholePoints(minX), wholePoints(minY), wholePoints(width), wholePoints(height)] }
 }
 
 private func describe(_ display: Display) -> JSON {
@@ -277,6 +277,18 @@ private func waitFor(_ check: () -> Bool, seconds: Double) -> Bool {
   return check()
 }
 
+// The frame set_window asks for, refused unless every value is a plausible screen coordinate in points.
+func requestedFrame(_ value: Any?) throws -> CGRect {
+  guard let box = value as? JSON, let x = (box["x"] as? NSNumber)?.doubleValue, let y = (box["y"] as? NSNumber)?.doubleValue,
+    let width = (box["width"] as? NSNumber)?.doubleValue, let height = (box["height"] as? NSNumber)?.doubleValue,
+    width > 0, height > 0, isPlausibleGeometry(CGRect(x: x, y: y, width: width, height: height))
+  else {
+    throw HelperError(code: "invalid_request",
+                      message: "frame takes x, y, width and height in points, with a positive width and height and no value beyond \(Int(maxScreenCoordinate)).")
+  }
+  return CGRect(x: x, y: y, width: width, height: height)
+}
+
 // One change per call. Bringing a window back from the Dock or into full screen puts it in front, so those need
 // the caller's foreground consent, and the app the user was in gets the focus back.
 func setWindow(app: AppIdentity, params: JSON) throws -> JSON {
@@ -289,11 +301,7 @@ func setWindow(app: AppIdentity, params: JSON) throws -> JSON {
   var result: JSON
   switch change {
   case "frame":
-    guard let box = params["frame"] as? JSON, let x = (box["x"] as? NSNumber)?.doubleValue, let y = (box["y"] as? NSNumber)?.doubleValue,
-      let width = (box["width"] as? NSNumber)?.doubleValue, let height = (box["height"] as? NSNumber)?.doubleValue,
-      width > 0, height > 0, [x, y, width, height].allSatisfy(\.isFinite)
-    else { throw HelperError(code: "invalid_request", message: "frame takes x, y, width and height, with a positive width and height.") }
-    let target = CGRect(x: x, y: y, width: width, height: height)
+    let target = try requestedFrame(params["frame"])
     guard displays().contains(where: { $0.frame.intersects(target) }) else {
       throw HelperError(code: "invalid_request", message: "That frame lies on no display. list_windows lists the displays.")
     }

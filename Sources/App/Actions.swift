@@ -461,7 +461,7 @@ func clickAt(app: AppIdentity, params: JSON, session: ApprovalSession) throws ->
       throw HelperError(code: "action_failed", message: "The window has no position.")
     }
     guard x >= 0, y >= 0, x <= box.width, y <= box.height else {
-      throw HelperError(code: "out_of_window", message: "The point is outside the window (\(Int(box.width))×\(Int(box.height))).")
+      throw HelperError(code: "out_of_window", message: "The point is outside the window (\(wholePoints(box.width))×\(wholePoints(box.height))).")
     }
     point = CGPoint(x: box.minX + x, y: box.minY + y)
   }
