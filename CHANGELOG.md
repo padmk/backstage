@@ -17,6 +17,7 @@
 - Messages reads contact names only while Contacts is on the app list, not only while macOS allows it, so removing Contacts from the list stops it.
 - `launch_app` looks at `files` only for an app on the list, so a refusal no longer depends on whether a path exists.
 - A reply that cannot be encoded as JSON, such as one with a number that is not finite, no longer ends the helper: that request gets `outcome_unknown`.
+- Finder's `trash` reports `verified: true` only when the item is gone from where it was, not when it could not be looked at.
 - Contacts: `read` answers `not_found` only for an id Contacts does not have; any other failure is `action_failed` with Contacts' reason. Messages' `list_chats` and `read_chat` fail with `action_failed` when Contacts refuses a name lookup, instead of showing the chats without names or finding no chat by a name.
 - A ready operation whose script or shortcut ends while a process it started keeps the output open is `outcome_unknown`; before, it could return an empty or partial result as if complete.
 

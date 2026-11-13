@@ -79,7 +79,9 @@ private let trash = Operation(
   } else {
     trashed = try runScript("changeBegins({ path: args.path }); return Application('Finder').delete(Path(args.path)).url();", arguments: ["path": url.path], target: target)
   }
-  let gone = (try? FileManager.default.attributesOfItem(atPath: url.path)) == nil
+  // Gone only when the file system says there is no such item; an item it cannot look at may still be there.
+  var status = stat()
+  let gone = lstat(url.path, &status) != 0 && errno == ENOENT
   var result: JSON = ["path": url.path, "verified": gone]
   if let location = paths([trashed]).first { result["trashed_as"] = location }
   return result
