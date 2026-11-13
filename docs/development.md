@@ -10,7 +10,7 @@ make install   # make app, then its setup: install into /Applications signed for
 make test      # swift test
 make tsan      # swift test under the thread sanitizer; fails on any report, also from the helper and command the tests start
 make lint      # SwiftLint with .swiftlint.yml (brew install swiftlint)
-make hooks     # lint the staged Swift files before each commit (.githooks/pre-commit)
+make hooks     # lint the staged Swift files before each commit: puts a hook that runs .githooks/pre-commit in the repository's hooks folder, not core.hooksPath, so global hooks stay on
 make check     # what CI runs: make lint, make app, then the tests
 make live      # LIVE=1: the installed app operates the fixture app in the background
 make bench     # BENCH=1: latency against the installed app
