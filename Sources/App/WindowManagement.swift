@@ -247,9 +247,9 @@ private func setFrame(_ window: AXUIElement, to target: CGRect) throws -> JSON {
     throw HelperError(code: "not_settable", message: "This window cannot be moved or resized.")
   }
   let before = frame(of: window)
-  if isSettable(window, kAXPositionAttribute) { AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, axValue(target.origin)) }
-  if isSettable(window, kAXSizeAttribute) { AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, axValue(target.size)) }
-  if isSettable(window, kAXPositionAttribute) { AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, axValue(target.origin)) }
+  if isSettable(window, kAXPositionAttribute) { try setAXAttribute(window, kAXPositionAttribute, axValue(target.origin)) }
+  if isSettable(window, kAXSizeAttribute) { try setAXAttribute(window, kAXSizeAttribute, axValue(target.size)) }
+  if isSettable(window, kAXPositionAttribute) { try setAXAttribute(window, kAXPositionAttribute, axValue(target.origin)) }
   var after = frame(of: window)
   let started = Date()
   while Date().timeIntervalSince(started) < settleSeconds {
@@ -311,7 +311,7 @@ func setWindow(app: AppIdentity, params: JSON) throws -> JSON {
     }
     guard isSettable(window, kAXMinimizedAttribute) else { throw HelperError(code: "not_settable", message: "This window cannot be minimized.") }
     let front = onMain { NSWorkspace.shared.frontmostApplication }
-    AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, wanted as CFBoolean)
+    try setAXAttribute(window, kAXMinimizedAttribute, wanted as CFBoolean)
     let reached = waitFor({ boolAttribute(window, kAXMinimizedAttribute) == wanted }, seconds: settleSeconds)
     result = ["delivery": "accessibility", "minimized": boolAttribute(window, kAXMinimizedAttribute), "verified": reached]
     if !wanted, returnFocus(to: front, from: app.pid) { result["focus_returned"] = true }
@@ -321,7 +321,7 @@ func setWindow(app: AppIdentity, params: JSON) throws -> JSON {
       throw HelperError(code: "needs_foreground", message: "Full screen moves the window to a Space of its own and switches to it. Pass foreground: true to do it anyway, and tell the user.")
     }
     guard isSettable(window, "AXFullScreen") else { throw HelperError(code: "not_settable", message: "This window has no full screen.") }
-    AXUIElementSetAttributeValue(window, "AXFullScreen" as CFString, wanted as CFBoolean)
+    try setAXAttribute(window, "AXFullScreen", wanted as CFBoolean)
     let reached = waitFor({ boolAttribute(window, "AXFullScreen") == wanted }, seconds: 3)
     result = ["delivery": "accessibility", "fullscreen": boolAttribute(window, "AXFullScreen"), "verified": reached]
   }
@@ -344,6 +344,7 @@ func setAppState(app: AppIdentity, params: JSON) throws -> JSON {
   default: throw HelperError(code: "invalid_request", message: "state is hidden or shown.")
   }
   let front = onMain { NSWorkspace.shared.frontmostApplication }
+  try beginEffect()
   _ = onMain { hide ? running.hide() : running.unhide() }
   let reached = waitFor({ onMain { running.isHidden } == hide }, seconds: settleSeconds)
   var result: JSON = ["delivery": "app", "hidden": onMain { running.isHidden }, "verified": reached]
@@ -385,6 +386,7 @@ func closeWindowOrApp(app: AppIdentity, params: JSON) throws -> JSON {
     guard let running = onMain({ NSRunningApplication(processIdentifier: app.pid) }) else {
       return ["delivery": "app", "quit": true, "verified": true]
     }
+    try beginEffect()
     _ = onMain { running.terminate() }
     if waitFor({ onMain { running.isTerminated } }, seconds: quitSeconds) {
       return ["delivery": "app", "quit": true, "verified": true]
@@ -399,7 +401,7 @@ func closeWindowOrApp(app: AppIdentity, params: JSON) throws -> JSON {
   let reference = reference(window)
   let wasOnScreen = number.map { id in serverWindows().contains { $0.id == id && $0.onScreen } } ?? false
   let application = try applicationElement(app)
-  let outcome = AXUIElementPerformAction(button, kAXPressAction as CFString)
+  let outcome = try performAXAction(button, kAXPressAction)
   guard outcome == .success else { throw axFailure(outcome, "pressing the close button") }
   let gone = waitFor({
     guard let id = number else { return false }

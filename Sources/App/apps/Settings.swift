@@ -104,6 +104,7 @@ private let openPane = Operation(
   let configuration = NSWorkspace.OpenConfiguration()
   configuration.activates = false
   configuration.addsToRecentItems = false
+  try beginEffect()
   NSWorkspace.shared.open(url, configuration: configuration)
   // System Settings may take the focus while it starts; the app the user was in gets it back each time.
   var focusReturned = false

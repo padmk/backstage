@@ -50,10 +50,13 @@ func runActions(app: AppIdentity, params: JSON, session: ApprovalSession) throws
       }
       done.append(outcome)
     } catch let error as HelperError {
-      if error.code == "interrupted" || error.code == "cancelled" {
-        // Steps that already ran may have changed something, so the cancel must not read as nothing done.
+      // A cancel or the deadline ends the steps, whatever error it surfaced as.
+      let stop = currentConnection()?.stopCause
+      if stop != nil || error.code == "interrupted" || error.code == "cancelled" {
+        // Steps that already ran may have changed something, so the stop must not read as nothing done.
         guard done.isEmpty else {
-          throw HelperError(code: "outcome_unknown", message: "Cancelled after \(done.count) of \(steps.count) steps had run. Read the state before trying again.")
+          let why = stop?.code == "expired" ? "Out of time" : "Cancelled"
+          throw HelperError(code: "outcome_unknown", message: "\(why) after \(done.count) of \(steps.count) steps had run. Read the state before trying again.")
         }
         throw error
       }

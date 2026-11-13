@@ -109,7 +109,7 @@ func performAction(_ method: String, app: AppIdentity, params: JSON, session: Ap
   case "press_key":
     let key = try KeyCombination.parse(try string(params, "key"))
     try requireAllowedKey(key, app: app)
-    prepareInput(app: app, window: nil)
+    try prepareInput(app: app, window: nil)
     try postKey(key, pid: app.pid)
     return ["delivery": "key_events", "verified": false]
   case "scroll": return try scroll(app: app, params: params, session: session)
@@ -128,24 +128,24 @@ func press(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> J
     guard available.contains(action) else {
       throw HelperError(code: "action_failed", message: "The element does not offer \(name). It offers: \(available.joined(separator: ", ")).")
     }
-    let outcome = AXUIElementPerformAction(element, action as CFString)
+    let outcome = try performAXAction(element, action)
     return try pressReply(outcome, "performing \(name)", ["delivery": "accessibility", "action": action])
   }
   if let action = pressActions.first(where: available.contains) {
-    let outcome = AXUIElementPerformAction(element, action as CFString)
+    let outcome = try performAXAction(element, action)
     return try pressReply(outcome, "pressing the element", ["delivery": "accessibility", "action": action])
   }
   // A list row, or the text in one, is selected the way a click would, since background clicks often miss
   // lists such as System Settings' privacy lists.
   if let selectable = selectableSelfOrRow(element) {
-    let outcome = AXUIElementSetAttributeValue(selectable, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+    let outcome = try setAXAttribute(selectable, kAXSelectedAttribute, kCFBooleanTrue)
     guard outcome == .success else { throw axFailure(outcome, "selecting the element") }
     return ["delivery": "accessibility", "action": "select"]
   }
   guard let box = frame(of: element) else {
     throw HelperError(code: "action_failed", message: "The element has no action and no position.")
   }
-  prepareInput(app: app, window: elementAttribute(element, kAXWindowAttribute))
+  try prepareInput(app: app, window: elementAttribute(element, kAXWindowAttribute))
   try postAllowedClick(at: CGPoint(x: box.midX, y: box.midY), app: app, target: pointerTarget(for: element), count: 1)
   return ["delivery": "pointer_event", "verified": false]
 }
@@ -181,7 +181,7 @@ func setValue(app: AppIdentity, params: JSON, session: ApprovalSession) throws -
   } else {
     value = text as NSString
   }
-  let outcome = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value)
+  let outcome = try setAXAttribute(element, kAXValueAttribute, value)
   guard outcome == .success else { throw axFailure(outcome, "setting the value") }
   // A secure field cannot be read back.
   if stringAttribute(element, kAXSubroleAttribute) == secureSubrole { return ["delivery": "accessibility", "verified": false] }
@@ -207,16 +207,16 @@ private func replaceThroughFieldEditor(_ element: AXUIElement, with text: String
   guard let current = before as? String, singleLineRoles.contains(stringAttribute(element, kAXRoleAttribute) ?? ""),
     stringAttribute(element, kAXSubroleAttribute) != secureSubrole else { return nil }
   if !boolAttribute(element, kAXFocusedAttribute) {
-    AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+    try setAXAttribute(element, kAXFocusedAttribute, kCFBooleanTrue)
     sleep(seconds: 0.05)
   }
   guard boolAttribute(element, kAXFocusedAttribute), isSettable(element, kAXSelectedTextRangeAttribute),
     isSettable(element, kAXSelectedTextAttribute) else { return nil }
   var everything = CFRange(location: 0, length: (current as NSString).length)
   guard let range = AXValueCreate(.cfRange, &everything),
-    AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, range) == .success else { return nil }
+    try setAXAttribute(element, kAXSelectedTextRangeAttribute, range) == .success else { return nil }
   if current == text { return ["delivery": "accessibility", "verified": true] }
-  let outcome = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as NSString)
+  let outcome = try setAXAttribute(element, kAXSelectedTextAttribute, text as NSString)
   guard outcome == .success else { throw axFailure(outcome, "setting the value") }
   switch watchValue(of: element, from: current as NSString, until: text as NSString) {
   case .reached:
@@ -272,7 +272,7 @@ func typeText(app: AppIdentity, params: JSON, session: ApprovalSession) throws -
   let text = try nonEmptyString(params, "text")
   guard let number = params["element"] as? Int else {
     try requireTextForKeys(text)
-    prepareInput(app: app, window: nil)
+    try prepareInput(app: app, window: nil)
     try postAllowedText(text, app: app)
     return ["delivery": "key_events", "verified": false]
   }
@@ -290,18 +290,18 @@ func typeText(app: AppIdentity, params: JSON, session: ApprovalSession) throws -
     // Focusing may select all of it, so the text goes in as a selection only once the cursor is at the end.
     var cursorKnown = true
     if isSingleLine, !boolAttribute(element, kAXFocusedAttribute) {
-      AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+      try setAXAttribute(element, kAXFocusedAttribute, kCFBooleanTrue)
       sleep(seconds: 0.05)
       var end = CFRange(location: (before as NSString).length, length: 0)
       if boolAttribute(element, kAXFocusedAttribute) {
-        cursorKnown = AXValueCreate(.cfRange, &end).map {
-          AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, $0) == .success
+        cursorKnown = try AXValueCreate(.cfRange, &end).map {
+          try setAXAttribute(element, kAXSelectedTextRangeAttribute, $0) == .success
         } ?? false
       }
     }
     if cursorKnown, isSettable(element, kAXSelectedTextAttribute) {
       let selectedBefore = textAttribute(element, kAXSelectedTextAttribute)
-      let outcome = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as NSString)
+      let outcome = try setAXAttribute(element, kAXSelectedTextAttribute, text as NSString)
       if outcome == .cannotComplete { throw axFailure(outcome, "inserting the text") }
       if outcome == .success {
         // Replacing a selection with the same text leaves the value as it was.
@@ -323,7 +323,7 @@ func typeText(app: AppIdentity, params: JSON, session: ApprovalSession) throws -
     // unfocused ones, because a focused field has a cursor that keys can respect.
     if isSingleLine, !boolAttribute(element, kAXFocusedAttribute), isSettable(element, kAXValueAttribute) {
       let appended = before + text
-      let outcome = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, appended as NSString)
+      let outcome = try setAXAttribute(element, kAXValueAttribute, appended as NSString)
       if outcome == .cannotComplete { throw axFailure(outcome, "inserting the text") }
       if outcome == .success {
         switch watchValue(of: element, from: before as NSString, until: appended as NSString) {
@@ -340,8 +340,8 @@ func typeText(app: AppIdentity, params: JSON, session: ApprovalSession) throws -
 
   // Keys go wherever the app's focus is, so they are sent only once it is on this element.
   try requireTextForKeys(text)
-  prepareInput(app: app, window: elementAttribute(element, kAXWindowAttribute))
-  AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+  try prepareInput(app: app, window: elementAttribute(element, kAXWindowAttribute))
+  try setAXAttribute(element, kAXFocusedAttribute, kCFBooleanTrue)
   sleep(seconds: 0.05)
   let focused = attribute(AXUIElementCreateApplication(app.pid), kAXFocusedUIElementAttribute)
   guard let focused, CFEqual(focused, element) else {
@@ -372,7 +372,7 @@ func scroll(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> 
   if let area = selfOrAncestor(of: element, where: { settableBar($0) != nil }), let bar = settableBar(area),
     let position = attribute(bar, kAXValueAttribute) as? Double, let step = pageStep(area: area, bar: bar, vertical: vertical) {
     let next = scrollPosition(from: position, step: step, pages: forward ? pages : -pages)
-    let outcome = AXUIElementSetAttributeValue(bar, kAXValueAttribute as CFString, NSNumber(value: next))
+    let outcome = try setAXAttribute(bar, kAXValueAttribute, NSNumber(value: next))
     guard outcome == .success else { throw axFailure(outcome, "scrolling") }
     return ["delivery": "accessibility"]
   }
@@ -381,7 +381,7 @@ func scroll(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> 
   let pageAction = vertical ? (forward ? "AXScrollDownByPage" : "AXScrollUpByPage") : (forward ? "AXScrollRightByPage" : "AXScrollLeftByPage")
   if let area = selfOrAncestor(of: element, where: { actions(of: $0).contains(pageAction) }) {
     for _ in 0..<pages {
-      let outcome = AXUIElementPerformAction(area, pageAction as CFString)
+      let outcome = try performAXAction(area, pageAction)
       guard outcome == .success else { throw axFailure(outcome, "scrolling") }
     }
     return ["delivery": "accessibility", "action": pageAction]
@@ -430,13 +430,13 @@ private func pageStep(area: AXUIElement, bar: AXUIElement, vertical: Bool) -> Do
 
 // Chromium ignores input to a window that is not key, so its window is made key inside the app first. An app
 // the user is working in already has its key window.
-func prepareInput(app: AppIdentity, window: AXUIElement?) {
+func prepareInput(app: AppIdentity, window: AXUIElement?) throws {
   guard isChromiumApp(path: app.path),
         onMain({ NSRunningApplication(processIdentifier: app.pid)?.isActive }) == false else { return }
   let application = AXUIElementCreateApplication(app.pid)
   let target = window ?? elementAttribute(application, kAXMainWindowAttribute) ?? windows(of: application).first
   guard let target, let number = windowNumber(of: target) else { return }
-  _ = makeKeyInApp(window: number, pid: app.pid)
+  _ = makeKeyInApp(window: number, pid: app.pid, try beginEffect())
 }
 
 // A click at a point in window coordinates, or at an element's center.
@@ -470,7 +470,7 @@ func clickAt(app: AppIdentity, params: JSON, session: ApprovalSession) throws ->
     try postAllowedForegroundClick(at: point, app: app, window: window, count: count, style: style)
     return ["delivery": "foreground_pointer_event", "verified": false, "window": stringAttribute(window, kAXTitleAttribute) ?? ""]
   }
-  prepareInput(app: app, window: window)
+  try prepareInput(app: app, window: window)
   try postAllowedClick(at: point, app: app, target: pointerTarget(for: window), count: count, style: style)
   return ["delivery": "pointer_event", "verified": false, "window": stringAttribute(window, kAXTitleAttribute) ?? ""]
 }
@@ -499,7 +499,7 @@ func drag(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JS
   guard CFEqual(start.window, end.window) else {
     throw HelperError(code: "invalid_request", message: "Both ends must be in the same window.")
   }
-  prepareInput(app: app, window: start.window)
+  try prepareInput(app: app, window: start.window)
   try postAllowedDrag(from: start.point, to: end.point, app: app, target: pointerTarget(for: start.window))
   return ["delivery": "pointer_event", "verified": false]
 }

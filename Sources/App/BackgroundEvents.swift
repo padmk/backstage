@@ -31,11 +31,11 @@ let pointerEventGap = 0.03
 // The event subtype background windows accept for clicks: with it, a click reaches a window that is not key.
 let touchSubtype: Int64 = 3
 
-func post(_ event: CGEvent, to pid: pid_t) {
+func post(_ event: CGEvent, to pid: pid_t, _ start: EffectStart) {
   if let postToPid {
     postToPid(pid, event)
   } else {
-    event.postToPid(pid)
+    postToProcess(event, pid: pid, start)
   }
 }
 
@@ -75,7 +75,7 @@ private func windowRecord(kind: UInt8, window: CGWindowID) -> [UInt8] {
 // Chromium takes pointer and key input only in its key window, and a window in an app the user is not using
 // is not key. These records make `window` key inside the app, without activating the app or raising the
 // window, so the user's front app keeps its focus. Returns whether every record was posted.
-func makeKeyInApp(window: CGWindowID, pid: pid_t) -> Bool {
+func makeKeyInApp(window: CGWindowID, pid: pid_t, _: EffectStart) -> Bool {
   guard let postEventRecord, let processForPid else { return false }
   var serial = [UInt8](repeating: 0, count: 8)
   guard processForPid(pid, &serial) == 0 else { return false }

@@ -99,6 +99,8 @@ final class Connection: Sendable {
     var cancelledIds = Set<String>()
     var runningId: String?
     var runningDeadline: Date?
+    // Set by the running request's first effect: from then on a stop leaves its outcome unknown.
+    var effectBegan = false
     var queued = 0
     var currentSession: ApprovalSession
     var adoptedSession: ApprovalSession?
@@ -109,10 +111,18 @@ final class Connection: Sendable {
     var isCancelled: Bool { isClosed || requestGeneration != generation || runningId.map(cancelledIds.contains) == true }
 
     // Why the running request must stop: it was cancelled, or the deadline its client gave has passed.
-    func stopReason(at now: Date) -> HelperError? {
+    func stopCause(at now: Date) -> HelperError? {
       if isCancelled { return HelperError(code: "cancelled", message: "The request was cancelled.") }
       if let runningDeadline, now >= runningDeadline { return expiredError }
       return nil
+    }
+
+    // The stop as the client must hear it: once an effect may have begun, whatever the request did stays done.
+    func stopReason(at now: Date, progress: String? = nil) -> HelperError? {
+      guard let cause = stopCause(at: now) else { return nil }
+      guard effectBegan else { return cause }
+      let done = progress.map { " after \($0)" } ?? " after the request had begun to act"
+      return HelperError(code: "outcome_unknown", message: "Stopped (\(cause.code))\(done). Read the state before trying again.")
     }
 
     mutating func takeCancelHandlers() -> [@Sendable () -> Void] {
@@ -156,11 +166,26 @@ final class Connection: Sendable {
     if let stopReason { throw stopReason }
   }
 
+  // The stop itself (cancelled or expired), also after an effect began, for a caller that reports progress its own way.
+  var stopCause: HelperError? { state.withLock { $0.stopCause(at: Date()) } }
+
+  // The check right before an effect, and the mark that one may have begun, in one step: a request stopped by now
+  // does nothing, and one stopped later reports outcome_unknown. `progress` says what was done so far.
+  func beginEffect(progress: String? = nil) throws {
+    let stop = state.withLock { state -> HelperError? in
+      if let stop = state.stopReason(at: Date(), progress: progress) { return stop }
+      state.effectBegan = true
+      return nil
+    }
+    if let stop { throw stop }
+  }
+
   func begin(generation captured: Int, id: String?, deadline: Date?) {
     state.withLock { state in
       state.requestGeneration = captured
       state.runningId = id
       state.runningDeadline = deadline
+      state.effectBegan = false
     }
   }
 
@@ -189,6 +214,7 @@ final class Connection: Sendable {
       }
       state.runningId = nil
       state.runningDeadline = nil
+      state.effectBegan = false
     }
   }
 

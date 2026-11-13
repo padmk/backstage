@@ -144,6 +144,7 @@ private func openInApp(_ url: URL, files: [URL], bundleId: String, name: String)
   configuration.addsToRecentItems = false
   let outcome = AsyncOutcome<NSRunningApplication>()
   let opened = launchHandler(outcome, name: name)
+  try beginEffect()
   if files.isEmpty {
     NSWorkspace.shared.openApplication(at: url, configuration: configuration, completionHandler: opened)
   } else {

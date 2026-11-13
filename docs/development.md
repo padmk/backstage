@@ -104,6 +104,7 @@ The tag starts `.github/workflows/release.yml`. It builds the app and runs the t
 | `Sources/App/Actions.swift`, `TextSelection.swift` | Acting on windows; reading and selecting text by what it says |
 | `Sources/App/Observation.swift`, `Sequences.swift` | Change reports after actions, the per-app lock, and `run_actions` |
 | `Sources/App/Input.swift`, `BackgroundEvents.swift`, `Capture.swift` | Key and pointer events, background delivery through private calls, screenshots |
+| `Sources/App/Effects.swift` | The gate every effect of a request passes: its cancel and deadline checked right before the effect, and `outcome_unknown` for a stop after one began |
 | `Sources/App/Presence.swift`, `PointerActivity.swift`, `LockedWindows.swift` | The user working in the target app, from the system's input times and the app each click, scroll and drag went to; the locked screen and Windows while locked |
 | `Sources/App/WindowManagement.swift` | `list_windows`, `set_window`, `set_app_state`, `close`: displays, frames, layouts |
 | `Sources/App/TextRecognition.swift` | The text recognized in a screenshot with Vision, in reading order |
