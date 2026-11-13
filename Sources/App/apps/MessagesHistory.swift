@@ -47,8 +47,8 @@ private func text(_ value: Any??) -> String? {
   return text
 }
 
-// Messages keeps no names for people; Messages shows the names in Contacts, which label chats here when the user
-// has allowed Contacts. Business senders, such as "Orange", are named by their handle and are not looked up.
+// Messages keeps no names for people; Messages shows the names in Contacts, which label chats here while Contacts is
+// on the app list and macOS allows it. Business senders, such as "Orange", are named by their handle and are not looked up.
 private func person(_ handle: String?, _ contacts: ContactLookup?) throws -> HandleContact? {
   guard let contacts, let handle, let parsed = ContactHandle(handle) else { return nil }
   return try contacts(parsed)
