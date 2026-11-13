@@ -58,7 +58,7 @@ private struct Reading {
 
 let accessibilityId = "accessibility"
 
-final class ControlModel: ObservableObject {
+@MainActor final class ControlModel: ObservableObject {
   @Published var accessibility = false
   // What macOS answers this process, which is what agents get.
   @Published var permissions: [SystemPermission: PermissionState] = [:]
@@ -103,7 +103,7 @@ final class ControlModel: ObservableObject {
     timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refresh() }
   }
 
-  deinit { timer?.invalidate() }
+  isolated deinit { timer?.invalidate() }
 
   // Screen Recording is optional: only screenshots need it.
   var permissionsMissing: Bool { !accessibility }
@@ -206,8 +206,7 @@ final class ControlModel: ObservableObject {
   }
 
   func allowAccessibility() {
-    let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-    if !AXIsProcessTrustedWithOptions(options) {
+    if !isTrustedAskingForAccessibility() {
       openPrivacyPane("Privacy_Accessibility")
       inSettings.insert(accessibilityId)
     }

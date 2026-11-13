@@ -4,6 +4,7 @@
 
 import Foundation
 import HelperLink
+import Synchronization
 
 struct ComputerRequest: Identifiable, Equatable {
   let name: String
@@ -12,20 +13,20 @@ struct ComputerRequest: Identifiable, Equatable {
 }
 
 enum ComputerList {
-  private static let lock = NSLock()
-  private static var waiting: [ComputerRequest] = []
+  // The requests waiting; held also while the list changes, so each change reads and writes it in one step.
+  private static let waitingRequests = Mutex<[ComputerRequest]>([])
   // A client asking again and again must not grow the list or keep bringing the window forward.
   private static let maxWaiting = 20
 
   static var allowed: [String] { Preferences.allowedComputers }
-  static var requests: [ComputerRequest] { lock.withLock { waiting } }
+  static var requests: [ComputerRequest] { waitingRequests.withLock { $0 } }
 
   // Names are compared exactly: ssh matches Host patterns in ~/.ssh/config with case, so two spellings of one name
   // can lead to two Macs.
   static func isAllowed(_ name: String) -> Bool { allowed.contains(name) }
 
   static func add(_ name: String, by client: String) {
-    lock.withLock {
+    waitingRequests.withLock { waiting in
       waiting.removeAll { $0.name == name }
       if !allowed.contains(name) {
         Preferences.allowedComputers = (allowed + [name]).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
@@ -35,7 +36,7 @@ enum ComputerList {
   }
 
   static func remove(_ name: String, by client: String) {
-    let removed = lock.withLock { () -> Bool in
+    let removed = waitingRequests.withLock { _ -> Bool in
       let before = allowed
       Preferences.allowedComputers = before.filter { $0 != name }
       return before.count != Preferences.allowedComputers.count
@@ -46,7 +47,7 @@ enum ComputerList {
   // Returns whether the request was still waiting, so each one is answered once.
   @discardableResult
   static func decline(_ name: String, by client: String) -> Bool {
-    let was = lock.withLock { () -> Bool in
+    let was = waitingRequests.withLock { waiting -> Bool in
       let before = waiting.count
       waiting.removeAll { $0.name == name }
       return waiting.count != before
@@ -57,7 +58,7 @@ enum ComputerList {
 
   // Returns whether the request is new, so the window comes forward only once for it.
   fileprivate static func ask(_ name: String, client: String?) throws -> Bool {
-    try lock.withLock {
+    try waitingRequests.withLock { waiting in
       if waiting.contains(where: { $0.name == name }) { return false }
       guard waiting.count < maxWaiting else {
         throw HelperError(code: "busy", message: "Too many requests are waiting for the user's answer in the Backstage window.")

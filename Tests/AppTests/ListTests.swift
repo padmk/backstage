@@ -106,7 +106,7 @@ private let neverAvailable = [
     }
   }
 
-  @Test func aWaitingRequestIsAnsweredOnce() throws {
+  @MainActor @Test func aWaitingRequestIsAnsweredOnce() throws {
     try withTemporaryHome {
       let app = AppIdentity(pid: 0, bundleId: "com.example.asked", name: "Asked", launchDate: nil, path: nil)
       #expect(try ApprovalRequests.add(app, client: "agent"))
@@ -123,11 +123,6 @@ private let neverAvailable = [
 private func withTemporaryHome(_ body: () throws -> Void) throws {
   let path = FileManager.default.temporaryDirectory.appendingPathComponent("list-tests-" + UUID().uuidString).path
   try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
-  let previous = Configuration.directories
-  Configuration.directories = Directories(testHome: path)
-  defer {
-    Configuration.directories = previous
-    try? FileManager.default.removeItem(atPath: path)
-  }
-  try body()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  try Configuration.$testDirectories.withValue(Directories(testHome: path)) { try body() }
 }

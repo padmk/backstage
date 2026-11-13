@@ -3,11 +3,11 @@
 
 import AppKit
 
-enum ArgumentKind: String {
+enum ArgumentKind: String, Sendable {
   case string, integer, boolean
 }
 
-struct Argument {
+struct Argument: Sendable {
   let name: String
   let kind: ArgumentKind
   let required: Bool
@@ -17,19 +17,19 @@ struct Argument {
   var maximum: Int? = nil
 }
 
-enum Effect: String {
+enum Effect: String, Sendable {
   case reads, changes
 }
 
-struct Operation {
+struct Operation: Sendable {
   let name: String
   let summary: String
   let effect: Effect
   let arguments: [Argument]
-  let run: (JSON) throws -> JSON
+  let run: @Sendable (JSON) throws -> JSON
 }
 
-struct AppKnowledge {
+struct AppKnowledge: Sendable {
   let bundleId: String
   // Other apps that answer the same scripting, such as an older version under another bundle id.
   var otherBundleIds: [String] = []
@@ -37,7 +37,7 @@ struct AppKnowledge {
   // Operations send Apple events to the app itself, so it has to run; it is started hidden when it does not.
   var scripted = false
   // Whether an operation sends Apple events and so needs the app running; one that reads the app's data does not.
-  var usesScripting: (String) -> Bool = { _ in true }
+  var usesScripting: @Sendable (String) -> Bool = { _ in true }
   let summary: String
   // Shown under the app on the list when its operations reach the app's data without its window.
   var access: String? = nil

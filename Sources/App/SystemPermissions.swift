@@ -7,6 +7,7 @@
 
 import AppKit
 import HelperLink
+import Synchronization
 
 enum PermissionState: String {
   case granted, denied, notAsked = "not_asked", unknown
@@ -45,9 +46,9 @@ enum SystemPermission: String, CaseIterable, Identifiable {
 
 // MARK: State
 
-private let tcc = dlopen("/System/Library/PrivateFrameworks/TCC.framework/Versions/A/TCC", RTLD_NOW)
 private typealias Preflight = @convention(c) (CFString, CFDictionary?) -> Int
-private let preflight = lookUp("TCCAccessPreflight", as: Preflight.self, in: tcc)
+private let preflight = lookUp("TCCAccessPreflight", as: Preflight.self,
+                               in: dlopen("/System/Library/PrivateFrameworks/TCC.framework/Versions/A/TCC", RTLD_NOW))
 
 // What macOS answers this process. Without the private call, Screen Recording falls back to the public check, and
 // System Audio Recording is unknown: recording is then refused, since a tap started to find out would make macOS
@@ -98,7 +99,7 @@ func permissionStatesNow() -> [SystemPermission: PermissionState]? {
 // The user chose Allow: macOS's prompt when it has not asked yet, otherwise its pane in System Settings, where only the
 // user can turn it on. `answered` gets whether the permission is on afterwards, read in a new process, since this one
 // keeps its first answer; a grant that only a new process has makes the app restart. Runs on the main thread.
-func askForPermission(_ permission: SystemPermission, answered: @escaping (Bool) -> Void) {
+@MainActor func askForPermission(_ permission: SystemPermission, answered: @escaping @MainActor (Bool) -> Void) {
   guard permissionState(permission) == .notAsked else {
     openPrivacyPane(permission.pane)
     return answered(false)
@@ -125,14 +126,13 @@ struct PermissionRequest: Identifiable, Equatable {
 }
 
 enum PermissionRequests {
-  private static let lock = NSLock()
-  private static var waiting: [PermissionRequest] = []
+  private static let waitingRequests = Mutex<[PermissionRequest]>([])
 
-  static var all: [PermissionRequest] { lock.withLock { waiting } }
+  static var all: [PermissionRequest] { waitingRequests.withLock { $0 } }
 
   // Returns whether the request is new, so the window comes forward only once for it.
   static func add(_ permission: SystemPermission, client: String?) -> Bool {
-    lock.withLock {
+    waitingRequests.withLock { waiting in
       if waiting.contains(where: { $0.permission == permission }) { return false }
       waiting.append(PermissionRequest(permission: permission, client: client))
       return true
@@ -140,7 +140,7 @@ enum PermissionRequests {
   }
 
   static func remove(_ permission: SystemPermission) {
-    lock.withLock { waiting.removeAll { $0.permission == permission } }
+    waitingRequests.withLock { $0.removeAll { $0.permission == permission } }
   }
 }
 

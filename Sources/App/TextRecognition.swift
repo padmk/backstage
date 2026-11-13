@@ -69,29 +69,26 @@ func addingRecognizedText(to reply: JSON, image: CGImage) -> JSON {
     reply["text_error"] = "timeout: No time was left to recognize text."
     return reply
   }
-  let done = DispatchSemaphore(value: 0)
-  let outcome = RecognitionOutcome()
+  let outcome = AsyncOutcome<[RecognizedLine]>()
   let task = Task.detached {
     do {
       outcome.set(.success(try await recognizeText(in: image)))
     } catch {
       outcome.set(.failure(error))
     }
-    done.signal()
   }
   // A cancelled request stops waiting at once, so it does not hold the app's lock while recognition runs on.
   let stopWatching = currentConnection()?.onCancel {
     outcome.set(.failure(HelperError(code: "cancelled", message: "The request was cancelled.")))
     task.cancel()
-    done.signal()
   }
   defer { stopWatching?() }
-  guard done.wait(timeout: .now() + limit) == .success else {
+  guard let result = outcome.wait(until: .now() + limit) else {
     task.cancel()
     reply["text_error"] = "timeout: Text recognition did not finish in time."
     return reply
   }
-  switch outcome.get() {
+  switch result {
   case .success(let lines):
     reply["text"] = lines.prefix(maxRecognizedLines).map(\.json)
     if lines.count > maxRecognizedLines { reply["text_truncated"] = true }
@@ -99,16 +96,7 @@ func addingRecognizedText(to reply: JSON, image: CGImage) -> JSON {
     reply["text_error"] = "\(error.code): \(error.message)"
   case .failure(let error):
     reply["text_error"] = "action_failed: Text recognition failed: \(error.localizedDescription)"
-  case nil:
-    reply["text_error"] = "action_failed: Text recognition gave no result."
   }
   return reply
 }
 
-private final class RecognitionOutcome: @unchecked Sendable {
-  private let lock = NSLock()
-  private var value: Result<[RecognizedLine], Error>?
-
-  func set(_ result: Result<[RecognizedLine], Error>) { lock.withLock { value = result } }
-  func get() -> Result<[RecognizedLine], Error>? { lock.withLock { value } }
-}

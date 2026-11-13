@@ -14,11 +14,6 @@ enum HelperMain {
       printPermissionStates()
       return
     }
-    // Only a bare test build takes a home of its own. A copy of the app bundle carries the app's identity and
-    // grants wherever it lies, so any bundled copy ignores --home and always uses the user's real files.
-    if Bundle.main.bundleIdentifier == nil, let index = arguments.firstIndex(of: "--home"), arguments.indices.contains(index + 1) {
-      Configuration.directories = Directories(testHome: arguments[index + 1])
-    }
     if let index = arguments.firstIndex(of: Product.renderWindowArgument), arguments.indices.contains(index + 1) {
       exit(renderControlWindow(into: arguments[index + 1]) ? 0 : 1)
     }

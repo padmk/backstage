@@ -6,6 +6,12 @@ import ApplicationServices
 import ScreenCaptureKit
 
 private let captureTimeoutSeconds = 15
+
+private struct CapturedWindow: Sendable {
+  let png: Data
+  let image: CGImage
+  let title: String
+}
 private let maxFrameDifference: CGFloat = 24
 
 func captureWindow(pid: pid_t, window: AXUIElement, recognizeText: Bool = false) throws -> JSON {
@@ -14,9 +20,7 @@ func captureWindow(pid: pid_t, window: AXUIElement, recognizeText: Bool = false)
     throw HelperError(code: "action_failed", message: "The window has no position.")
   }
   let title = stringAttribute(window, kAXTitleAttribute)
-  let done = DispatchSemaphore(value: 0)
-  var outcome: Result<(JSON, CGImage), Error> = .failure(HelperError(code: "action_failed", message: "No screenshot."))
-
+  let outcome = AsyncOutcome<CapturedWindow>()
   Task.detached {
     do {
       let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
@@ -45,15 +49,16 @@ func captureWindow(pid: pid_t, window: AXUIElement, recognizeText: Bool = false)
       guard let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
         throw HelperError(code: "action_failed", message: "The image could not be encoded.")
       }
-      outcome = .success((["png_base64": data.base64EncodedString(), "width": image.width, "height": image.height, "title": match.title ?? ""], image))
+      outcome.set(.success(CapturedWindow(png: data, image: image, title: match.title ?? "")))
     } catch {
-      outcome = .failure(error)
+      outcome.set(.failure(error))
     }
-    done.signal()
   }
-  guard done.wait(timeout: .now() + .seconds(captureTimeoutSeconds)) == .success else {
+  guard let result = outcome.wait(until: .now() + .seconds(captureTimeoutSeconds)) else {
     throw HelperError(code: "timeout", message: "The capture did not finish in time.")
   }
-  let (reply, image) = try outcome.get()
+  let captured = try result.get()
+  let image = captured.image
+  let reply: JSON = ["png_base64": captured.png.base64EncodedString(), "width": image.width, "height": image.height, "title": captured.title]
   return recognizeText ? addingRecognizedText(to: reply, image: image) : reply
 }

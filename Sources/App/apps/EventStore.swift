@@ -4,25 +4,29 @@
 import EventKit
 
 private let accessRequestSeconds = 170
-private let lock = NSLock()
-private var store = EKEventStore()
-private var checkingStore = EKEventStore()
+
+// The store operations use, and one of its own for reading back what they saved.
+private struct EventStores {
+  var main = EKEventStore()
+  var checking = EKEventStore()
+}
 
 // One operation at a time, because the store is shared and saving is not safe to interleave.
-func withEventStore<T>(_ type: EKEntityType, _ work: (EKEventStore) throws -> T) throws -> T {
-  try lock.withLock {
+private let stores = Exclusive(EventStores())
+
+// `confirming` gives the checking store emptied of cached objects, so a read-back sees what was saved rather than the
+// object still in memory.
+func withEventStore<T>(_ type: EKEntityType, _ work: (_ store: EKEventStore, _ confirming: () -> EKEventStore) throws -> T) throws -> T {
+  try stores.withLock { stores in
     // The wait for the lock can outlast a cancel; nothing has changed yet.
     try currentConnection()?.throwIfCancelled()
     try requireAccess(to: type)
-    return try work(store)
+    let checking = stores.checking
+    return try work(stores.main) {
+      checking.reset()
+      return checking
+    }
   }
-}
-
-// A store of its own, emptied of cached objects, so a read-back sees what was saved rather than the object
-// still in memory.
-func confirmingStore() -> EKEventStore {
-  checkingStore.reset()
-  return checkingStore
 }
 
 // Only the user's choice in Backstage asks (requestEventAccess); an operation that finds no answer yet fails
@@ -136,8 +140,5 @@ func requestEventAccess(_ type: EKEntityType) {
   let completion: EKEventStoreRequestAccessCompletionHandler = { _, _ in answered.signal() }
   if type == .reminder { asking.requestFullAccessToReminders(completion: completion) } else { asking.requestFullAccessToEvents(completion: completion) }
   _ = answered.wait(timeout: .now() + .seconds(accessRequestSeconds))
-  lock.withLock {
-    store = EKEventStore()
-    checkingStore = EKEventStore()
-  }
+  stores.withLock { $0 = EventStores() }
 }

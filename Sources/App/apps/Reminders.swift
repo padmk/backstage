@@ -49,7 +49,7 @@ private func reminder(_ id: String, in store: EKEventStore) throws -> EKReminder
 }
 
 private let listLists = Operation(name: "list_lists", summary: "List reminder lists with their ids", effect: .reads, arguments: []) { _ in
-  try withEventStore(.reminder) { store in
+  try withEventStore(.reminder) { store, _ in
     let defaultId = store.defaultCalendarForNewReminders()?.calendarIdentifier
     return ["lists": store.calendars(for: .reminder).map { describe($0, isDefault: $0.calendarIdentifier == defaultId) }]
   }
@@ -64,7 +64,7 @@ private let list = Operation(
     limitArgument,
   ]
 ) { arguments in
-  try withEventStore(.reminder) { store in
+  try withEventStore(.reminder) { store, _ in
     let calendars = try optionalString(arguments, "list").map { [try calendar($0, among: store.calendars(for: .reminder), kind: "list")] }
     let predicate = arguments["include_completed"] as? Bool == true
       ? store.predicateForReminders(in: calendars)
@@ -89,7 +89,7 @@ private let add = Operation(
     Argument(name: "priority", kind: .string, required: false, description: "Default none", allowed: ["none", "low", "medium", "high"]),
   ]
 ) { arguments in
-  try withEventStore(.reminder) { store in
+  try withEventStore(.reminder) { store, confirming in
     let item = EKReminder(eventStore: store)
     item.title = try string(arguments, "title")
     if let query = optionalString(arguments, "list") {
@@ -108,7 +108,7 @@ private let add = Operation(
     item.notes = optionalString(arguments, "notes")
     item.priority = priorities[optionalString(arguments, "priority") ?? "none"] ?? 0
     try store.save(item, commit: true)
-    let saved = try savedReminder(item.calendarItemIdentifier)
+    let saved = try savedReminder(item.calendarItemIdentifier, in: confirming())
     var result = describe(saved)
     // Every field that was asked for, compared with what the store gives back.
     result["verified"] = saved.title == item.title && dueText(saved.dueDateComponents) == dueText(item.dueDateComponents)
@@ -120,8 +120,8 @@ private let add = Operation(
 
 // After a save succeeded, a reminder that cannot be read back may still have been saved, so the agent is told to
 // look before trying again rather than that it does not exist.
-private func savedReminder(_ id: String) throws -> EKReminder {
-  guard let saved = try? reminder(id, in: confirmingStore()) else {
+private func savedReminder(_ id: String, in checking: EKEventStore) throws -> EKReminder {
+  guard let saved = try? reminder(id, in: checking) else {
     throw HelperError(code: "outcome_unknown", message: "Reminders saved the change but reminder \(id) cannot be read back. List the reminders before trying again.")
   }
   return saved
@@ -134,13 +134,13 @@ private let complete = Operation(
     Argument(name: "completed", kind: .boolean, required: false, description: "Default true"),
   ]
 ) { arguments in
-  try withEventStore(.reminder) { store in
+  try withEventStore(.reminder) { store, confirming in
     let item = try reminder(try string(arguments, "id"), in: store)
     try requireWritable(item.calendar, kind: "list")
     let wanted = arguments["completed"] as? Bool ?? true
     item.isCompleted = wanted
     try store.save(item, commit: true)
-    let saved = try savedReminder(item.calendarItemIdentifier)
+    let saved = try savedReminder(item.calendarItemIdentifier, in: confirming())
     var result = describe(saved)
     result["verified"] = saved.isCompleted == wanted
     return result
@@ -151,7 +151,7 @@ private let read = Operation(
   name: "read", summary: "Read one reminder with its full notes", effect: .reads,
   arguments: [Argument(name: "id", kind: .string, required: true, description: "Reminder id from list")]
 ) { arguments in
-  try withEventStore(.reminder) { store in
+  try withEventStore(.reminder) { store, _ in
     let item = try reminder(try string(arguments, "id"), in: store)
     var result = describe(item)
     if let notes = item.notes, !notes.isEmpty { result["notes"] = notes }
@@ -173,7 +173,7 @@ private let update = Operation(
   let fields = ["title", "due", "notes", "priority", "list"].filter { arguments[$0] is String }
   guard !fields.isEmpty else { throw HelperError(code: "invalid_arguments", message: "Give at least one field to change.") }
   let due = try (arguments["due"] as? String).flatMap { $0 == "none" ? nil : try moment($0, key: "due") }
-  return try withEventStore(.reminder) { store in
+  return try withEventStore(.reminder) { store, confirming in
     let item = try reminder(try string(arguments, "id"), in: store)
     try requireWritable(item.calendar, kind: "list")
     if let title = arguments["title"] as? String {
@@ -201,7 +201,7 @@ private let update = Operation(
       try requireWritable(item.calendar, kind: "list")
     }
     try store.save(item, commit: true)
-    let saved = try savedReminder(item.calendarItemIdentifier)
+    let saved = try savedReminder(item.calendarItemIdentifier, in: confirming())
     var result = describe(saved)
     result["changed"] = fields
     result["verified"] = saved.title == item.title && dueText(saved.dueDateComponents) == dueText(item.dueDateComponents)

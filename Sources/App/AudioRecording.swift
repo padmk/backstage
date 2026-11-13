@@ -73,8 +73,10 @@ private func descends(_ pid: pid_t, from ancestor: pid_t) -> Bool {
 private func runsInsideBundle(_ pid: pid_t, of app: AppIdentity) -> Bool {
   guard let bundle = app.path, !bundle.isEmpty else { return false }
   var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
-  guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
-  let executable = URL(fileURLWithPath: String(cString: buffer)).resolvingSymlinksInPath().path
+  let length = Int(proc_pidpath(pid, &buffer, UInt32(buffer.count)))
+  guard length > 0 else { return false }
+  let path = String(decoding: buffer.prefix(length).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+  let executable = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
   return executable.hasPrefix(URL(fileURLWithPath: bundle).resolvingSymlinksInPath().path + "/")
 }
 

@@ -21,7 +21,7 @@ let package = Package(
     // What the app and the command share: the product's name and version, its directories, line framing and
     // build identity.
     .target(name: "HelperLink", swiftSettings: strict),
-    .executableTarget(name: "App", dependencies: ["HelperLink"], swiftSettings: [.swiftLanguageMode(.v5)]),
+    .executableTarget(name: "App", dependencies: ["HelperLink"], swiftSettings: [.swiftLanguageMode(.v6)] + (allowsWarnings ? [] : [.treatAllWarnings(as: .error)])),
     .executableTarget(name: "Tool", dependencies: ["HelperLink"], swiftSettings: strict),
     .testTarget(name: "ToolTests", dependencies: ["Tool", "HelperLink"], exclude: [], swiftSettings: [.swiftLanguageMode(.v5)]),
     .testTarget(name: "AppTests", dependencies: ["App", "HelperLink"], swiftSettings: [.swiftLanguageMode(.v5)]),

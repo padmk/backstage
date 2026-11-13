@@ -3,23 +3,27 @@
 import Contacts
 
 private let accessRequestSeconds = 170
-private let lock = NSLock()
-private let store = CNContactStore()
+// One request at a time uses the shared store.
+private let sharedStore = Exclusive(CNContactStore())
 
-private let summaryKeys: [CNKeyDescriptor] = [
-  CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
-  CNContactOrganizationNameKey as CNKeyDescriptor, CNContactEmailAddressesKey as CNKeyDescriptor,
-  CNContactPhoneNumbersKey as CNKeyDescriptor,
-]
-private let detailKeys: [CNKeyDescriptor] = summaryKeys + [
-  CNContactJobTitleKey, CNContactPostalAddressesKey, CNContactUrlAddressesKey, CNContactBirthdayKey,
-  CNContactDatesKey, CNContactNicknameKey,
-].map { $0 as CNKeyDescriptor }
+private var summaryKeys: [CNKeyDescriptor] {
+  [
+    CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
+    CNContactOrganizationNameKey as CNKeyDescriptor, CNContactEmailAddressesKey as CNKeyDescriptor,
+    CNContactPhoneNumbersKey as CNKeyDescriptor,
+  ]
+}
+private var detailKeys: [CNKeyDescriptor] {
+  summaryKeys + [
+    CNContactJobTitleKey, CNContactPostalAddressesKey, CNContactUrlAddressesKey, CNContactBirthdayKey,
+    CNContactDatesKey, CNContactNicknameKey,
+  ].map { $0 as CNKeyDescriptor }
+}
 
 // Only the user's choice in Backstage asks (requestContactsAccess); an operation that finds no answer yet fails
 // with what to do.
-private func withContacts<T>(_ work: () throws -> T) throws -> T {
-  try lock.withLock {
+private func withContacts<T>(_ work: (_ store: CNContactStore) throws -> T) throws -> T {
+  try sharedStore.withLock { store in
     try currentConnection()?.throwIfCancelled()
     switch CNContactStore.authorizationStatus(for: .contacts) {
     case .authorized: break
@@ -27,7 +31,7 @@ private func withContacts<T>(_ work: () throws -> T) throws -> T {
     // Limited access shows only the contacts the user picked, so it is refused rather than giving partial answers.
     default: throw contactsDenied()
     }
-    return try work()
+    return try work(store)
   }
 }
 
@@ -74,7 +78,7 @@ private let search = Operation(
 ) { arguments in
   let query = try string(arguments, "query").trimmingCharacters(in: .whitespaces)
   guard !query.isEmpty else { throw HelperError(code: "invalid_arguments", message: "query is empty.") }
-  return try withContacts {
+  return try withContacts { store in
     let predicate = ContactHandle(query)?.predicate ?? CNContact.predicateForContacts(matchingName: query)
     let found = try store.unifiedContacts(matching: predicate, keysToFetch: summaryKeys)
     return ["total": found.count, "contacts": found.prefix(limit(arguments)).map(summary)] as JSON
@@ -86,7 +90,7 @@ private let read = Operation(
   arguments: [Argument(name: "id", kind: .string, required: true, description: "Contact id from search")]
 ) { arguments in
   let id = try string(arguments, "id")
-  return try withContacts {
+  return try withContacts { store in
     guard let contact = try? store.unifiedContact(withIdentifier: id, keysToFetch: detailKeys) else {
       throw HelperError(code: "not_found", message: "There is no contact with id \(id).")
     }
@@ -113,7 +117,7 @@ private let add = Operation(
   }
   if let email = optionalString(arguments, "email") { contact.emailAddresses = [CNLabeledValue(label: CNLabelWork, value: email as NSString)] }
   if let phone = optionalString(arguments, "phone") { contact.phoneNumbers = [CNLabeledValue(label: CNLabelPhoneNumberMobile, value: CNPhoneNumber(stringValue: phone))] }
-  return try withContacts {
+  return try withContacts { store in
     let request = CNSaveRequest()
     request.add(contact, toContainerWithIdentifier: nil)
     try store.execute(request)
@@ -177,10 +181,12 @@ struct HandleContact: Equatable {
 typealias ContactLookup = (ContactHandle) -> HandleContact?
 
 // The phone and email keys are part of it because Contacts refuses a phone or email predicate without them.
-private let nameKeys: [CNKeyDescriptor] = [
-  CNContactFormatter.descriptorForRequiredKeys(for: .fullName), CNContactOrganizationNameKey as CNKeyDescriptor,
-  CNContactPhoneNumbersKey as CNKeyDescriptor, CNContactEmailAddressesKey as CNKeyDescriptor,
-]
+private var nameKeys: [CNKeyDescriptor] {
+  [
+    CNContactFormatter.descriptorForRequiredKeys(for: .fullName), CNContactOrganizationNameKey as CNKeyDescriptor,
+    CNContactPhoneNumbersKey as CNKeyDescriptor, CNContactEmailAddressesKey as CNKeyDescriptor,
+  ]
+}
 
 // Looks handles up in Contacts, each once, when Contacts is on the user's list and macOS allows it; nil otherwise. It
 // never asks macOS for access, so it shows no prompt. Each request makes its own, so the names are as current as the
@@ -192,7 +198,7 @@ func contactLookup() -> ContactLookup? {
   var known: [ContactHandle: HandleContact?] = [:]
   return { handle in
     if let found = known[handle] { return found }
-    let contact = lock.withLock { (try? store.unifiedContacts(matching: handle.predicate, keysToFetch: nameKeys))?.first }
+    let contact = sharedStore.withLock { (try? $0.unifiedContacts(matching: handle.predicate, keysToFetch: nameKeys))?.first }
     let name = contact.map { CNContactFormatter.string(from: $0, style: .fullName) ?? $0.organizationName } ?? ""
     let found = contact.flatMap { name.isEmpty ? nil : HandleContact(id: $0.identifier, name: name) }
     known[handle] = found

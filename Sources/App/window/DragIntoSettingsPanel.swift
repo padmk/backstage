@@ -38,10 +38,10 @@ private final class OwnInputIgnoringPanel: NSPanel {
   }
 }
 
-private var dragPanel: NSPanel?
-private var grantWatch: Timer?
+@MainActor private var dragPanel: NSPanel?
+@MainActor private var grantWatch: Timer?
 
-private func closeDragPanel() {
+@MainActor private func closeDragPanel() {
   grantWatch?.invalidate()
   grantWatch = nil
   dragPanel?.close()
@@ -49,7 +49,7 @@ private func closeDragPanel() {
 }
 
 // Opens the pane and shows the panel at the top right of the screen, where Settings leaves room.
-func showDragIntoSettings(for grant: AppGrant) {
+@MainActor func showDragIntoSettings(for grant: AppGrant) {
   openPrivacyPane(grant.pane)
   closeDragPanel()
   let panel = OwnInputIgnoringPanel(contentRect: CGRect(origin: .zero, size: panelSize),
