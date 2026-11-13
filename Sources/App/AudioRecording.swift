@@ -313,7 +313,7 @@ func recordAudio(app: AppIdentity, params: JSON, session: ApprovalSession, conne
       }
     }
     while Date().timeIntervalSince(started) < limit {
-      try connection.throwIfCancelled()
+      try connection.throwIfStopped()
       if let last = recorder.state.lastSound, Date().timeIntervalSince(last) >= silence {
         ended = "silence"
         break

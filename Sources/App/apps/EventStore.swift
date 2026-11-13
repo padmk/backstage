@@ -19,7 +19,7 @@ private let stores = Exclusive(EventStores())
 func withEventStore<T>(_ type: EKEntityType, _ work: (_ store: EKEventStore, _ confirming: () -> EKEventStore) throws -> T) throws -> T {
   try stores.withLock { stores in
     // The wait for the lock can outlast a cancel; nothing has changed yet.
-    try currentConnection()?.throwIfCancelled()
+    try currentConnection()?.throwIfStopped()
     try requireAccess(to: type)
     let checking = stores.checking
     return try work(stores.main) {

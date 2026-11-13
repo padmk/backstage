@@ -85,6 +85,7 @@ private func reportingChange<Value>(_ child: ChildRun, target: String, details g
     case .timedOut: throw HelperError(code: "timeout", message: "\(target) did not answer within \(Int(child.timeout)) seconds.")
     case .interrupted: throw HelperError(code: "interrupted", message: "The request was cancelled while \(target) was working, so it was stopped.")
     case .outputHeldOpen: throw outputHeldOpen(target)
+    case .outOfTime: throw outOfTime(target)
     case .exited:
       guard child.status == 0 else { throw scriptFailure(errors, target: target) }
       return try result()
@@ -104,7 +105,8 @@ private func reportingChange<Value>(_ child: ChildRun, target: String, details g
 // How a child of the helper ended, with what it wrote.
 struct ChildRun {
   // outputHeldOpen: it exited, but a process it started kept its output open, so what it wrote is not known.
-  enum End { case exited, timedOut, interrupted, outputHeldOpen }
+  // outOfTime: it was stopped at the request's deadline, before its own limit.
+  enum End { case exited, timedOut, interrupted, outputHeldOpen, outOfTime }
   let end: End
   let status: Int32
   let output: String
@@ -119,6 +121,7 @@ func runProcess(_ path: String, _ arguments: [String], input: Data? = nil, targe
   case .timedOut: throw HelperError(code: "timeout", message: "\(target) did not answer within \(Int(timeout)) seconds.")
   case .interrupted: throw HelperError(code: "interrupted", message: "The request was cancelled while \(target) was working, so it was stopped.")
   case .outputHeldOpen: throw outputHeldOpen(target)
+  case .outOfTime: throw outOfTime(target)
   case .exited: return (child.status, child.output, child.errors)
   }
 }
@@ -136,9 +139,13 @@ func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target:
   process.standardInput = inputPipe ?? FileHandle.nullDevice
   let finished = DispatchSemaphore(value: 0)
   process.terminationHandler = { _ in finished.signal() }
-  // A request cancelled before this point starts nothing.
+  // A request cancelled or out of time before this point starts nothing. A child ends before the request's deadline,
+  // leaving time for the reply.
   let connection = currentConnection()
-  try connection?.throwIfCancelled()
+  try connection?.throwIfStopped()
+  let timeLeft = connection?.timeLeftForWork
+  if let timeLeft, timeLeft <= 0 { throw expiredError }
+  let limit = min(timeout, timeLeft ?? timeout)
   try process.run()
   // A cancelled request ends its child, so a long script or shortcut does not hold the connection. Only a child
   // that the cancel actually stopped counts as interrupted; one that finished first keeps its result.
@@ -160,10 +167,11 @@ func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target:
   let outputReader = PipeReader(output.fileHandleForReading)
   let errorReader = PipeReader(errors.fileHandleForReading)
   var end = ChildRun.End.exited
-  if finished.wait(timeout: .now() + timeout) == .timedOut {
+  if finished.wait(timeout: .now() + limit) == .timedOut {
     process.terminate()
     _ = finished.wait(timeout: .now() + 1)
-    end = .timedOut
+    // Cut short by the request's deadline rather than its own limit, the child may have done part of its work.
+    end = limit < timeout ? .outOfTime : .timedOut
   }
   if end == .exited, interruption.happened, process.terminationReason == .uncaughtSignal { end = .interrupted }
   // A process the child started can keep the output open after the child ends; what was read is then incomplete.
@@ -174,6 +182,10 @@ func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target:
   return ChildRun(end: end, status: process.isRunning ? -1 : process.terminationStatus,
                   output: out.map { String(decoding: $0, as: UTF8.self) } ?? "", errors: err.map { String(decoding: $0, as: UTF8.self) } ?? "",
                   timeout: timeout)
+}
+
+private func outOfTime(_ target: String) -> HelperError {
+  HelperError(code: "outcome_unknown", message: "\(target) was still working when the request's time ran out, so it was stopped; it may have done part of its work. Read the state before trying again.")
 }
 
 private func outputHeldOpen(_ target: String) -> HelperError {

@@ -24,7 +24,7 @@ func waitFor(app: AppIdentity, params: JSON, connection: Connection) throws -> J
   let started = Date()
   let watch = ChangeWatch(app: app)
   while true {
-    try connection.throwIfCancelled()
+    try connection.throwIfStopped()
     let readAt = Date()
     let (line, complete): (String?, Bool) = try AppLocks.with(app.bundleId, connection: connection) {
       try ApprovalGate.require(app, session: session)
@@ -61,7 +61,7 @@ func waitFor(app: AppIdentity, params: JSON, connection: Connection) throws -> J
     let seen = watch.count
     // In steps of pollSeconds at most, so a cancel is noticed.
     while watch.count == seen, Date() < deadline {
-      try connection.throwIfCancelled()
+      try connection.throwIfStopped()
       watch.wait(until: min(Date().addingTimeInterval(pollSeconds), deadline))
     }
     let earliest = min(readAt.addingTimeInterval(minReadGapSeconds), deadline)

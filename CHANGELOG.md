@@ -16,6 +16,7 @@
 - A press or menu command the app answers with AX error -25200 and that changes nothing in the last read is `outcome_unknown`, not `action_failed`: it may have changed something outside that read, so it is not proof that nothing happened.
 - Messages reads contact names only while Contacts is on the app list, not only while macOS allows it, so removing Contacts from the list stops it.
 - `launch_app` looks at `files` only for an app on the list, so a refusal no longer depends on whether a path exists.
+- A request whose time ran out while it waited for the app's lock is `expired` and does nothing; before, it could still act after the command had given up on it. A script or shortcut gets only the request's time left, and one stopped by it is `outcome_unknown`.
 - A reply that cannot be encoded as JSON, such as one with a number that is not finite, no longer ends the helper: that request gets `outcome_unknown`.
 - Finder's `trash` reports `verified: true` only when the item is gone from where it was, not when it could not be looked at.
 - Contacts: `read` answers `not_found` only for an id Contacts does not have; any other failure is `action_failed` with Contacts' reason. Messages' `list_chats` and `read_chat` fail with `action_failed` when Contacts refuses a name lookup, instead of showing the chats without names or finding no chat by a name.

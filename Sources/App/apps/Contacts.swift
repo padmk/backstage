@@ -24,7 +24,7 @@ private var detailKeys: [CNKeyDescriptor] {
 // with what to do.
 private func withContacts<T>(_ work: (_ store: CNContactStore) throws -> T) throws -> T {
   try sharedStore.withLock { store in
-    try currentConnection()?.throwIfCancelled()
+    try currentConnection()?.throwIfStopped()
     switch CNContactStore.authorizationStatus(for: .contacts) {
     case .authorized: break
     case .notDetermined: throw grantMissing("Contacts")

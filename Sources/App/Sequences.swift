@@ -29,7 +29,7 @@ func runActions(app: AppIdentity, params: JSON, session: ApprovalSession) throws
     let method = try string(step, "tool")
     if index > 0 { sleep(seconds: stepPauseSeconds) }
     do {
-      try currentConnection()?.throwIfCancelled()
+      try currentConnection()?.throwIfStopped()
       // The request was checked before the first step; the user may remove the app from the list or start working in
       // it, the app may quit and the screen may lock while the steps run.
       if index > 0 {

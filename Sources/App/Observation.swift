@@ -43,9 +43,11 @@ enum AppLocks {
       locks[bundleId] = made
       return made
     }
-    // Waiting for another agent stays cancellable.
-    while !lock.lock(before: Date().addingTimeInterval(0.1)) { try connection.throwIfCancelled() }
+    // Waiting for another agent stays cancellable and ends at the deadline.
+    while !lock.lock(before: Date().addingTimeInterval(0.1)) { try connection.throwIfStopped() }
     defer { lock.unlock() }
+    // The wait may have outlasted the deadline or a cancel, or the lock came at once after both; nothing has acted yet.
+    try connection.throwIfStopped()
     return try body()
   }
 }

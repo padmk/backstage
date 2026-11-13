@@ -116,7 +116,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
   try ApprovalGate.require(app, session: session)
   try requireSameProcess(app)
   try requireScreenUnlocked(method, params: params, app: app, session: session)
-  try connection.throwIfCancelled()
+  try connection.throwIfStopped()
   return try AppLocks.with(app.bundleId, connection: connection) {
     // Checked again after the wait: the user may have removed the app, or it may have quit, meanwhile.
     try ApprovalGate.require(app, session: session)
@@ -125,7 +125,7 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     if ["run_actions", "run_menu_command", "record_audio"].contains(method) || actionMethods.contains(method) || windowMethods.contains(method) {
       try requireUserNotWorking(in: app)
     }
-    try connection.throwIfCancelled()
+    try connection.throwIfStopped()
     if isScreenLocked(), worksOnLockedWindows(method, params: params) {
       if method != "screenshot" { try requireAccessibility() }
       return try lockedWindowRequest(method, app: app, params: params)

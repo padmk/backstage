@@ -110,7 +110,7 @@ func launch(_ query: String, files paths: [String] = [], session: ApprovalSessio
     try ApprovalGate.require(approved, session: session)
     // Files arriving while the user works in the app would mix with what they do there.
     if let running = runningApp(bundleId) { try requireUserNotWorking(in: identity(of: running)) }
-    try connection.throwIfCancelled()
+    try connection.throwIfStopped()
     return try openInApp(url, files: files, bundleId: bundleId, name: name)
   }
 }
