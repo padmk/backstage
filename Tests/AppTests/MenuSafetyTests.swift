@@ -2,6 +2,7 @@
 // menus, and run_actions naming every step before any runs.
 
 @testable import App
+import ApplicationServices
 import Foundation
 import Testing
 
@@ -143,5 +144,174 @@ private func code(of call: () throws -> Any) -> String? {
     } catch {
       Issue.record("\(error)")
     }
+  }
+}
+
+// Menus the check reads through a stand-in for Accessibility: each element is an application element of a process
+// id no process has, which the stand-in answers for, so an app that does not answer can be played without one.
+private final class FakeMenus {
+  private var nextPid: pid_t = 900_000
+  private var answers: [pid_t: [String: AttributeRead]] = [:]
+  // One read that takes this long, to play an app that answers slowly.
+  var slowRead: (element: AXUIElement, name: String, seconds: TimeInterval)?
+
+  func element(_ values: [String: AnyObject] = [:]) -> AXUIElement {
+    nextPid += 1
+    let element = AXUIElementCreateApplication(nextPid)
+    answers[nextPid] = values.mapValues(AttributeRead.value)
+    return element
+  }
+
+  func set(_ element: AXUIElement, _ name: String, _ read: AttributeRead) {
+    answers[pid(element), default: [:]][name] = read
+  }
+
+  func set(_ element: AXUIElement, _ name: String, _ value: AnyObject) { set(element, name, .value(value)) }
+
+  var copy: MenuReader.Copy {
+    { [self] element, name in
+      if let slowRead, CFEqual(slowRead.element, element), slowRead.name == name { Thread.sleep(forTimeInterval: slowRead.seconds) }
+      return answers[pid(element)]?[name] ?? .absent
+    }
+  }
+
+  private func pid(_ element: AXUIElement) -> pid_t {
+    var pid: pid_t = 0
+    AXUIElementGetPid(element, &pid)
+    return pid
+  }
+
+  // An app with a menu bar of the Apple menu, the app menu with a Services submenu holding one service with
+  // shift+cmd+Y, and a File menu with Save (cmd+S).
+  struct App {
+    let application: AXUIElement
+    let bar: AXUIElement
+    let appleTop: AXUIElement
+    let appTop: AXUIElement
+    let servicesItem: AXUIElement
+    let service: AXUIElement
+    let save: AXUIElement
+  }
+
+  func app() -> App {
+    let application = element([kAXRoleAttribute: kAXApplicationRole as NSString])
+    let bar = element([kAXRoleAttribute: kAXMenuBarRole as NSString, kAXParentAttribute: application])
+    func top(_ title: String) -> AXUIElement {
+      element([kAXRoleAttribute: kAXMenuBarItemRole as NSString, kAXTitleAttribute: title as NSString, kAXParentAttribute: bar])
+    }
+    func menu(in parent: AXUIElement, _ items: [AXUIElement]) {
+      let list = element([kAXRoleAttribute: kAXMenuRole as NSString, kAXParentAttribute: parent, kAXChildrenAttribute: items as NSArray])
+      set(parent, kAXChildrenAttribute, [list] as NSArray)
+      for item in items { set(item, kAXParentAttribute, list) }
+    }
+    func item(_ title: String, key: String? = nil, modifiers: Int = 0) -> AXUIElement {
+      var values: [String: AnyObject] = [kAXRoleAttribute: kAXMenuItemRole as NSString, kAXTitleAttribute: title as NSString]
+      if let key {
+        values["AXMenuItemCmdChar"] = key as NSString
+        values["AXMenuItemCmdModifiers"] = modifiers as NSNumber
+      }
+      return element(values)
+    }
+    let appleTop = top("Apple"), appTop = top("Example"), fileTop = top("File")
+    set(bar, kAXChildrenAttribute, [appleTop, appTop, fileTop] as NSArray)
+    set(application, kAXMenuBarAttribute, bar)
+    menu(in: appleTop, [item("About This Mac"), item("Lock Screen", key: "q", modifiers: 4)])
+    let servicesItem = item("Services")
+    menu(in: appTop, [item("About Example"), servicesItem, item("Quit Example", key: "q")])
+    let service = item("Make Sticky", key: "y", modifiers: 1)
+    menu(in: servicesItem, [service])
+    let save = item("Save", key: "s")
+    menu(in: fileTop, [save])
+    return App(application: application, bar: bar, appleTop: appleTop, appTop: appTop, servicesItem: servicesItem, service: service, save: save)
+  }
+}
+
+// What the check answers for a key: nil when it lets the key go, otherwise the error's code.
+private func keyCheck(_ text: String, _ menus: FakeMenus, _ app: FakeMenus.App, shortcutSeconds: TimeInterval = refusedSearchSeconds) throws -> String? {
+  let combination = try parse(text)
+  return code { try requireAllowedKey(combination, application: app.application, appName: "Example", copy: menus.copy, shortcutSeconds: shortcutSeconds) }
+}
+
+@Suite struct UnreadableMenuTests {
+  @Test func readableMenusRefuseOnlyTheShortcutsOfRefusedItems() throws {
+    let menus = FakeMenus()
+    let app = menus.app()
+    #expect(try keyCheck("shift+cmd+y", menus, app) == "not_allowed")
+    #expect(try keyCheck("cmd+s", menus, app) == nil)
+    #expect(try keyCheck("return", menus, app) == nil)
+  }
+
+  @Test func anAppWithoutAMenuBarHasNoRefusedShortcuts() throws {
+    let menus = FakeMenus()
+    let app = menus.app()
+    menus.set(app.application, kAXMenuBarAttribute, .absent)
+    #expect(try keyCheck("shift+cmd+y", menus, app) == nil)
+  }
+
+  // A menu bar, a menu or a title the app does not give counts as unread, not as empty: the key is not sent.
+  @Test func aShortcutIsRefusedWhenTheMenusItCouldBelongToCannotBeRead() throws {
+    for unreadable in [AXError.cannotComplete, .failure] {
+      let menus = FakeMenus()
+      let app = menus.app()
+      menus.set(app.application, kAXMenuBarAttribute, .unreadable(unreadable))
+      #expect(try keyCheck("shift+cmd+y", menus, app) != nil, "menu bar, AX error \(unreadable.rawValue)")
+    }
+    let unreadMenu = FakeMenus()
+    let menuApp = unreadMenu.app()
+    unreadMenu.set(menuApp.servicesItem, kAXChildrenAttribute, .unreadable(.cannotComplete))
+    #expect(try keyCheck("shift+cmd+y", unreadMenu, menuApp) == "timeout")
+    let unreadTitle = FakeMenus()
+    let titleApp = unreadTitle.app()
+    unreadTitle.set(titleApp.servicesItem, kAXTitleAttribute, .unreadable(.cannotComplete))
+    #expect(try keyCheck("shift+cmd+y", unreadTitle, titleApp) == "timeout")
+    let unreadShortcut = FakeMenus()
+    let shortcutApp = unreadShortcut.app()
+    unreadShortcut.set(shortcutApp.service, "AXMenuItemCmdChar", .unreadable(.cannotComplete))
+    #expect(try keyCheck("shift+cmd+y", unreadShortcut, shortcutApp) == "timeout")
+  }
+
+  // One slow answer can outlast the deadline although it started in time: here the scan's last read, the title of
+  // the File menu's item, after which nothing else would notice.
+  @Test func aReadThatEndsPastTheDeadlineRefuses() throws {
+    let menus = FakeMenus()
+    let app = menus.app()
+    #expect(try keyCheck("cmd+s", menus, app, shortcutSeconds: 0.2) == nil)
+    menus.slowRead = (app.save, kAXTitleAttribute, 0.3)
+    #expect(try keyCheck("cmd+s", menus, app, shortcutSeconds: 0.2) == "timeout")
+  }
+
+  @Test func returnIsRefusedWhenAnOpenMenusSelectionCannotBeRead() throws {
+    let menus = FakeMenus()
+    let app = menus.app()
+    menus.set(app.appTop, kAXSelectedAttribute, kCFBooleanTrue)
+    #expect(try keyCheck("return", menus, app) == nil)
+    menus.set(app.servicesItem, kAXSelectedAttribute, kCFBooleanTrue)
+    #expect(try keyCheck("return", menus, app) == "not_allowed")
+    menus.set(app.servicesItem, kAXSelectedAttribute, .unreadable(.cannotComplete))
+    #expect(try keyCheck("space", menus, app) == "timeout")
+  }
+
+  @Test func textWithASpaceIsRefusedWhenItCannotBeToldWhetherAMenuIsOpen() throws {
+    let menus = FakeMenus()
+    let app = menus.app()
+    let check = { code { try requireNoMenuShown(by: app.application, appName: "Example", copy: menus.copy) } }
+    #expect(check() == nil)
+    menus.set(app.application, kAXChildrenAttribute, .unreadable(.cannotComplete))
+    #expect(check() == "timeout")
+    menus.set(app.application, kAXChildrenAttribute, .absent)
+    menus.set(app.appTop, kAXSelectedAttribute, .unreadable(.failure))
+    #expect(check() == "action_failed")
+  }
+
+  // An item whose way up to the menu bar breaks off would otherwise pass for one in a context menu.
+  @Test func anItemWhosePlaceCannotBeReadIsRefused() throws {
+    let menus = FakeMenus()
+    let app = menus.app()
+    let reader = { MenuReader(appName: "Example", copy: menus.copy) }
+    #expect(code { try requireAllowedMenu(app.save, in: app.application, reader: reader()) } == nil)
+    #expect(code { try requireAllowedMenu(app.service, in: app.application, reader: reader()) } == "not_allowed")
+    let list = try #require(try reader().element(app.service, kAXParentAttribute))
+    menus.set(list, kAXParentAttribute, .unreadable(.cannotComplete))
+    #expect(code { try requireAllowedMenu(app.service, in: app.application, reader: reader()) } == "timeout")
   }
 }

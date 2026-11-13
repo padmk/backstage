@@ -34,7 +34,7 @@ private let reveal = Operation(
   arguments: [Argument(name: "path", kind: .string, required: true, description: "Absolute path, or one starting with ~")]
 ) { arguments in
   let url = try userPath(arguments)
-  let urls = try runScript("const Finder = Application('Finder'); Finder.reveal(Path(args.path)); delay(0.3); return Finder.selection().map((item) => item.url());",
+  let urls = try runScript("const Finder = Application('Finder'); changeBegins({ path: args.path }); Finder.reveal(Path(args.path)); delay(0.3); return Finder.selection().map((item) => item.url());",
                            arguments: ["path": url.path], target: target)
   return ["path": url.path, "verified": paths(urls).contains { URL(fileURLWithPath: $0).standardizedFileURL.path == url.path }]
 }
@@ -77,7 +77,7 @@ private let trash = Operation(
     try FileManager.default.trashItem(at: url, resultingItemURL: &location)
     trashed = location?.absoluteString ?? ""
   } else {
-    trashed = try runScript("return Application('Finder').delete(Path(args.path)).url();", arguments: ["path": url.path], target: target)
+    trashed = try runScript("changeBegins({ path: args.path }); return Application('Finder').delete(Path(args.path)).url();", arguments: ["path": url.path], target: target)
   }
   let gone = (try? FileManager.default.attributesOfItem(atPath: url.path)) == nil
   var result: JSON = ["path": url.path, "verified": gone]

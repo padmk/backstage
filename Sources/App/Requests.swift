@@ -12,7 +12,9 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
       session.clientName = sessionClientName(params["client_name"])
     }
     // A session handed over from an older command numbers its elements apart from the numbers it held before.
-    if let first = params["first_element_number"] as? Int { session.table.startNumbering(at: first) }
+    if let first = params["first_element_number"] as? Int ?? (params["element_number_limit"] != nil ? 1 : nil) {
+      session.table.startNumbering(at: first, limit: params["element_number_limit"] as? Int)
+    }
     return ["version": Configuration.version, "build": Configuration.build] as JSON
 
   case "status":

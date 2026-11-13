@@ -32,6 +32,7 @@ private let control = Operation(
 ) { arguments in
   try dictionary(runScript(script(#"""
     const before = playing();
+    changeBegins({ action: args.action });
     if (args.action === 'play') Music.play();
     if (args.action === 'pause') Music.pause();
     if (args.action === 'next') Music.nextTrack();
@@ -60,11 +61,13 @@ private let play = Operation(
     if (args.playlist) {
       const list = Music.playlists.byName(args.playlist);
       try { list.name(); } catch (error) { fail('not_found', 'There is no playlist named ' + args.playlist + '.'); }
+      changeBegins({ playlist: args.playlist });
       list.play();
     } else {
       const tracks = Music.search(Music.libraryPlaylists[0], { for: args.search });
       if (!tracks || tracks.length === 0) fail('not_found', 'Nothing in the library matches ' + args.search + '.');
       wanted = tracks[0].name();
+      changeBegins({ track: wanted });
       tracks[0].play();
     }
     delay(0.5);
@@ -79,6 +82,7 @@ private let setVolume = Operation(
   arguments: [Argument(name: "level", kind: .integer, required: true, description: "0 to 100", minimum: 0, maximum: 100)]
 ) { arguments in
   try dictionary(runScript(script(#"""
+    changeBegins({ level: args.level });
     Music.soundVolume = args.level;
     const after = playing();
     after.verified = after.volume === args.level;

@@ -58,8 +58,9 @@ private let run = Operation(
     options += ["--input-path", inputFile.path]
   }
   let finished = try runProcess(command, options, target: "The shortcut \(shortcut.name)", timeout: runSeconds)
+  // The shortcut was found before it ran, so an error means it stopped partway, after its actions may have acted.
   guard finished.status == 0 else {
-    throw HelperError(code: "action_failed", message: "The shortcut \(shortcut.name) stopped with an error: \(finished.errors.trimmingCharacters(in: .whitespacesAndNewlines).prefix(500))")
+    throw HelperError(code: "outcome_unknown", message: "The shortcut \(shortcut.name) (\(shortcut.id)) stopped with an error and may have done part of its work: \(finished.errors.trimmingCharacters(in: .whitespacesAndNewlines).prefix(500)) Read the state it was meant to change before running it again.")
   }
   // A shortcut's effect is whatever its actions do, which nothing here can read back.
   var result: JSON = ["shortcut": shortcut.name, "id": shortcut.id, "finished": true, "verified": false,
