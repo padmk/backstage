@@ -155,9 +155,10 @@ func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target:
   let stopWatching = connection?.onCancel { watch.noteCancel() }
   defer { stopWatching?() }
   // Written while the child runs, as a large input would fill the pipe; a child that ends first only fails the write.
+  // On a thread of its own, like the readers, so a busy Dispatch queue cannot hold the child waiting for its input.
   if let input, let inputPipe {
     _ = fcntl(inputPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
-    DispatchQueue.global().async {
+    Thread.detachNewThread {
       // A child that ended first fails the write; its exit status reports what happened.
       try? inputPipe.fileHandleForWriting.write(contentsOf: input)
       // A child that ended first fails the write; its exit status reports what happened.
@@ -194,8 +195,8 @@ func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target:
 }
 
 // Starts the child as the leader of a new process group (POSIX_SPAWN_SETPGROUP), so `stopChild` reaches it and what
-// it starts through the group, whatever Foundation's Process would do (it made a group on macOS 27 but not on the
-// macOS 26 CI runners). Only its standard input, output and error are inherited; signals start at their defaults.
+// it starts through the group. Foundation's Process makes one too on macOS 27, but does not document it. Only its
+// standard input, output and error are inherited; signals start at their defaults.
 private func spawnInOwnGroup(_ path: String, _ arguments: [String], input: Pipe?, output: Pipe, errors: Pipe, target: String) throws -> pid_t {
   var actions: posix_spawn_file_actions_t?
   var attributes: posix_spawnattr_t?

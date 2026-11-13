@@ -106,8 +106,13 @@ private func code(of error: any Error) -> String? { (error as? HelperError)?.cod
     #expect(pair.connection.enqueue(id: "1"))
     pair.connection.begin(generation: 0, id: "1", deadline: nil)
     let connection = pair.connection
+    // From a thread of its own, as the helper's connection reader sends it: on a busy machine, work on Dispatch's
+    // global queue can start seconds late.
     if stop == "cancel" {
-      DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { connection.cancel(requestId: "1") }
+      Thread.detachNewThread {
+        Thread.sleep(forTimeInterval: 0.5)
+        connection.cancel(requestId: "1")
+      }
     }
     let script = "trap '' TERM; (sleep 3; touch \"$0\") & sleep 3; touch \"$0\""
     let started = Date()
