@@ -137,7 +137,7 @@ func requestEventAccess(_ type: EKEntityType) {
   guard EKEventStore.authorizationStatus(for: type) == .notDetermined else { return }
   let answered = DispatchSemaphore(value: 0)
   let asking = EKEventStore()
-  let completion: EKEventStoreRequestAccessCompletionHandler = { _, _ in answered.signal() }
+  let completion: @Sendable (Bool, Error?) -> Void = { _, _ in answered.signal() }
   if type == .reminder { asking.requestFullAccessToReminders(completion: completion) } else { asking.requestFullAccessToEvents(completion: completion) }
   _ = answered.wait(timeout: .now() + .seconds(accessRequestSeconds))
   stores.withLock { $0 = EventStores() }

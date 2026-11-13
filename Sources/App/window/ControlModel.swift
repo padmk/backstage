@@ -100,7 +100,8 @@ let accessibilityId = "accessibility"
     self.live = live
     guard live else { return }
     apply(Reading())
-    timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refresh() }
+    // A timer scheduled from the main thread fires on the main run loop.
+    timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.refresh() } }
   }
 
   isolated deinit { timer?.invalidate() }

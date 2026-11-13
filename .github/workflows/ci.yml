@@ -35,8 +35,14 @@ jobs:
           echo "$SWIFTLINT_SHA256  $RUNNER_TEMP/swiftlint.zip" | shasum -a 256 -c -
           unzip -q "$RUNNER_TEMP/swiftlint.zip" swiftlint -d "$RUNNER_TEMP/swiftlint"
           "$RUNNER_TEMP/swiftlint/swiftlint" lint --strict --quiet
-      # The app bundle as users build it: release build, assembly, ad hoc signature and its verification.
-      - run: make app
+      # The app bundle as users build it: release build, assembly, ad hoc signature and its verification. Warnings
+      # fail the build, but the release build reports some concurrency diagnostics that -warnings-as-errors leaves
+      # as warnings and the debug build does not report, so the log is checked too.
+      - name: make app, without warnings
+        run: |
+          set -o pipefail
+          make app 2>&1 | tee "$RUNNER_TEMP/app.log"
+          if grep -n 'warning:' "$RUNNER_TEMP/app.log"; then echo "The release build has warnings" >&2; exit 1; fi
       - run: swiftc -typecheck Tests/Fixtures/target/main.swift
       - run: swift test
 
