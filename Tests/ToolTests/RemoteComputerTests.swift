@@ -18,7 +18,7 @@ private final class RemoteSetup {
   let sshLog: String
   let remotePidFile: String
 
-  init(allowed: Bool = true, remote respond: @escaping (Object) -> Object? = { _ in ["result": ["apps": [] as [Any]] as Object] }) throws {
+  init(allowed: Bool = true, remote respond: @escaping @Sendable (Object) -> Object? = { _ in ["result": ["apps": [] as [Any]] as Object] }) throws {
     let home = self.home
     helper = try FakeHelper(home: home) { request in
       guard request["method"] as? String == "require_computer" else { return ["result": [:] as Object] }

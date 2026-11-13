@@ -57,7 +57,9 @@ func cli(_ home: TemporaryHome, input: String? = nil, _ arguments: String...) th
 }
 
 // A process that talks to the app's socket directly.
-final class RawSocket {
+// Unchecked: what the helper sent and whether it closed are read and written holding `lock`; the descriptor is a
+// constant.
+final class RawSocket: @unchecked Sendable {
   private let descriptor: Int32
   private let lock = NSLock()
   private var text = ""

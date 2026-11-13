@@ -55,7 +55,7 @@ func line(_ object: Any) -> String {
 }
 
 // Reads newline-framed text from a descriptor on a thread of its own.
-private func readLines(_ descriptor: Int32, _ onLine: @escaping (String) -> Void, onEnd: @escaping () -> Void = {}) {
+private func readLines(_ descriptor: Int32, _ onLine: @escaping @Sendable (String) -> Void, onEnd: @escaping @Sendable () -> Void = {}) {
   Thread {
     var pending = Data()
     var buffer = [UInt8](repeating: 0, count: 65536)
@@ -93,7 +93,7 @@ final class FakeHelper: @unchecked Sendable {
   private var builds: [String]
   private let listener: Int32
 
-  init(home: TemporaryHome, builds: [String] = [], respond: @escaping (Object) -> Object? = { _ in ["result": [:] as Object] }) throws {
+  init(home: TemporaryHome, builds: [String] = [], respond: @escaping @Sendable (Object) -> Object? = { _ in ["result": [:] as Object] }) throws {
     self.builds = builds
     listener = socket(AF_UNIX, SOCK_STREAM, 0)
     var address = sockaddr_un()
