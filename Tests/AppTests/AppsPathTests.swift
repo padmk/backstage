@@ -89,6 +89,16 @@ private final class Home {
     helperError("permission_missing") { try openableFile(locked + "/inner/secret.txt", home: home.path) }
   }
 
+  // With the home folder closed to the helper, ~/LIBRARY's name on disk cannot be read, and checked as given it would
+  // pass the rule as a path Library does not match.
+  @Test func anEntryWhoseNameCannotBeReadIsRefused() throws {
+    let home = try Home()
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: home.path)
+    // Restoring the permissions only lets the temporary folder be removed.
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: home.path) }
+    helperError("permission_missing") { try home.user("/LIBRARY", mustExist: false) }
+  }
+
   @Test func otherVolumesRefuseCopiesOfLibraryAndBackups() {
     let home = "/Users/someone"
     for path in [
