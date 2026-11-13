@@ -11,9 +11,9 @@ Window contents, screenshots, recordings of what an app plays (`record_audio`) a
 | File | Holds |
 |---|---|
 | `~/.config/backstage/approvals.json` | The app list: bundle ids and signers (entries made by earlier versions may carry an expiry time) |
-| `~/.local/state/backstage/decisions.jsonl` | Time, client (the name the MCP client reports, as one line of at most 40 characters), app and decision of each first use in a session and each change to the list, Allow every app or Windows while locked; past 200 KB it keeps the newest records that fit in 100 KB, at most a thousand |
+| `~/.local/state/backstage/decisions.jsonl` | Time, client (the name the MCP client reports, as one line of at most 40 characters), app and decision of each first use in a session and each change to the list or the list of other Macs (by the name ssh reaches each under), Allow every app or Windows while locked; past 200 KB it keeps the newest records that fit in 100 KB, at most a thousand |
 | `~/.local/share/backstage/signing.keychain-db` | The local signing certificate and its key |
-| `~/.config/backstage/settings.json` | The window's switches and last tab, and which apps' data macOS has been asked about |
+| `~/.config/backstage/settings.json` | The window's switches and last tab, which apps' data macOS has been asked about, and the other Macs agents may reach |
 | `whatsapp-media`, `messages-attachments`, `photos-export` and `audio-recordings` in the system's temporary folder | Copies an agent asked for with WhatsApp's `save_media`, Messages' `save_attachment` or Photos' `export`, and recordings made with `record_audio`, each in a private folder of its own; macOS clears them over time |
 | `shortcut-<id>` in the system's temporary folder | While Shortcuts' `run` runs: the shortcut's input (`input.txt`) and output (`output.txt`), in a private folder removed when the shortcut ends |
 

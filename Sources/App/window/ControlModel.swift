@@ -37,6 +37,7 @@ private struct Reading {
   let showsMenuBarItem: Bool
   let allowsEveryApp: Bool
   let worksInWindowsWhileLocked: Bool
+  let computers: [String]
 
   init() {
     accessibility = AXIsProcessTrusted()
@@ -51,6 +52,7 @@ private struct Reading {
     login = LaunchAtLogin.state
     showsMenuBarItem = Preferences.showsMenuBarItem
     worksInWindowsWhileLocked = Preferences.worksInWindowsWhileLocked
+    computers = ComputerList.allowed
   }
 }
 
@@ -82,6 +84,9 @@ final class ControlModel: ObservableObject {
   @Published var showsMenuBarItem = false
   @Published var allowsEveryApp = false
   @Published var worksInWindowsWhileLocked = false
+  // Other Macs agents may reach with `computer`, and those asked for.
+  @Published var computers: [String] = []
+  @Published var computerRequests: [ComputerRequest] = []
   private let live: Bool
   private var timer: Timer?
   private let reader = DispatchQueue(label: "control-model.read", qos: .userInitiated)
@@ -155,6 +160,9 @@ final class ControlModel: ObservableObject {
     if reading.showsMenuBarItem != showsMenuBarItem { showsMenuBarItem = reading.showsMenuBarItem }
     if reading.allowsEveryApp != allowsEveryApp { allowsEveryApp = reading.allowsEveryApp }
     if reading.worksInWindowsWhileLocked != worksInWindowsWhileLocked { worksInWindowsWhileLocked = reading.worksInWindowsWhileLocked }
+    if reading.computers != computers { computers = reading.computers }
+    let askedComputers = ComputerList.requests
+    if askedComputers != computerRequests { computerRequests = askedComputers }
   }
 
   // macOS asks one prompt at a time and waits for the answer, so the requests run in turn, off the main thread.
@@ -270,6 +278,22 @@ final class ControlModel: ObservableObject {
     } else {
       writeDecisionLog(client: settingsClient, bundleId: asked.app.bundleId, decision: "decline")
     }
+    refresh()
+  }
+
+  // A request answered already, by a second click or from a row not yet redrawn, changes nothing.
+  func answer(_ asked: ComputerRequest, add: Bool) {
+    if add {
+      guard ComputerList.requests.contains(asked) else { return }
+      ComputerList.add(asked.name, by: settingsClient)
+    } else {
+      ComputerList.decline(asked.name, by: settingsClient)
+    }
+    refresh()
+  }
+
+  func removeComputer(_ name: String) {
+    ComputerList.remove(name, by: settingsClient)
     refresh()
   }
 

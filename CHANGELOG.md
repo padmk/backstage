@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `computer` reaches only the Macs on a new list on the Apps tab. The first call for a Mac is refused with `computer_not_approved` and asks in the window; once the user adds it, calls go there. Macs used with 0.2.3 have to be added once.
 - `user_active` also covers an app in the background: scrolling, dragging or clicking over its window in the last 2 s refuses an action there. Scrolling now counts at all; macOS keeps no time for it in the state Backstage read. A click with `foreground: true` no longer counts as the user's own input.
 - `run_actions` checks the app list, the app, the screen lock and `user_active` again before each step after the first, and reports the steps that ran when it stops.
 - A click where Accessibility cannot tell what lies under the point is refused while the app shows a menu, since the item there cannot be checked against the Apple, Services and Share menus. So is a click where Accessibility gives only the window. A click on a part of such an item, such as its image, is checked as the item.

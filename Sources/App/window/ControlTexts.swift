@@ -20,6 +20,10 @@ enum ControlTexts {
   static let requestsNote = "Agents and the command line ask here. Nothing changes until you choose."
   static let addRequested = "Add", decline = "Decline", notNow = "Not Now"
   static func askedToUse(_ client: String) -> String { "\(client) wants to use this app" }
+  static func askedToReach(_ client: String) -> String { "\(client) wants to use apps on this Mac over SSH" }
+  static let computersHeading = "Other Macs agents may reach"
+  static let computersNote = "Calls go there over SSH and that Mac's own app list decides them. A Mac that is not here is refused; agents ask for it above."
+  static let computerDetail = "By the name ssh reaches it under"
   static func askedFor(_ client: String, _ purpose: String) -> String { "\(client) asked for this. \(purpose)" }
   static let waitingForMacOS = "Waiting for macOS…", openSettings = "Open Settings…"
   static let turnOnInSettings = "In System Settings, turn on Backstage. This updates by itself."

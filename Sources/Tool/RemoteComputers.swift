@@ -8,20 +8,16 @@ import HelperLink
 
 let computerArgument = "computer"
 let computerRule: JSON = [
-  "type": "string", "maxLength": 253,
+  "type": "string", "maxLength": ComputerName.maxLength,
   "description": "Another of the user's Macs, by the name `ssh` reaches it under (a host or an alias in ~/.ssh/config). The call runs there, under that Mac's own app list; file paths are on that Mac. Omit for this Mac",
 ]
 
-// Host names and ssh_config aliases, never something ssh could read as an option or a user.
-func problemWithComputer(_ name: String) -> String? {
-  let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_"))
-  guard let first = name.unicodeScalars.first, CharacterSet.alphanumerics.contains(first),
-    name.unicodeScalars.allSatisfy({ $0.isASCII && allowed.contains($0) })
-  else { return "computer must be a host name or an alias from ~/.ssh/config, such as mbp" }
-  return nil
-}
-
-private let sshPath = "/usr/bin/ssh"
+// Tests put a stand-in for ssh here, only with a test home.
+private let sshPath: String = {
+  let environment = ProcessInfo.processInfo.environment
+  guard environment["HELPER_TEST_HOME"] != nil, let path = environment["HELPER_TEST_SSH"] else { return "/usr/bin/ssh" }
+  return path
+}()
 // Covers the SSH login and the first start of the app on that Mac.
 private let connectSeconds: TimeInterval = 30
 // That Mac's server keeps its own deadlines; this only ends a wait on a connection that stopped answering.

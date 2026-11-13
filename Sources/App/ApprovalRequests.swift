@@ -45,7 +45,7 @@ enum ApprovalRequests {
 }
 
 // Only a bare build started with --home has a home of its own; any other uses the user's files.
-private var hasTestHome: Bool {
+var hasTestHome: Bool {
   Bundle.main.bundleIdentifier == nil && Configuration.directories.approvalsPath != Directories().approvalsPath
 }
 
