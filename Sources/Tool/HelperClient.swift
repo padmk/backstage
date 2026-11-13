@@ -4,6 +4,7 @@
 
 import Foundation
 import HelperLink
+import Synchronization
 
 struct HelperFailure: Error {
   // nil for a failure of this command rather than an answer from the helper.
@@ -81,8 +82,8 @@ private func connectSocket(_ path: String) -> Int32? {
 }
 
 // Unchecked: the connection, the requests waiting and the ids are read and written only on the serial `queue`, and
-// the count of connections made only holding `connectLock`; `onOutdated`, `handoffGeneration` and `elementNumberBase`
-// are set before the first request and only read after.
+// the count of connections made only holding `connectLock`; `onOutdated` and `handoffGeneration` are set before
+// the first request and only read after, and `elementNumberBase`, which an initialize may set at any time, is a Mutex.
 final class HelperClient: @unchecked Sendable {
   private let directories: Directories
   // For tests with a helper they started themselves: nothing is started or replaced.
@@ -109,8 +110,12 @@ final class HelperClient: @unchecked Sendable {
   // asks for element numbers of its own range, so a number read before a helper restart or a handoff never names
   // an element of the new helper.
   var handoffGeneration = 0
-  // Where this session's numbers start when another Mac's command opened it again; set before the first connection.
-  var elementNumberBase = 0
+  // Where this session's numbers start when another Mac's command opened it again; the next connection uses it.
+  var elementNumberBase: Int {
+    get { numberBase.withLock { $0 } }
+    set { numberBase.withLock { $0 = newValue } }
+  }
+  private let numberBase = Mutex(0)
   private var connectionsMade = 0
 
   init(directories: Directories, managesHelper: Bool, expectedBuild: String?, clientName: @escaping () -> String? = { nil }) {
