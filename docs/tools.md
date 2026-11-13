@@ -32,6 +32,7 @@ The server repeats the essentials in its MCP instructions, so a client that load
 
 - `app`: the app's name, bundle id or process id. `list_apps`, `launch_app`, `list_operations` and `run_operation` take a name or bundle id only; `launch_app` never takes a path.
 - `window`: the window index shown on the first line of `get_window_state`, from 0; default the first window.
+- `computer`: another of the user's Macs, by the name `ssh` reaches it under (a host name or a `Host` alias in `~/.ssh/config`), taken by every tool. The call runs there: the command opens `ssh <computer>` in batch mode, runs that Mac's installed `backstage mcp` and passes the call on without `computer`, so that Mac's app list, settings and checks decide it, and file paths in arguments and replies are on that Mac. One connection per Mac stays open for the session, so element numbers from its reads stay valid; when it drops, or the session moves to a new build, the next call opens a new one, a new session there that numbers elements anew, and its reply starts with a note saying so: read the window state again before using a number. That Mac needs Backstage installed and an SSH login with a key that asks for no password. A name with characters other than letters, digits, `.`, `-` and `_` is refused, and `run_actions` takes `computer` once, not in its steps.
 - `element`: an element number from `get_window_state`. Numbers belong to one session and one app and stay valid across reads in that session. A new session numbers elements anew. Each new connection of a session, as after the helper restarted, and each move to a new build after an update gets numbers from a range of its own, so older numbers fail with `unknown_element` instead of naming another element; a helper that kept the session keeps its numbering.
 
 ## The tools
@@ -137,8 +138,9 @@ A failed call returns an MCP tool error whose text starts with the code, such as
 | `access_denied` | The user declined that grant | The message names the pane in System Settings |
 | `screen_locked` | The screen is locked, so windows cannot be read | Use ready operations or the menu bar; see [locked-screen.md](locked-screen.md) |
 | `restarting` | Backstage is restarting to pick up a permission the user just allowed: new requests are turned away from the moment the restart is planned, and it restarts once the running ones have finished | Try again in a few seconds |
+| `computer_unreachable` | `ssh <computer>` failed without a password prompt, or Backstage is not installed on that Mac; the message gives ssh's reason | Check the name with the user, or ask them to set up SSH or install Backstage there |
 | `user_active` | The app is in front and the user typed or clicked in the last 2 s, or moved the pointer or scrolled over its windows | Try again in a few seconds |
-| `outcome_unknown` | The action or operation may have worked, for example it opened a blocking dialog or was cancelled midway | Read the state before trying again; never retry blindly |
+| `outcome_unknown` | The action or operation may have worked, for example it opened a blocking dialog, was cancelled midway, or the connection to another Mac ended during it | Read the state before trying again; never retry blindly |
 | `stale_element`, `unknown_element` | The element number no longer names what was read | Read the window again |
 | `stale_window` | A window id from `list_windows` now belongs to another app | List the windows again |
 | `needs_foreground` | The change would bring a window in front (back from the Dock, full screen) | Pass `foreground: true` if that is what the user wants, and tell them |

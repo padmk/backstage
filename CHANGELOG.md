@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Every tool takes `computer`, the name `ssh` reaches another of the user's Macs under, and runs there through that Mac's installed Backstage, with its own app list and checks. One SSH connection per Mac stays open for the session, so element numbers keep their meaning; a Mac that cannot be reached, or has no Backstage, answers `computer_unreachable`. No entry per Mac is needed in the MCP client.
+
 ## 0.2.2
 
 - A press or menu command the app answers with AX error -25200 no longer fails at once: apps built with SwiftUI answer so when a press opens or closes a sheet, though it worked. The reply carries `app_error`, `verified: false` and `state`, and is `action_failed` only when nothing changed; in `run_actions` the step stops the steps as `outcome_unknown`.

@@ -90,7 +90,7 @@ If you are an agent using Backstage: check `list_apps` before using an app by an
 
 ## Tools
 
-24 tools, with every argument, reply and error code in [docs/tools.md](docs/tools.md):
+24 tools, with every argument, reply and error code in [docs/tools.md](docs/tools.md). Each also works on another of your Macs that has Backstage and that you can reach with `ssh` and a key: the agent names it with `computer`, and that Mac's own app list applies.
 
 - **Apps and operations:** `list_apps`, `launch_app`, `list_operations`, `run_operation`
 - **Reading:** `get_window_state`, `read_text`, `screenshot` (with the text recognized in it, on this Mac)
