@@ -90,7 +90,9 @@ func run(_ path: String, _ arguments: [String]) throws -> String {
 }
 
 // The command against the user's real files and the installed app, as an MCP client runs it.
-final class LiveServer {
+// Unchecked: the replies and the next id are read and written holding `lock`, waits for a reply go through
+// `arrived`, and the process and its input are constants.
+final class LiveServer: @unchecked Sendable {
   let process = Process()
   private let input = Pipe()
   private let lock = NSLock()

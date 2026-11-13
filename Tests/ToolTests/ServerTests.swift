@@ -9,7 +9,7 @@ private struct Setup {
   let helper: FakeHelper
   let server: ServerProcess
 
-  init(_ respond: @escaping (Object) -> Object? = { _ in ["result": [:] as Object] }) throws {
+  init(_ respond: @escaping @Sendable (Object) -> Object? = { _ in ["result": [:] as Object] }) throws {
     helper = try FakeHelper(home: home, respond: respond)
     server = try ServerProcess(home: home)
   }
