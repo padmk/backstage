@@ -129,13 +129,11 @@ func press(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> J
       throw HelperError(code: "action_failed", message: "The element does not offer \(name). It offers: \(available.joined(separator: ", ")).")
     }
     let outcome = AXUIElementPerformAction(element, action as CFString)
-    guard outcome == .success else { throw axFailure(outcome, "performing \(name)") }
-    return ["delivery": "accessibility", "action": action]
+    return try pressReply(outcome, "performing \(name)", ["delivery": "accessibility", "action": action])
   }
   if let action = pressActions.first(where: available.contains) {
     let outcome = AXUIElementPerformAction(element, action as CFString)
-    guard outcome == .success else { throw axFailure(outcome, "pressing the element") }
-    return ["delivery": "accessibility", "action": action]
+    return try pressReply(outcome, "pressing the element", ["delivery": "accessibility", "action": action])
   }
   // A list row, or the text in one, is selected the way a click would, since background clicks often miss
   // lists such as System Settings' privacy lists.

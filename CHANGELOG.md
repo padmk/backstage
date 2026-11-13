@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- A press or menu command the app answers with AX error -25200 no longer fails at once: apps built with SwiftUI answer so when a press opens or closes a sheet, though it worked. The reply carries `app_error`, `verified: false` and `state`, and is `action_failed` only when nothing changed; in `run_actions` the step stops the steps as `outcome_unknown`.
+- The MCP instructions and [Tools](docs/tools.md) tell agents to close the menus, popovers and palettes they open, which show on the user's screen above their work.
+
 ## 0.2.1
 
 - Messages: `list_chats` and `read_chat` find a person's chats by the name the Messages sidebar shows, taken from Contacts once Contacts is allowed on the Setup tab, and label chats and senders with it (`contact_names`, `from_name`). Without Contacts, a search that finds nothing says so. Backstage never asks for Contacts during a task.
