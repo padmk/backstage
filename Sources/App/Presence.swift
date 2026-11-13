@@ -3,8 +3,6 @@
 
 import AppKit
 
-// Input this recent counts as the user working in the app.
-private let userActiveSeconds = 2.0
 // Typing and clicking go to the front app wherever the pointer is.
 private let directedInput: [CGEventType] = [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown]
 // Moving the pointer and scrolling reach the window under the pointer, which may belong to another app, as when the
@@ -15,112 +13,39 @@ private let ownPostedInput: Set<CGEventType> = [.mouseMoved, .leftMouseDown, .ri
 // The system may stamp posted input a moment after the post returns.
 private let ownInputMarginSeconds = 0.1
 
-private let inputLock = NSLock()
-private var ownSystemInputAt = Date.distantPast
-// The apps whose window on top took the user's scrolling, dragging or clicking, with when it last did.
-private var backgroundInputTimes: [pid_t: Date] = [:]
-// Touched on the main thread only. The app the last press went to, which its drag goes on to wherever the pointer
-// moves; and the last scroll's lookup, reused for scrolling at the same point for a tenth of a second from when it was
-// made, so a scroll does not read the window list for every event.
-private var lastPressPid: pid_t?
-private var lastScrollLookup: (location: CGPoint, pid: pid_t?, time: Date)?
-private let scrollLookupSeconds = 0.1
-private let scrollLookupDistance = 4.0
-private var backgroundInputMonitor: Any?
-
-// When Backstage last posted input to the whole system (a click with foreground) or put the pointer back.
-func noteOwnSystemInput() {
-  inputLock.lock()
-  ownSystemInputAt = Date()
-  inputLock.unlock()
-}
-
-private func secondsSinceOwnSystemInput() -> Double {
-  inputLock.lock()
-  defer { inputLock.unlock() }
-  return Date().timeIntervalSince(ownSystemInputAt)
-}
-
-// A window in the background takes scrolling, dragging and clicks without its app coming forward, so the app each
-// went to is noted as it happens, from the window on top at its point then, not from where the pointer is now. Moving the
-// pointer across a window on the way elsewhere is not counted. Events Backstage posted carry its process id and are
-// left out. Started once, on the main thread.
-func startWatchingBackgroundInput() {
-  let ownPid = Int64(getpid())
-  let types: NSEvent.EventTypeMask = [.scrollWheel, .leftMouseDown, .rightMouseDown, .otherMouseDown,
-    .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
-  backgroundInputMonitor = NSEvent.addGlobalMonitorForEvents(matching: types) { event in
-    guard let input = event.cgEvent, input.getIntegerValueField(.eventSourceUnixProcessID) != ownPid else { return }
-    let now = Date()
-    let location = input.location
-    let pid: pid_t?
-    switch event.type {
-    case .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
-      pid = lastPressPid ?? topWindowOwner(at: location)
-    case .scrollWheel:
-      if let lookup = lastScrollLookup, now.timeIntervalSince(lookup.time) < scrollLookupSeconds,
-        hypot(lookup.location.x - location.x, lookup.location.y - location.y) < scrollLookupDistance {
-        pid = lookup.pid
-      } else {
-        pid = topWindowOwner(at: location)
-        lastScrollLookup = (location, pid, now)
-      }
-    default:
-      pid = topWindowOwner(at: location)
-      lastPressPid = pid
-    }
-    guard let pid else { return }
-    inputLock.lock()
-    backgroundInputTimes = backgroundInputTimes.filter { now.timeIntervalSince($0.value) < userActiveSeconds }
-    backgroundInputTimes[pid] = now
-    inputLock.unlock()
-  }
-}
-
-// How long ago the user last gave input of these types. The HID state keeps no time for scrolling, so that comes from
-// the session state, which input posted to a process does not reach either. A time no newer than Backstage's own
-// system-wide input of that type may be Backstage's, and is not counted.
+// How long ago the user last gave input of these types, from the system's own times. The HID state keeps no time for
+// scrolling, so that comes from the session state, which input posted to a process does not reach either. A time no
+// newer than Backstage's own system-wide input of that type may be Backstage's, and is not counted.
 private func secondsSinceUserInput(_ types: [CGEventType]) -> Double {
-  let own = secondsSinceOwnSystemInput()
+  let own = PointerActivity.secondsSinceOwnSystemInput
   return types.map { type -> Double in
     let seconds = CGEventSource.secondsSinceLastEventType(type == .scrollWheel ? .combinedSessionState : .hidSystemState, eventType: type)
     return ownPostedInput.contains(type) && seconds >= own - ownInputMarginSeconds ? .infinity : seconds
   }.min() ?? .infinity
 }
 
-// The app of the visible window on top at a point.
-private func topWindowOwner(at location: CGPoint) -> pid_t? {
-  guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [JSON]
-  else { return nil }
+// The visible window under the pointer, top first, belongs to the app.
+private func pointerIsOverWindow(of pid: pid_t) -> Bool {
+  guard let location = CGEvent(source: nil)?.location,
+    let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [JSON]
+  else { return false }
   let top = windows.first { window in
     guard (window[kCGWindowAlpha as String] as? Double ?? 1) > 0,
       let bounds = window[kCGWindowBounds as String] as? NSDictionary,
       let frame = CGRect(dictionaryRepresentation: bounds) else { return false }
     return frame.contains(location)
   }
-  return (top?[kCGWindowOwnerPID as String] as? Int).map { pid_t($0) }
+  return (top?[kCGWindowOwnerPID as String] as? Int).map { pid_t($0) == pid } ?? false
 }
 
-private func pointerIsOverWindow(of pid: pid_t) -> Bool {
-  guard let location = CGEvent(source: nil)?.location else { return false }
-  return topWindowOwner(at: location) == pid
-}
-
-private func recentBackgroundInput(in pid: pid_t) -> Bool {
-  inputLock.lock()
-  let time = backgroundInputTimes[pid]
-  inputLock.unlock()
-  return time.map { Date().timeIntervalSince($0) < userActiveSeconds } ?? false
-}
-
-// In the front app the user's typing and clicking count wherever the pointer is, and pointer input over its window on
-// top; in an app in the background, scrolling, dragging and clicking that went to its window on top.
+// The user works in an app when they scrolled, dragged or clicked in one of its windows, in front or behind, and in
+// the front app also when they typed or clicked anywhere, or moved the pointer over its window on top.
 func requireUserNotWorking(in app: AppIdentity) throws {
-  let isFront = onMain({ NSWorkspace.shared.frontmostApplication?.processIdentifier }) == app.pid
-  let working = isFront
-    ? secondsSinceUserInput(directedInput) < userActiveSeconds
-      || (secondsSinceUserInput(pointerInput) < userActiveSeconds && pointerIsOverWindow(of: app.pid))
-    : recentBackgroundInput(in: app.pid)
+  let recent = PointerActivity.recentSeconds
+  let working = PointerActivity.recentInput(in: app.pid)
+    || (onMain({ NSWorkspace.shared.frontmostApplication?.processIdentifier }) == app.pid
+      && (secondsSinceUserInput(directedInput) < recent
+        || (secondsSinceUserInput(pointerInput) < recent && pointerIsOverWindow(of: app.pid))))
   guard !working else {
     throw HelperError(code: "user_active", message: "The user is working in \(app.name) right now, so nothing was done there. Try again in a few seconds, or ask the user.")
   }

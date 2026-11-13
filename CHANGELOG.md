@@ -3,7 +3,7 @@
 ## Unreleased
 
 - `user_active` also covers an app in the background: scrolling, dragging or clicking over its window in the last 2 s refuses an action there. Scrolling now counts at all; macOS keeps no time for it in the state Backstage read. A click with `foreground: true` no longer counts as the user's own input.
-- `run_actions` checks the app, the screen lock and `user_active` again before each step after the first, and reports the steps that ran when it stops.
+- `run_actions` checks the app list, the app, the screen lock and `user_active` again before each step after the first, and reports the steps that ran when it stops.
 - A click where Accessibility cannot tell what lies under the point is refused while the app shows a menu, since the item there cannot be checked against the Apple, Services and Share menus. So is a click where Accessibility gives only the window. A click on a part of such an item, such as its image, is checked as the item.
 - Messages reads contact names only while Contacts is on the app list, not only while macOS allows it, so removing Contacts from the list stops it.
 - `launch_app` looks at `files` only for an app on the list, so a refusal no longer depends on whether a path exists.
