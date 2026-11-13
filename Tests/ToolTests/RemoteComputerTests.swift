@@ -6,7 +6,7 @@ import Darwin
 import Foundation
 import Testing
 
-private let notApproved: Object = ["error": ["code": "computer_not_approved", "message": "mbp is not on the list"] as Object]
+private var notApproved: Object { ["error": ["code": "computer_not_approved", "message": "mbp is not on the list"] as Object] }
 
 // This Mac's helper and command, and the other Mac's helper, reached through the ssh stand-in.
 private final class RemoteSetup {
