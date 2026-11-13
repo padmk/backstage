@@ -371,7 +371,8 @@ private func serve(_ descriptor: Int32) {
         write(["id": request["id"] ?? NSNull(), "error": ["code": "busy", "message": "Too many requests are waiting on this connection. Wait for answers before sending more."]], to: connection)
         continue
       }
-      worker.async { perform(request, generation: generation, connection: connection) }
+      let queued = SharedJSON(request)
+      worker.async { perform(queued.value, generation: generation, connection: connection) }
     }
   }
   connection.close()

@@ -119,20 +119,31 @@ private func runningApp(_ bundleId: String) -> NSRunningApplication? {
   onMain { NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first { !$0.isTerminated } }
 }
 
+// NSWorkspace's answer to a launch, as the launched app or why it did not start.
+private func launchHandler(_ outcome: AsyncOutcome<NSRunningApplication>, name: String) -> @Sendable (NSRunningApplication?, (any Error)?) -> Void {
+  { app, error in
+    if let app {
+      outcome.set(.success(app))
+    } else {
+      outcome.set(.failure(error.map { HelperError(code: "action_failed", message: $0.localizedDescription) }
+        ?? HelperError(code: "action_failed", message: "\(name) did not start.")))
+    }
+  }
+}
+
+private func launchResult(_ result: Result<NSRunningApplication, any Error>?, name: String) throws -> NSRunningApplication {
+  guard let result else { throw HelperError(code: "timeout", message: "\(name) did not start in time.") }
+  return try result.get()
+}
+
 // Starts the app, or hands a running one the files, and keeps the focus where it was.
 private func openInApp(_ url: URL, files: [URL], bundleId: String, name: String) throws -> JSON {
   let frontBefore = onMain { NSWorkspace.shared.frontmostApplication }
   let configuration = NSWorkspace.OpenConfiguration()
   configuration.activates = false
   configuration.addsToRecentItems = false
-  let done = DispatchSemaphore(value: 0)
-  var launched: NSRunningApplication?
-  var failure: Error?
-  let opened: (NSRunningApplication?, Error?) -> Void = { app, error in
-    launched = app
-    failure = error
-    done.signal()
-  }
+  let outcome = AsyncOutcome<NSRunningApplication>()
+  let opened = launchHandler(outcome, name: name)
   if files.isEmpty {
     NSWorkspace.shared.openApplication(at: url, configuration: configuration, completionHandler: opened)
   } else {
@@ -141,20 +152,21 @@ private func openInApp(_ url: URL, files: [URL], bundleId: String, name: String)
   // The app can take the focus before the launch is reported, so it is watched while waiting too.
   let launchDeadline = Date().addingTimeInterval(TimeInterval(launchTimeoutSeconds))
   var returnedEarly = false
-  while done.wait(timeout: .now() + 0.05) == .timedOut {
+  var result = outcome.wait(until: .now() + 0.05)
+  while result == nil {
     if let frontBefore, frontBefore.bundleIdentifier != bundleId,
        onMain({ NSWorkspace.shared.frontmostApplication?.bundleIdentifier }) == bundleId {
       returnedEarly = onMain { frontBefore.activate() } || returnedEarly
     }
     guard Date() < launchDeadline else { throw HelperError(code: "timeout", message: "\(name) did not start in time.") }
+    result = outcome.wait(until: .now() + 0.05)
   }
-  if let failure { throw HelperError(code: "action_failed", message: failure.localizedDescription) }
-  guard let launched else { throw HelperError(code: "action_failed", message: "\(name) did not start.") }
+  let launched = try launchResult(result, name: name)
   let focusReturned = keepFocusWhileStarting(launched, previous: frontBefore) || returnedEarly
-  var result = describe(launched)
-  if focusReturned { result["focus_returned"] = true }
-  if !files.isEmpty { result["opened"] = files.map(\.path) }
-  return result
+  var reply = describe(launched)
+  if focusReturned { reply["focus_returned"] = true }
+  if !files.isEmpty { reply["opened"] = files.map(\.path) }
+  return reply
 }
 
 // Many apps activate themselves as they start, despite the request not to. While it starts, the app the user
@@ -185,20 +197,13 @@ func startAppHidden(at path: String, name: String) throws -> NSRunningApplicatio
   configuration.addsToRecentItems = false
   // Without it the app reopens the windows it had when it last quit, which can show alerts no one sees.
   configuration.arguments = ["-ApplePersistenceIgnoreState", "YES"]
-  let done = DispatchSemaphore(value: 0)
-  var launched: NSRunningApplication?
-  var failure: Error?
-  NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: path), configuration: configuration) { app, error in
-    launched = app
-    failure = error
-    done.signal()
-  }
+  let outcome = AsyncOutcome<NSRunningApplication>()
+  NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: path), configuration: configuration, completionHandler: launchHandler(outcome, name: name))
   let deadline = Date().addingTimeInterval(startSeconds)
-  guard done.wait(timeout: .now() + startSeconds) == .success else {
+  guard let result = outcome.wait(until: .now() + startSeconds) else {
     throw HelperError(code: "timeout", message: "\(name) did not start in time.")
   }
-  if let failure { throw HelperError(code: "action_failed", message: failure.localizedDescription) }
-  guard let launched else { throw HelperError(code: "action_failed", message: "\(name) did not start.") }
+  let launched = try launchResult(result, name: name)
   // Apple events sent before the app has finished starting can go unanswered.
   while !launched.isFinishedLaunching, Date() < deadline { sleep(seconds: 0.05) }
   return launched

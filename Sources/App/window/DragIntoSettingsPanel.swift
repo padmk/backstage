@@ -66,7 +66,10 @@ private final class OwnInputIgnoringPanel: NSPanel {
   panel.orderFrontRegardless()
   dragPanel = panel
   let until = Date().addingTimeInterval(panelLifetimeSeconds)
+  // A timer scheduled from the main thread fires on the main run loop.
   grantWatch = Timer.scheduledTimer(withTimeInterval: grantCheckSeconds, repeats: true) { _ in
-    if grantState(grant) == .granted || Date() > until { closeDragPanel() }
+    MainActor.assumeIsolated {
+      if grantState(grant) == .granted || Date() > until { closeDragPanel() }
+    }
   }
 }

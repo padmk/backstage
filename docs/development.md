@@ -60,7 +60,7 @@ Only a bare build outside a bundle honors `--home`; any copy of the app bundle u
 
 ## CI
 
-CI (`.github/workflows/ci.yml`) runs on `macos-26` on every push to `main` and every pull request, and cancels a run that a newer push to the same branch supersedes. One job prints the Swift version, lints with SwiftLint's release (checked against its published digest), builds and assembles the app (`make app`), type-checks the fixture app and runs `swift test`; a second runs the tests under the thread sanitizer, with the reports of the helper and the command the tests start written to files, and fails on any report. The live test needs real permissions, so it runs only locally. Dependabot proposes updates of the pinned GitHub Actions once a month.
+CI (`.github/workflows/ci.yml`) runs on `macos-26` on every push to `main` and every pull request, and cancels a run that a newer push to the same branch supersedes. One job prints the Swift version, lints with SwiftLint's release (checked against its published digest), builds and assembles the app (`make app`, failing on any warning in its log, since the release build reports some concurrency warnings that `-warnings-as-errors` leaves as warnings), type-checks the fixture app and runs `swift test`; a second runs the tests under the thread sanitizer, with the reports of the helper and the command the tests start written to files, and fails on any report. The live test needs real permissions, so it runs only locally. Dependabot proposes updates of the pinned GitHub Actions once a month.
 
 ## Releasing
 
