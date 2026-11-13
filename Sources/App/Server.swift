@@ -136,14 +136,14 @@ final class Connection: Sendable {
 
   func adopt(sessionId: String) {
     let adopted = attachSession(id: sessionId)
-    let previous = state.withLock { state -> ApprovalSession? in
-      defer {
-        state.currentSession = adopted
-        state.adoptedSession = adopted
-      }
+    let released = state.withLock { state -> ApprovalSession? in
+      state.currentSession = adopted
+      // Closed meanwhile, the connection has given up the session it held, and gives up this one at once too.
+      if state.isClosed { return adopted }
+      defer { state.adoptedSession = adopted }
       return state.adoptedSession
     }
-    if let previous { detach(previous) }
+    if let released { detach(released) }
   }
 
   var isCancelled: Bool { state.withLock { $0.isCancelled } }
