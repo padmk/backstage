@@ -126,8 +126,10 @@ final class Connection: Sendable {
   var session: ApprovalSession { state.withLock { $0.currentSession } }
 
   // Registered from the start, so approvals given to a client that never says hello are listed and revocable too.
+  // The descriptor is nonblocking, so a reply's write can give up at its deadline; the reader waits with poll.
   init(descriptor: Int32) {
     self.descriptor = descriptor
+    _ = fcntl(descriptor, F_SETFL, fcntl(descriptor, F_GETFL) | O_NONBLOCK)
     let own = attachSession(id: "connection-\(UUID().uuidString)")
     state = Mutex(State(currentSession: own, adoptedSession: own))
   }
@@ -228,6 +230,9 @@ final class Connection: Sendable {
     handlers.forEach { $0() }
   }
 
+  // Ends reads and writes on the socket; the reader then sees the end and closes the connection.
+  func disconnect() { Darwin.shutdown(descriptor, SHUT_RDWR) }
+
   func close() {
     let (adopted, handlers) = state.withLock { state in
       state.isClosed = true
@@ -286,7 +291,10 @@ func sendReply(_ reply: JSON, to connection: Connection, within seconds: TimeInt
 // planned, so requests that keep coming cannot hold it off.
 enum RequestActivity {
   private struct State {
-    var running = 0
+    // Operations running, and their replies being written; a reply's write is bounded, so a client that stops
+    // reading holds a restart up for at most replyWriteSeconds.
+    var operations = 0
+    var replies = 0
     var restartPlanned = false
   }
 
@@ -296,12 +304,20 @@ enum RequestActivity {
   static func started() -> Bool {
     state.withLock { state in
       if state.restartPlanned { return false }
-      state.running += 1
+      state.operations += 1
       return true
     }
   }
 
-  static func ended() { state.withLock { $0.running -= 1 } }
+  // The operation is done and its reply is on its way, in one step, so a restart never falls between the two.
+  static func replying() {
+    state.withLock { state in
+      state.operations -= 1
+      state.replies += 1
+    }
+  }
+
+  static func replied() { state.withLock { $0.replies -= 1 } }
 
   // True for the first caller only, so one restart waits however often it is asked for.
   static func planRestart() -> Bool {
@@ -311,7 +327,7 @@ enum RequestActivity {
     }
   }
 
-  static var isIdle: Bool { state.withLock { $0.running == 0 } }
+  static var isIdle: Bool { state.withLock { $0.operations == 0 && $0.replies == 0 } }
 }
 
 let expiredError = HelperError(code: "expired", message: "The request waited too long and was not run.")
@@ -337,11 +353,8 @@ private func perform(_ request: JSON, generation: Int, connection: Connection) {
   // Milliseconds since 1970.
   let deadline = (request["deadline"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
   connection.begin(generation: generation, id: key, deadline: deadline)
+  defer { connection.finish(id: key) }
   let admitted = RequestActivity.started()
-  defer {
-    if admitted { RequestActivity.ended() }
-    connection.finish(id: key)
-  }
   let reply: JSON = withCurrentConnection(connection) {
     do {
       guard admitted else {
@@ -358,6 +371,9 @@ private func perform(_ request: JSON, generation: Int, connection: Connection) {
       return ["id": id, "error": ["code": "failed", "message": error.localizedDescription]]
     }
   }
+  guard admitted else { return write(reply, to: connection) }
+  RequestActivity.replying()
+  defer { RequestActivity.replied() }
   write(reply, to: connection)
 }
 
@@ -368,6 +384,11 @@ private func serve(_ descriptor: Int32) {
   var chunk = [UInt8](repeating: 0, count: 65536)
   while true {
     let count = read(descriptor, &chunk, chunk.count)
+    if count < 0, errno == EAGAIN || errno == EINTR {
+      var ready = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+      _ = poll(&ready, 1, -1)
+      continue
+    }
     if count <= 0 { break }
     pending.append(contentsOf: chunk[0..<count])
     if pending.count > maxFrameBytes, pending.firstIndex(of: 0x0a) == nil {
