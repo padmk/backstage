@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1
 
 - A script or shortcut that finishes while a process it started in its process group still runs no longer frees the app while that process goes on working: what is left of the group is stopped before the call returns (SIGTERM, then SIGKILL after 1 s), and the call answers `outcome_unknown`, since the process may have done part of its work. Before, such a call could answer success while the process changed things after the reply.
 - `set_window` refuses a `frame` with a value beyond 1,000,000 points as `invalid_request`, and a window frame an app reports that is not a number or lies that far out counts as no frame. Before, a finite but huge width reached the window and then stopped the helper while it built the reply.
