@@ -176,8 +176,10 @@ struct HandleContact: Equatable {
 
 typealias ContactLookup = (ContactHandle) -> HandleContact?
 
+// The phone and email keys are part of it because Contacts refuses a phone or email predicate without them.
 private let nameKeys: [CNKeyDescriptor] = [
   CNContactFormatter.descriptorForRequiredKeys(for: .fullName), CNContactOrganizationNameKey as CNKeyDescriptor,
+  CNContactPhoneNumbersKey as CNKeyDescriptor, CNContactEmailAddressesKey as CNKeyDescriptor,
 ]
 
 // Looks handles up in Contacts, each once, when the user has already allowed Contacts; nil otherwise. It never asks
