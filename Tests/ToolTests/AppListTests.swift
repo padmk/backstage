@@ -15,8 +15,11 @@ private func ask(_ home: TemporaryHome, _ method: String, _ params: Object, afte
     replies = 1
   }
   socket.send(line(["id": 2, "method": method, "params": params]))
+  // Only lines that have ended: a read can stop inside a reply, and its first part is no reply.
   let lines = try until { () -> [String]? in
-    let lines = socket.received.components(separatedBy: "\n").filter { !$0.isEmpty }
+    let received = socket.received
+    guard let end = received.lastIndex(of: "\n") else { return nil }
+    let lines = received[..<end].split(separator: "\n").map(String.init)
     return lines.count > replies ? lines : nil
   }
   return try #require(parseLine(lines[replies]))
