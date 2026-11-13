@@ -49,9 +49,9 @@ private func text(_ value: Any??) -> String? {
 
 // Messages keeps no names for people; Messages shows the names in Contacts, which label chats here when the user
 // has allowed Contacts. Business senders, such as "Orange", are named by their handle and are not looked up.
-private func person(_ handle: String?, _ contacts: ContactLookup?) -> HandleContact? {
+private func person(_ handle: String?, _ contacts: ContactLookup?) throws -> HandleContact? {
   guard let contacts, let handle, let parsed = ContactHandle(handle) else { return nil }
-  return contacts(parsed)
+  return try contacts(parsed)
 }
 
 // Names compared as people type them: without case, accents or strokes, so "lodz" finds "Łódź".
@@ -94,22 +94,22 @@ private func chat(_ database: ReadOnlyDatabase, _ wanted: String, contacts: Cont
   ]
   for (tier, matches) in tiers.map({ rows.filter($0) }).enumerated() where !matches.isEmpty {
     let keys = matches.compactMap { int($0["ROWID"]) }
-    let fallback = { (handle: String) in person(handle, contacts)?.name ?? handle }
+    let fallback = { (handle: String) throws -> String in try person(handle, contacts)?.name ?? handle }
     if matches.count == 1, let row = matches.first, let key = keys.first {
-      return ([key], text(row["guid"]) ?? "", text(row["display_name"]) ?? text(row["chat_identifier"]).map(fallback) ?? "")
+      return ([key], text(row["guid"]) ?? "", try text(row["display_name"]) ?? text(row["chat_identifier"]).map(fallback) ?? "")
     }
     if tier == 1, keys.count == matches.count, try oneToOne(database, keys) {
-      return (keys, wanted, matches.lazy.compactMap { text($0["display_name"]) }.first ?? fallback(wanted))
+      return (keys, wanted, try matches.lazy.compactMap { text($0["display_name"]) }.first ?? fallback(wanted))
     }
     throw HelperError(code: "ambiguous", message: "\(matches.count) chats match \(wanted). Use the id from list_chats.")
   }
   if let contacts {
     let members = try participants(database)
     let folded = searchFolded(wanted.trimmingCharacters(in: .whitespaces))
-    let matches = rows.compactMap { row -> (key: Int64, handle: String, contact: HandleContact)? in
+    let matches = try rows.compactMap { row -> (key: Int64, handle: String, contact: HandleContact)? in
       guard let key = int(row["ROWID"]), text(row["display_name"]) == nil,
         let handle = otherPerson(members[key] ?? [], identifier: text(row["chat_identifier"])),
-        let contact = person(handle, contacts), searchFolded(contact.name) == folded
+        let contact = try person(handle, contacts), searchFolded(contact.name) == folded
       else { return nil }
       return (key, handle, contact)
     }
@@ -148,7 +148,7 @@ func messagesChatList(_ database: ReadOnlyDatabase, query: String?, limit: Int, 
     """)
   let members = try participants(database)
   let wanted = query.map(searchFolded).flatMap { $0.isEmpty ? nil : $0 }
-  func describe(_ row: [String: Any?], contacts: ContactLookup?) -> JSON? {
+  func describe(_ row: [String: Any?], contacts: ContactLookup?) throws -> JSON? {
     let handles = members[int(row["key"]) ?? -1] ?? []
     let identifier = text(row["identifier"])
     var chat: JSON = ["id": text(row["id"]) ?? "", "name": text(row["name"]) ?? "", "participants": handles]
@@ -156,8 +156,8 @@ func messagesChatList(_ database: ReadOnlyDatabase, query: String?, limit: Int, 
     if let identifier { chat["handle"] = identifier }
     // A one-to-one chat without participants rows is known by its identifier alone.
     let other = otherPerson(handles, identifier: identifier)
-    let named = Dictionary((handles.isEmpty ? other.map { [$0] } ?? [] : handles).compactMap { handle in
-      person(handle, contacts).map { (handle, $0.name) }
+    let named = Dictionary(try (handles.isEmpty ? other.map { [$0] } ?? [] : handles).compactMap { handle in
+      try person(handle, contacts).map { (handle, $0.name) }
     }, uniquingKeysWith: { first, _ in first })
     if !named.isEmpty { chat["contact_names"] = named }
     if text(row["name"]) == nil, let other, let name = named[other] { chat["name"] = name }
@@ -172,9 +172,9 @@ func messagesChatList(_ database: ReadOnlyDatabase, query: String?, limit: Int, 
   let shown: [JSON]
   if wanted == nil {
     total = chats.count
-    shown = chats.prefix(limit).compactMap { describe($0, contacts: contacts) }
+    shown = try chats.prefix(limit).compactMap { try describe($0, contacts: contacts) }
   } else {
-    let matched = chats.compactMap { describe($0, contacts: contacts) }
+    let matched = try chats.compactMap { try describe($0, contacts: contacts) }
     total = matched.count
     shown = Array(matched.prefix(limit))
   }
@@ -232,11 +232,12 @@ func readMessagesChat(_ database: ReadOnlyDatabase, _ arguments: JSON, contacts:
     FROM message m LEFT JOIN handle h ON h.ROWID = m.handle_id
     WHERE \(conditions.joined(separator: " AND ")) ORDER BY \(when) DESC, m.ROWID DESC LIMIT \(count + 1)
     """, bindings)
+  // An older database without these columns reads messages without attachments.
   let attachmentsReadable = (try? database.requireColumns(attachmentColumns)) != nil
   let messages = try rows.prefix(count).reversed().map { row -> JSON in
     var item: JSON = ["id": int(row["id"]) ?? 0, "time": seconds(row["at"]).map { timeText(Date(timeIntervalSinceReferenceDate: $0)) } ?? ""]
     item["from"] = int(row["mine"]) == 1 ? "me" : text(row["sender"]) ?? "unknown"
-    if int(row["mine"]) != 1, let sender = person(text(row["sender"]), contacts) { item["from_name"] = sender.name }
+    if int(row["mine"]) != 1, let sender = try person(text(row["sender"]), contacts) { item["from_name"] = sender.name }
     // Item types other than 0 are events in the chat, such as a renamed group or someone joining.
     if let kind = int(row["kind"]), kind != 0 { item["event"] = kind }
     if let body = text(row["body"]) {
@@ -280,6 +281,7 @@ let messagesSaveAttachment = Operation(
   guard source.path.hasPrefix(folder) else {
     throw HelperError(code: "not_found", message: "Message \(id)'s attachment is outside Messages' folder.")
   }
+  // A file whose type cannot be read is refused like any file that is not a regular one.
   guard (try? source.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else {
     throw HelperError(code: "not_found", message: "Message \(id)'s attachment is not on this Mac; Messages downloads it when the user opens it.")
   }

@@ -91,10 +91,13 @@ private let read = Operation(
 ) { arguments in
   let id = try string(arguments, "id")
   return try withContacts { store in
-    guard let contact = try? store.unifiedContact(withIdentifier: id, keysToFetch: detailKeys) else {
+    do {
+      return details(try store.unifiedContact(withIdentifier: id, keysToFetch: detailKeys))
+    } catch let error as CNError where error.code == .recordDoesNotExist {
       throw HelperError(code: "not_found", message: "There is no contact with id \(id).")
+    } catch {
+      throw contactsFailure(error)
     }
-    return details(contact)
   }
 }
 
@@ -178,7 +181,12 @@ struct HandleContact: Equatable {
   let name: String
 }
 
-typealias ContactLookup = (ContactHandle) -> HandleContact?
+// Throws when Contacts refuses a lookup, so a failure never reads as a person Contacts does not know.
+typealias ContactLookup = (ContactHandle) throws -> HandleContact?
+
+private func contactsFailure(_ error: Error) -> HelperError {
+  HelperError(code: "action_failed", message: "Contacts refused the request: \(error.localizedDescription)")
+}
 
 // The phone and email keys are part of it because Contacts refuses a phone or email predicate without them.
 private var nameKeys: [CNKeyDescriptor] {
@@ -198,7 +206,12 @@ func contactLookup() -> ContactLookup? {
   var known: [ContactHandle: HandleContact?] = [:]
   return { handle in
     if let found = known[handle] { return found }
-    let contact = sharedStore.withLock { (try? $0.unifiedContacts(matching: handle.predicate, keysToFetch: nameKeys))?.first }
+    let contact: CNContact?
+    do {
+      contact = try sharedStore.withLock { try $0.unifiedContacts(matching: handle.predicate, keysToFetch: nameKeys) }.first
+    } catch {
+      throw contactsFailure(error)
+    }
     let name = contact.map { CNContactFormatter.string(from: $0, style: .fullName) ?? $0.organizationName } ?? ""
     let found = contact.flatMap { name.isEmpty ? nil : HandleContact(id: $0.identifier, name: name) }
     known[handle] = found
