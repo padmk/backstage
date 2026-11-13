@@ -231,9 +231,12 @@ final class HelperClient: @unchecked Sendable {
       let count = readAvailable(socket.descriptor, into: &buffer)
       guard count > 0 else { break }
       for line in framer.lines(in: Data(buffer[0..<count])) {
-        guard let reply = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? JSON else { continue }
-        // An error that names no request could belong to any of them; ending the connection fails them all rather
-        // than leave one waiting for its deadline.
+        // A line that is no reply, like an error that names no request, could belong to any of them; ending the
+        // connection fails them all rather than leave one waiting for its deadline.
+        guard let reply = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? JSON else {
+          socket.shut()
+          continue
+        }
         guard let id = reply["id"] as? Int else {
           if reply["error"] != nil { socket.shut() }
           continue

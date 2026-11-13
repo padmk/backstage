@@ -83,7 +83,7 @@ private func write(_ descriptor: Int32, _ text: String) {
 }
 
 // A helper that answers on the socket as the test says: a reply object, or nil for no answer. A reply gets the
-// request's id unless it names one itself. Each hello reports the next of `builds`, the last one from then on.
+// request's id unless it names one itself; one with only `raw` is sent as that text instead, as a line. Each hello reports the next of `builds`, the last one from then on.
 final class FakeHelper: @unchecked Sendable {
   private let lock = NSLock()
   private var received: [Object] = []
@@ -123,6 +123,10 @@ final class FakeHelper: @unchecked Sendable {
             return
           }
           guard var reply = respond(request) else { return }
+          if reply.count == 1, let raw = reply["raw"] as? String {
+            write(client, raw + "\n")
+            return
+          }
           if reply["id"] == nil { reply["id"] = id }
           write(client, line(reply))
         }
