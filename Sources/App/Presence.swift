@@ -19,11 +19,13 @@ private let inputLock = NSLock()
 private var ownSystemInputAt = Date.distantPast
 // The apps whose window on top took the user's scrolling, dragging or clicking, with when it last did.
 private var backgroundInputTimes: [pid_t: Date] = [:]
-// The last event's point and app, reused while the pointer stays put, as during a scroll, and through a drag, so the
-// window list is not read for every event. Touched on the main thread only.
-private var lastInputTarget: (location: CGPoint, pid: pid_t, time: Date)?
-private let sameTargetSeconds = 0.25
-private let sameTargetDistance = 4.0
+// Touched on the main thread only. The app the last press went to, which its drag goes on to wherever the pointer
+// moves; and the last scroll's lookup, reused for scrolling at the same point for a tenth of a second from when it was
+// made, so a scroll does not read the window list for every event.
+private var lastPressPid: pid_t?
+private var lastScrollLookup: (location: CGPoint, pid: pid_t?, time: Date)?
+private let scrollLookupSeconds = 0.1
+private let scrollLookupDistance = 4.0
 private var backgroundInputMonitor: Any?
 
 // When Backstage last posted input to the whole system (a click with foreground) or put the pointer back.
@@ -52,16 +54,22 @@ func startWatchingBackgroundInput() {
     let now = Date()
     let location = input.location
     let pid: pid_t?
-    // A drag goes on to the window its press went to, wherever the pointer moves.
-    let isDrag = [.leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(event.type)
-    if let last = lastInputTarget, now.timeIntervalSince(last.time) < sameTargetSeconds,
-      isDrag || hypot(last.location.x - location.x, last.location.y - location.y) < sameTargetDistance {
-      pid = last.pid
-    } else {
+    switch event.type {
+    case .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+      pid = lastPressPid ?? topWindowOwner(at: location)
+    case .scrollWheel:
+      if let lookup = lastScrollLookup, now.timeIntervalSince(lookup.time) < scrollLookupSeconds,
+        hypot(lookup.location.x - location.x, lookup.location.y - location.y) < scrollLookupDistance {
+        pid = lookup.pid
+      } else {
+        pid = topWindowOwner(at: location)
+        lastScrollLookup = (location, pid, now)
+      }
+    default:
       pid = topWindowOwner(at: location)
+      lastPressPid = pid
     }
     guard let pid else { return }
-    lastInputTarget = (location, pid, now)
     inputLock.lock()
     backgroundInputTimes = backgroundInputTimes.filter { now.timeIntervalSince($0.value) < userActiveSeconds }
     backgroundInputTimes[pid] = now
