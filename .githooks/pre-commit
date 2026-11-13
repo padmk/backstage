@@ -1,5 +1,6 @@
 #!/bin/bash
-# Lints the Swift files a commit changes with the rules in .swiftlint.yml, as CI does. `make hooks` installs it.
+# Lints the Swift files a commit changes with the rules in .swiftlint.yml, as CI does. `make hooks` installs a hook in
+# the repository's hooks folder that runs this one.
 set -euo pipefail
 
 files=()

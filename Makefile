@@ -59,8 +59,14 @@ tsan:
 lint:
 	swiftlint lint --strict --quiet
 
+# Installs into the repository's own hooks folder, not core.hooksPath, so hooks set up for every repository stay on.
+# The installed hook runs the tracked one, so changes to it apply; another hook already there is left alone.
 hooks:
-	git config core.hooksPath .githooks
+	@hook="$$(git rev-parse --git-common-dir)/hooks/pre-commit"; \
+	if [ -e "$$hook" ] && ! grep -q 'Installed by make hooks' "$$hook"; then echo "$$hook exists; call .githooks/pre-commit from it instead." >&2; exit 1; fi; \
+	mkdir -p "$$(dirname "$$hook")"; \
+	printf '%s\n' '#!/bin/sh' '# Installed by make hooks: runs the tracked .githooks/pre-commit.' 'exec "$$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$$@"' > "$$hook"; \
+	chmod +x "$$hook"; echo "Installed $$hook"
 
 live:
 	LIVE=1 swift test --filter LiveTests
