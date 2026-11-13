@@ -108,6 +108,8 @@ final class HelperClient: @unchecked Sendable {
   // asks for element numbers of its own range, so a number read before a helper restart or a handoff never names
   // an element of the new helper.
   var handoffGeneration = 0
+  // Where this session's numbers start when another Mac's command opened it again; set before the first connection.
+  var elementNumberBase = 0
   private var connectionsMade = 0
 
   init(directories: Directories, managesHelper: Bool, expectedBuild: String?, clientName: @escaping () -> String? = { nil }) {
@@ -276,7 +278,7 @@ final class HelperClient: @unchecked Sendable {
   private func hello(_ socket: SocketConnection) throws -> JSON {
     var params: JSON = ["session_id": sessionId]
     if let name = clientName() { params["client_name"] = name }
-    let first = handoffGeneration * elementNumbersPerHandoff + connectionsMade * elementNumbersPerConnection + 1
+    let first = elementNumberBase + handoffGeneration * elementNumbersPerHandoff + connectionsMade * elementNumbersPerConnection + 1
     connectionsMade += 1
     if first > 1 { params["first_element_number"] = first }
     return try send(socket, "hello", params, ticket: nil) as? JSON ?? [:]

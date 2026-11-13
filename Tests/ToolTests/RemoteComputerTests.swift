@@ -98,7 +98,7 @@ private final class RemoteSetup {
     #expect(textOf(result).contains("Connection refused"))
   }
 
-  @Test func saysOnceThatElementNumbersEndedWhenTheConnectionOpensAgain() throws {
+  @Test func numbersElementsApartAndSaysSoOnceWhenTheConnectionOpensAgain() throws {
     let setup = try RemoteSetup()
     _ = try setup.server.call("list_apps", ["computer": "mbp"])
     try setup.dropConnection()
@@ -109,6 +109,10 @@ private final class RemoteSetup {
     }
     #expect(reopened["isError"] as? Bool != true)
     #expect(setup.sshRuns.count == 2)
+    // The second session there numbers from a range of its own, so an old number names no element of it.
+    let hellos = setup.remoteHelper.all("hello").map { ($0["params"] as? Object)?["first_element_number"] as? Int ?? 1 }
+    #expect(hellos.first == 1)
+    #expect((hellos.last ?? 0) > 1_000_000_000)
     let next = try setup.server.call("list_apps", ["computer": "mbp"])
     #expect(!textOf(next).contains("opened again"))
   }
