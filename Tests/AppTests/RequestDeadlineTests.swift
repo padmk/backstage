@@ -1,4 +1,4 @@
-// A request's deadline holds while it waits and before each effect.
+// A request's deadline holds while it waits and before each effect, and a reply's write ends at its own.
 
 @testable import App
 import Darwin
@@ -55,5 +55,17 @@ private func code(of error: any Error) -> String? { (error as? HelperError)?.cod
       try withCurrentConnection(pair.connection) { try runProcess("/bin/sleep", ["10"], target: "sleep", timeout: 30) }
     } throws: { code(of: $0) == "outcome_unknown" }
     #expect(Date().timeIntervalSince(started) < 4)
+  }
+
+  // A client that stops reading must not hold the reply's write, and with it the connection's worker and a restart.
+  @Test func aReplyToAClientThatStopsReadingGivesUpAtItsDeadline() throws {
+    let pair = try SocketPair()
+    let outcome = AsyncOutcome<Bool>()
+    let connection = pair.connection
+    Thread.detachNewThread {
+      outcome.set(.success(sendReply(["id": 1, "result": String(repeating: "x", count: 8 << 20)], to: connection, within: 1)))
+    }
+    let result = try #require(outcome.wait(until: .now() + 10), "The write did not end")
+    #expect(try result.get() == false)
   }
 }
