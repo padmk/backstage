@@ -210,6 +210,16 @@ private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
     #expect(textOf(result).hasPrefix("helper_stopped"))
   }
 
+  // A line that is no JSON names no request either, so it ends the call rather than leave it waiting for its deadline.
+  @Test func endsACallWhenTheHelperAnswersWithALineThatIsNoJSON() throws {
+    let home = TemporaryHome()
+    let helper = try FakeHelper(home: home) { $0["method"] as? String == "press" ? ["raw": "{broken"] : ["result": [:] as Object] }
+    let server = try ServerProcess(home: home, environment: ["HELPER_TEST_TIMEOUT": "5"])
+    let result = try server.call("press", ["app": "Notes", "element": 1])
+    #expect(textOf(result).hasPrefix("helper_stopped"), "\(textOf(result))")
+    withExtendedLifetime(helper) {}
+  }
+
   @Test func reportsAHelperThatDoesNotAnswerInTimeAndConnectsAgainAfterwards() throws {
     let home = TemporaryHome()
     let helper = try FakeHelper(home: home) { $0["method"] as? String == "press" ? nil : ["result": ["ok": true]] }
