@@ -2,6 +2,7 @@
 #   make app       build/Backstage.app, signed ad hoc; `setup` signs the installed copy with this Mac's identity
 #   make install   make app, then run its setup: install into /Applications, permissions, MCP registration
 #   make test      the tests (Swift Testing; the live ones need LIVE=1, an installed app and its permissions)
+#   make tsan      the tests under the thread sanitizer
 #   make lint      SwiftLint with .swiftlint.yml (brew install swiftlint)
 #   make hooks     lint the Swift files of each commit before it is made (.githooks/pre-commit)
 #   make live      the live test against the installed app (needs its Accessibility; operates a test app in the background)
@@ -24,7 +25,7 @@ SWIFT_BUILD := swift build -c release --arch arm64 $(SWIFT_BUILD_FLAGS)
 BUILD = $(shell $(SWIFT_BUILD) --show-bin-path)
 APP := build/$(APP_NAME).app
 
-.PHONY: app install test lint hooks live bench check clean
+.PHONY: app install test tsan lint hooks live bench check clean
 
 app:
 	$(SWIFT_BUILD) --product $(APP_NAME)
@@ -48,6 +49,12 @@ install: app
 
 test:
 	swift test
+
+# The helper and the command the tests start write their reports to files, since the tests discard their output.
+tsan:
+	rm -rf .build/tsan-reports && mkdir -p .build/tsan-reports
+	TSAN_OPTIONS=log_path=$(CURDIR)/.build/tsan-reports/report swift test --sanitize=thread
+	@if ls .build/tsan-reports/report.* >/dev/null 2>&1; then cat .build/tsan-reports/report.*; exit 1; fi
 
 lint:
 	swiftlint lint --strict --quiet

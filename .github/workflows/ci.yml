@@ -39,3 +39,22 @@ jobs:
       - run: make app
       - run: swiftc -typecheck Tests/Fixtures/target/main.swift
       - run: swift test
+
+  thread-sanitizer:
+    # The same tests with the thread sanitizer, which reports the data races they run into. The helper and the command
+    # the tests start are built with it too and inherit TSAN_OPTIONS, so their reports, which would go to output the
+    # tests discard, are written to files, and any report fails the job.
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tests under the thread sanitizer
+        run: |
+          mkdir -p "$RUNNER_TEMP/tsan"
+          TSAN_OPTIONS="log_path=$RUNNER_TEMP/tsan/report" swift test --sanitize=thread
+      - name: No data race reported, by the tests or the processes they started
+        if: always()
+        run: |
+          if ls "$RUNNER_TEMP/tsan"/report.* >/dev/null 2>&1; then cat "$RUNNER_TEMP/tsan"/report.*; exit 1; fi
