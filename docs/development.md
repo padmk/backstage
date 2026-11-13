@@ -31,6 +31,7 @@ The window's pictures in `docs/images` are drawn offscreen at 2x, each tab at it
 | `HELPER_TEST_HOME` | `backstage mcp`, `backstage approvals`, `backstage uninstall` | Use this folder for the socket, the app list, the settings and the log instead of the XDG directories; `uninstall` then removes nothing. Tests only; a bare app build is started with `--home` to match |
 | `HELPER_NO_START` | `backstage mcp`, `backstage approvals` | Never start the helper; fail when nothing listens on the socket. Tests only |
 | `HELPER_TEST_INSTALLED_APP` | the command, only with `HELPER_TEST_HOME` | The bundle the command treats as the installed app, for tests of builds and handoffs |
+| `HELPER_TEST_SSH` | the command, only with `HELPER_TEST_HOME` | The program run in place of `/usr/bin/ssh` for `computer`, for tests of calls to another Mac |
 | `HELPER_TEST_TIMEOUT` | the command, only with `HELPER_TEST_HOME` | Seconds the command waits for a reply from the helper instead of 200 |
 | `LIVE` | the live test | `LIVE=1` runs `LiveTests` (what `make live` sets) |
 | `LIVE_COMMAND` | the live test | The command the live test runs; default the test build's `backstage-tool` |
@@ -47,8 +48,9 @@ CI (`.github/workflows/ci.yml`) runs on `macos-26` on every push to `main` and e
 
 1. Set `Product.version` in `Sources/HelperLink/Product.swift`.
 2. Head the release's section of `CHANGELOG.md` with `## <version>`, exactly; its text becomes the release notes.
-3. Push `main` and wait until CI passes for that commit.
-4. Push the tag `v<version>` on that commit.
+3. Have GPT-6.1 Sol at `xhigh` review the whole difference since the previous `v<version>` tag, given only the code and the project's rules, not earlier findings; confirm each finding in the code and fix the confirmed ones first. Reviews of single changes miss what lies between them.
+4. Push `main` and wait until CI passes for that commit.
+5. Push the tag `v<version>` on that commit.
 
 The tag starts `.github/workflows/release.yml`. It builds the app and runs the tests on `macos-26`, checks the signature and that `backstage version` matches the tag, renders the formula, and takes the CHANGELOG section as notes; a tag without a matching version or section stops there, as does one while the `release` environment (open to `v*` tags only) has no `HOMEBREW_TAP_TOKEN`, a fine-grained token that may write to the tap's contents. It then requires the tag to point at a commit of `main` whose CI run passed, waiting up to 30 minutes for one still running, and creates the GitHub release. Last, it renders `packaging/homebrew/backstage.rb.tmpl` with the version and the checksum of the tag's source archive into the tap (`<owner>/homebrew-tap`) as `Formula/backstage.rb`. Running the workflow by hand is a dry run that builds and checks without publishing.
 
@@ -63,23 +65,26 @@ The tag starts `.github/workflows/release.yml`. It builds the app and runs the t
 | `assets/` | The app icon |
 | `Sources/HelperLink/Product.swift` | The product's name, version, bundle id, install locations, handoff revision and directories; the steps `run_actions` takes |
 | `Sources/HelperLink/BuildIdentity.swift`, `Framing.swift` | The build identity (the linker's UUID); line-delimited JSON for the socket and stdio |
+| `Sources/HelperLink/ComputerName.swift` | Which names `computer` takes, checked by the command and the app alike |
 | `Sources/Tool/ToolMain.swift`, `Commands.swift` | The command's entry; `setup`, `doctor`, `approvals`, `uninstall`, `version` |
 | `Sources/Tool/Install.swift` | Installing and signing the app for this Mac |
 | `Sources/Tool/MCPServer.swift`, `Tools.swift` | MCP over stdio, the tool definitions and their argument checks |
 | `Sources/Tool/HelperClient.swift` | Starting the app and talking to it over its socket, with the build check |
 | `Sources/Tool/Handoff.swift` | Handing a running MCP session to the installed command after an update |
+| `Sources/Tool/RemoteComputers.swift` | Calls with `computer`: one SSH connection per Mac to its `backstage mcp` |
 | `Sources/Tool/Processes.swift` | Running other programs; naming the command and its app in messages |
 | `Sources/App/HelperMain.swift`, `Server.swift` | The app's start, the Unix socket, connections and sessions |
 | `Sources/App/Requests.swift` | The request router |
 | `Sources/App/Common.swift` | Types and small helpers the app's modules share |
 | `Sources/App/Approvals.swift`, `ApprovalRequests.swift` | The app list and the check every request passes; apps asked for over the socket, waiting for the user |
+| `Sources/App/Computers.swift` | The other Macs agents may reach with `computer`, and those asked for, waiting for the user |
 | `Sources/App/SystemPermissions.swift` | Screen Recording and System Audio Recording, asked for only from the window |
 | `Sources/App/Apps.swift` | Finding apps, starting them in the background and handing them files |
 | `Sources/App/Accessibility.swift`, `Tree.swift` | Reading apps and numbering elements; rendering windows as lines |
 | `Sources/App/Actions.swift`, `TextSelection.swift` | Acting on windows; reading and selecting text by what it says |
 | `Sources/App/Observation.swift`, `Sequences.swift` | Change reports after actions, the per-app lock, and `run_actions` |
 | `Sources/App/Input.swift`, `BackgroundEvents.swift`, `Capture.swift` | Key and pointer events, background delivery through private calls, screenshots |
-| `Sources/App/Presence.swift`, `LockedWindows.swift` | The user working in the target app; the locked screen and Windows while locked |
+| `Sources/App/Presence.swift`, `PointerActivity.swift`, `LockedWindows.swift` | The user working in the target app, from the system's input times and the app each click, scroll and drag went to; the locked screen and Windows while locked |
 | `Sources/App/WindowManagement.swift` | `list_windows`, `set_window`, `set_app_state`, `close`: displays, frames, layouts |
 | `Sources/App/TextRecognition.swift` | The text recognized in a screenshot with Vision, in reading order |
 | `Sources/App/MenuCommands.swift`, `MenuSafety.swift` | Menu commands with their shortcuts; the Apple, Services and Share menus refused, with the points and keys checked against them |
@@ -91,6 +96,6 @@ The tag starts `.github/workflows/release.yml`. It builds the app and runs the t
 | `Sources/App/apps/AppAccess.swift` | The macOS grants ready operations need, as the Setup tab shows them |
 | `Sources/App/apps/Scripting.swift`, `EventStore.swift`, `ReadOnlyDatabase.swift`, `Typedstream.swift`, `UserPaths.swift` | The routes operations share: the `osascript` runner, EventKit, read-only SQLite, the reader for Messages' archived text, and the rule for which files operations may touch |
 | `Sources/App/apps/` (the other files) | One file per app: Notes, Reminders, Calendar (`CalendarApp.swift`), Contacts, Mail, Messages and its history (`MessagesHistory.swift`), Music, Finder, Pages and Numbers (`IWork.swift`), Shortcuts, System Settings (`Settings.swift`), WhatsApp, Photos, Home, and the hint-only apps (`HintsOnly.swift`) |
-| `Tests/ToolTests/` | Protocol tests against a fake helper (`ServerTests`), app tests against a bare build (`HelperTests`), the app list as socket clients meet it (`AppListTests`), the live test and the benchmark |
+| `Tests/ToolTests/` | Protocol tests against a fake helper (`ServerTests`), app tests against a bare build (`HelperTests`), the app list as socket clients meet it (`AppListTests`), calls to another Mac through a stand-in for ssh (`RemoteComputerTests`), the live test and the benchmark |
 | `Tests/AppTests/` | The app's pure functions through `@testable import App`: ready operations' paths, values, scripts and databases, the app list's rules, menu safety and key combinations, change reports, recording and window rules, and text recognition (`TextRecognitionTests`) |
 | `Tests/Fixtures/target/` | The fixture app the live test and the benchmark operate |

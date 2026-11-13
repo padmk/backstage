@@ -9,6 +9,7 @@ enum Preferences {
   private static let tabKey = "controlTab"
   private static let lockedWindowsKey = "worksInWindowsWhileLocked"
   private static let askedAppDataKey = "askedAppData"
+  private static let computersKey = "allowedComputers"
 
   private static let lock = NSLock()
   private static var path: String { Configuration.directories.settingsPath }
@@ -57,6 +58,12 @@ enum Preferences {
   static var askedAppData: Set<String> {
     get { Set(value(askedAppDataKey) ?? [String]()) }
     set { set(askedAppDataKey, newValue.sorted()) }
+  }
+
+  // The other Macs agents may reach with `computer`, by the name ssh reaches each under; see ComputerList.
+  static var allowedComputers: [String] {
+    get { (value(computersKey) ?? [String]()).filter { ComputerName.problem(with: $0) == nil } }
+    set { set(computersKey, newValue) }
   }
 
   static var lastTab: String? {

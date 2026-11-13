@@ -5,8 +5,8 @@ import SwiftUI
 // Entries written before the app list existed keep a readable label.
 private func chipColor(_ decision: String) -> Color {
   switch decision {
-  case "decline", "removed", "every_app_on", "locked_windows_on": Palette.coral
-  case "added", "every_app_off", "locked_windows_off", "hour", "day", "week", "always": Palette.sky
+  case "decline", "removed", "every_app_on", "locked_windows_on", "computer_removed", "computer_declined": Palette.coral
+  case "added", "computer_added", "every_app_off", "locked_windows_off", "hour", "day", "week", "always": Palette.sky
   default: Palette.secondary
   }
 }
@@ -14,8 +14,9 @@ private func chipColor(_ decision: String) -> Color {
 private func chipText(_ decision: String) -> String {
   switch decision {
   case "used": "Used"
-  case "added": "Added"
-  case "removed": "Removed"
+  case "added", "computer_added": "Added"
+  case "removed", "computer_removed": "Removed"
+  case "computer_declined": "Denied"
   case "every_app_on": "Every app on"
   case "every_app_off": "Every app off"
   case "locked_windows_on": "On"
@@ -43,8 +44,10 @@ struct ActivityTab: View {
       ForEach(Array(model.recent.enumerated()), id: \.element.id) { index, record in
         if index > 0 { RowDivider() }
         let isLockedWindows = record.decision.hasPrefix("locked_windows")
-        ControlRow(icon: isLockedWindows ? .symbol("lock.display") : record.bundleId == "*" ? .symbol("square.grid.2x2") : .app(record.bundleId),
-                   title: isLockedWindows ? ControlTexts.windowsWhileLocked
+        let isComputer = record.decision.hasPrefix("computer_")
+        ControlRow(icon: isLockedWindows ? .symbol("lock.display") : isComputer ? .symbol("desktopcomputer")
+                     : record.bundleId == "*" ? .symbol("square.grid.2x2") : .app(record.bundleId),
+                   title: isLockedWindows ? ControlTexts.windowsWhileLocked : isComputer ? record.bundleId
                      : record.bundleId == "*" ? ControlTexts.everyApp : readableAppName(model.appNames[record.bundleId] ?? record.bundleId) ?? record.bundleId,
                    detail: who(record.client)) {
           HStack(spacing: 8) {

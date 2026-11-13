@@ -61,6 +61,11 @@ func handle(method: String, params: JSON, connection: Connection) throws -> Any 
     let app = try requestedApp(string(params, "app"))
     return try requestAddition(app, client: session.lock.withLock { session.clientName } ?? commandLineClient)
 
+  // Asked by the command before it opens ssh to another Mac.
+  case "require_computer":
+    try requireAllowedComputer(string(params, "computer"), client: session.lock.withLock { session.clientName } ?? commandLineClient)
+    return ["allowed": true] as JSON
+
   case "list_apps":
     // With app: that one app, running or only installed, without starting it.
     if let query = params["app"] as? String {

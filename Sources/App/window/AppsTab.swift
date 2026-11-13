@@ -40,6 +40,16 @@ struct AppsTab: View {
     } else {
       appList
     }
+    if !model.computers.isEmpty {
+      ListSection(heading: ControlTexts.computersHeading, note: ControlTexts.computersNote) {
+        ForEach(Array(model.computers.enumerated()), id: \.element) { index, name in
+          if index > 0 { RowDivider() }
+          ControlRow(icon: .symbol("desktopcomputer"), title: name, detail: ControlTexts.computerDetail) {
+            Button(ControlTexts.remove) { model.removeComputer(name) }.buttonStyle(ChoiceStyle(kind: .plain, compact: true))
+          }
+        }
+      }
+    }
     if let problem = model.problem {
       Text(problem).font(.system(size: 12)).foregroundStyle(Palette.coral)
     }
