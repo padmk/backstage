@@ -277,19 +277,36 @@ func writeDecisionLog(client: String?, bundleId: String, decision: String) {
   let entry: JSON = [
     "time": ISO8601DateFormatter().string(from: Date()), "client": client ?? NSNull(), "app": bundleId, "decision": decision,
   ]
-  guard var data = try? JSONSerialization.data(withJSONObject: entry), data.count < maxDecisionRecordBytes else { return }
-  data.append(0x0a)
+  let data: Data
+  do {
+    data = try JSONSerialization.data(withJSONObject: entry) + [0x0a]
+  } catch {
+    appLog.error("An activity record could not be encoded: \(error.localizedDescription, privacy: .public)")
+    return
+  }
+  guard data.count <= maxDecisionRecordBytes else {
+    appLog.error("An activity record of \(data.count) bytes is longer than a record may be, so it was not written.")
+    return
+  }
   let path = Configuration.directories.decisionLogPath
   decisionLogLock.lock()
   defer { decisionLogLock.unlock() }
   if !FileManager.default.fileExists(atPath: path) {
     FileManager.default.createFile(atPath: path, contents: nil, attributes: [.posixPermissions: 0o600])
   }
-  guard let handle = FileHandle(forWritingAtPath: path) else { return }
+  guard let handle = FileHandle(forWritingAtPath: path) else {
+    appLog.error("The activity log could not be opened for writing.")
+    return
+  }
+  // Writes are not buffered, so a failed close loses nothing the write did not already report.
   defer { try? handle.close() }
-  let size = (try? handle.seekToEnd()) ?? 0
-  try? handle.write(contentsOf: data)
-  if size > decisionLogLimit { trimDecisionLog(at: path) }
+  do {
+    let size = try handle.seekToEnd()
+    try handle.write(contentsOf: data)
+    if size > decisionLogLimit { trimDecisionLog(at: path) }
+  } catch {
+    appLog.error("An activity record could not be written: \(error.localizedDescription, privacy: .public)")
+  }
 }
 
 // MARK: Session state

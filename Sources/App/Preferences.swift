@@ -17,6 +17,7 @@ enum Preferences {
   // Read on every use, so an edit to the file applies to the next request as the switches in the window do.
   private static func read() -> JSON {
     guard let data = FileManager.default.contents(atPath: path),
+      // Unreadable settings are the defaults, as on a first start; the next change writes them anew.
       let settings = try? JSONSerialization.jsonObject(with: data) as? JSON else { return [:] }
     return settings
   }
@@ -27,8 +28,13 @@ enum Preferences {
     lock.withLock {
       var settings = read()
       settings[key] = value
-      guard let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) else { return }
-      try? writePrivateFile(data, to: path)
+      do {
+        let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
+        try writePrivateFile(data, to: path)
+      } catch {
+        // The window reads the settings again, so the switch shows the value that stayed.
+        appLog.error("The setting \(key, privacy: .public) could not be saved: \(String(describing: error), privacy: .public)")
+      }
     }
   }
 
