@@ -101,4 +101,26 @@ private let awkward = "quote \" apostrophe ' newline \n backslash \\ dash -- dol
       (error as? HelperError)?.code == "outcome_unknown"
     }
   }
+
+  // A process the child started with its output elsewhere would go on working after the reply and the app's lock;
+  // it is stopped before runProcess returns, and the result is not taken as the child's whole effect.
+  @Test func aProcessTheChildLeftRunningIsStoppedBeforeTheReply() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) } // A leftover temporary folder only takes space.
+    let late = folder.appendingPathComponent("late").path
+    #expect {
+      try runProcess("/bin/sh", ["-c", "(sleep 2; touch '\(late)') >/dev/null 2>&1 &"], target: "sh", timeout: 10)
+    } throws: { error in
+      (error as? HelperError)?.code == "outcome_unknown"
+    }
+    Thread.sleep(forTimeInterval: 2.5)
+    #expect(!FileManager.default.fileExists(atPath: late))
+  }
+
+  @Test func aChildThatLeavesNothingBehindKeepsItsResult() throws {
+    let finished = try runProcess("/bin/sh", ["-c", "echo done; exit 3"], target: "sh", timeout: 10)
+    #expect(finished.status == 3)
+    #expect(finished.output == "done\n")
+  }
 }

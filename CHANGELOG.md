@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- A script or shortcut that finishes while a process it started in its process group still runs no longer frees the app while that process goes on working: what is left of the group is stopped before the call returns (SIGTERM, then SIGKILL after 1 s), and the call answers `outcome_unknown`, since the process may have done part of its work. Before, such a call could answer success while the process changed things after the reply.
+
 ## 0.3.0
 
 - The check of the Apple, Services and Share menus refuses an element whose place it cannot prove: one whose way up breaks off at an element without a parent, runs past 256 levels or reaches a menu bar the app does not list, and a menu item its menu bar does not list. Before, such an item passed as if it were in a context menu. Return or space is refused while an open menu's selection nests deeper than the check reads.

@@ -85,6 +85,7 @@ private func reportingChange<Value>(_ child: ChildRun, target: String, details g
     case .timedOut: throw HelperError(code: "timeout", message: "\(target) did not answer within \(Int(child.timeout)) seconds.")
     case .interrupted: throw HelperError(code: "interrupted", message: "The request was cancelled while \(target) was working, so it was stopped.")
     case .outputHeldOpen: throw outputHeldOpen(target)
+    case .leftRunning: throw leftRunning(target)
     case .outOfTime: throw outOfTime(target)
     case .unstoppable: throw unstoppable(target, pid: child.pid)
     case .exited:
@@ -106,9 +107,10 @@ private func reportingChange<Value>(_ child: ChildRun, target: String, details g
 // How a child of the helper ended, with what it wrote.
 struct ChildRun {
   // outputHeldOpen: it exited, but a process it started kept its output open, so what it wrote is not known.
+  // leftRunning: it exited, but a process it started in its group still ran and was stopped, maybe mid-work.
   // outOfTime: it was stopped at the request's deadline, before its own limit.
-  // unstoppable: it was to be stopped, but it still ran after the last signal.
-  enum End { case exited, timedOut, interrupted, outputHeldOpen, outOfTime, unstoppable }
+  // unstoppable: it or a process it started was to be stopped, but still ran after the last signal.
+  enum End { case exited, timedOut, interrupted, outputHeldOpen, leftRunning, outOfTime, unstoppable }
   let end: End
   let status: Int32
   let output: String
@@ -124,6 +126,7 @@ func runProcess(_ path: String, _ arguments: [String], input: Data? = nil, targe
   case .timedOut: throw HelperError(code: "timeout", message: "\(target) did not answer within \(Int(timeout)) seconds.")
   case .interrupted: throw HelperError(code: "interrupted", message: "The request was cancelled while \(target) was working, so it was stopped.")
   case .outputHeldOpen: throw outputHeldOpen(target)
+  case .leftRunning: throw leftRunning(target)
   case .outOfTime: throw outOfTime(target)
   case .unstoppable: throw unstoppable(target, pid: child.pid)
   case .exited: return (child.status, child.output, child.errors)
@@ -135,8 +138,8 @@ private let terminateGraceSeconds = 1.0
 private let killGraceSeconds = 2.0
 
 // Throws only when the child did not start; once it has, how it ended comes back with what it wrote so far. A child
-// that overruns or is cancelled is stopped before this returns, so it never outlives the request and the app's lock
-// that it ran under: see `stopChild`.
+// that overruns or is cancelled is stopped before this returns, and so is what it started in its process group when
+// it ends, so neither outlives the request and the app's lock that it ran under: see `stopChild` and `endGroup`.
 func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target: String, timeout: TimeInterval) throws -> ChildRun {
   let output = Pipe()
   let errors = Pipe()
@@ -151,6 +154,8 @@ func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target:
   let limit = min(timeout, timeLeft ?? timeout)
   let pid = try spawnInOwnGroup(path, arguments, input: inputPipe, output: output, errors: errors, target: target)
   watchExit(of: pid, watch)
+  // The watcher reaps the child only after this; until then its pid, and the group's id, name no other process.
+  defer { watch.allowReap() }
   // A cancelled request ends its child, so a long script or shortcut does not hold the connection.
   let stopWatching = connection?.onCancel { watch.noteCancel() }
   defer { stopWatching?() }
@@ -169,27 +174,28 @@ func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target:
   // Read while it runs, because a large result would fill the pipe and stall the child.
   let outputReader = PipeReader(output.fileHandleForReading)
   let errorReader = PipeReader(errors.fileHandleForReading)
-  var end = ChildRun.End.exited
-  switch watch.wait(until: .now() + limit) {
-  case .exited:
-    break
-  case .cancelled:
-    // Only a child the cancel actually stopped counts as interrupted; one that finished first keeps its result.
-    if !stopChild(pid, watch: watch) {
-      end = .unstoppable
-    } else if watch.diedOfSignal {
-      end = .interrupted
-    }
-  case .timedOut:
-    // Cut short by the request's deadline rather than its own limit, the child may have done part of its work.
-    end = stopChild(pid, watch: watch) ? (limit < timeout ? .outOfTime : .timedOut) : .unstoppable
+  let event = watch.wait(until: .now() + limit)
+  let childGone = event == .exited || stopChild(pid, watch: watch)
+  // What the child started in its group would otherwise go on working after the reply.
+  let group = childGone ? endGroup(pid) : .unstoppable
+  watch.allowReap()
+  let status = childGone ? watch.status(by: .now() + killGraceSeconds) : nil
+  var end: ChildRun.End
+  switch (event, group) {
+  case (_, .unstoppable): end = .unstoppable
+  // Cut short by the request's deadline rather than its own limit, the child may have done part of its work.
+  case (.timedOut, _): end = limit < timeout ? .outOfTime : .timedOut
+  // Only a child the cancel actually stopped counts as interrupted; one that finished first keeps its result.
+  case (.cancelled, _) where status.map(diedOfSignal) == true: end = .interrupted
+  case (_, .stopped): end = .leftRunning
+  case (_, .empty): end = .exited
   }
   // A process the child started can keep the output open after the child ends; what was read is then incomplete.
   let outputDeadline = DispatchTime.now() + 2
   let out = outputReader.data(by: outputDeadline)
   let err = errorReader.data(by: outputDeadline)
   if end == .exited, out == nil || err == nil { end = .outputHeldOpen }
-  return ChildRun(end: end, status: watch.exitStatus ?? -1,
+  return ChildRun(end: end, status: status.map(exitCode) ?? -1,
                   output: out.map { String(decoding: $0, as: UTF8.self) } ?? "", errors: err.map { String(decoding: $0, as: UTF8.self) } ?? "",
                   timeout: timeout, pid: pid)
 }
@@ -235,34 +241,64 @@ private func spawnInOwnGroup(_ path: String, _ arguments: [String], input: Pipe?
   return pid
 }
 
-// Reaps the child on a thread of its own and reports how it ended.
+// Waits for the child on a thread of its own: reports its exit as soon as it is seen, and reaps it, which frees its
+// pid, only once `runChild` allows it, after it has ended the child's group.
 private func watchExit(of pid: pid_t, _ watch: ChildWatch) {
   Thread.detachNewThread {
+    var info = siginfo_t()
+    // WNOWAIT leaves the child a zombie, which keeps its pid and the group's id from naming another process.
+    while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) == -1, errno == EINTR {}
+    watch.noteExit()
+    watch.waitUntilReapAllowed()
     var status: Int32 = 0
     while waitpid(pid, &status, 0) == -1, errno == EINTR {}
-    watch.noteExit(status: status)
+    watch.noteStatus(status)
   }
 }
 
+// The exit code of a child that exited, or the wait status's own encoding of the signal that ended it.
+private func exitCode(_ status: Int32) -> Int32 { status & 0x7f == 0 ? (status >> 8) & 0xff : status & 0x7f }
+
+private func diedOfSignal(_ status: Int32) -> Bool { status & 0x7f != 0 && status & 0x7f != 0x7f }
+
 // Stops a child and what it started: SIGTERM to its process group, then SIGKILL to the group once the grace period
-// passes, and SIGKILL to the group again after the child is gone, for processes it started that ignored SIGTERM.
-// `spawnInOwnGroup` makes the child the leader of a process group of its own, so the group holds the child and every
-// process it started that did not leave it. A process that
-// left the group (setsid, a daemon) or one launchd starts for it (open, an app) is out of reach and is not
-// stopped. Returns whether the child itself is confirmed gone.
+// passes. `spawnInOwnGroup` makes the child the leader of a process group of its own, so the group holds the child and
+// every process it started that did not leave it. A process that left the group (setsid, a daemon) or one launchd
+// starts for it (open, an app) is out of reach and is not stopped. The child is not reaped before `runChild` allows
+// it, so its pid and the group's id name no other process meanwhile. Returns whether the child itself is seen to exit;
+// what is left of its group is `endGroup`'s.
 private func stopChild(_ pid: pid_t, watch: ChildWatch) -> Bool {
-  // The group is signalled only while the child has not been seen to exit: until then its pid, and with it the
-  // group's id, cannot belong to another process. After the exit the id stays the group's while members remain.
-  if !watch.hasExited { kill(-pid, SIGTERM) }
-  if !watch.waitForExit(until: .now() + terminateGraceSeconds) {
-    kill(-pid, SIGKILL)
-    guard watch.waitForExit(until: .now() + killGraceSeconds) else {
-      appLog.error("A child of the helper (pid \(pid, privacy: .public)) still ran after SIGKILL.")
-      return false
-    }
-  }
-  // ESRCH when nothing of the group is left, which is the usual case.
+  kill(-pid, SIGTERM)
+  if watch.waitForExit(until: .now() + terminateGraceSeconds) { return true }
   kill(-pid, SIGKILL)
+  if watch.waitForExit(until: .now() + killGraceSeconds) { return true }
+  appLog.error("A child of the helper (pid \(pid, privacy: .public)) still ran after SIGKILL.")
+  return false
+}
+
+private enum GroupEnd { case empty, stopped, unstoppable }
+
+// Ends what is left of an exited child's process group: SIGTERM, then SIGKILL once the grace period passes, waiting
+// each time for the group to be empty. Call only while the child is an unreaped zombie, which keeps the group's id.
+// Observed on macOS 27: kill(-group, 0) succeeds while a live member remains and fails with EPERM when only the zombie
+// leader is left (ESRCH once it is reaped), so only success counts as a member.
+private func endGroup(_ pid: pid_t) -> GroupEnd {
+  let hasMembers = { kill(-pid, 0) == 0 }
+  guard hasMembers() else { return .empty }
+  kill(-pid, SIGTERM)
+  if waitFor(not: hasMembers, until: .now() + terminateGraceSeconds) { return .stopped }
+  kill(-pid, SIGKILL)
+  if waitFor(not: hasMembers, until: .now() + killGraceSeconds) { return .stopped }
+  appLog.error("A process a child of the helper started (group \(pid, privacy: .public)) still ran after SIGKILL.")
+  return .unstoppable
+}
+
+// Polls, since nothing reports when processes that are not the helper's children end.
+private func waitFor(not condition: () -> Bool, until deadline: DispatchTime) -> Bool {
+  while condition() {
+    if DispatchTime.now() >= deadline { return !condition() }
+    usleep(10_000)
+  }
   return true
 }
 
@@ -270,28 +306,35 @@ private func outOfTime(_ target: String) -> HelperError {
   HelperError(code: "outcome_unknown", message: "\(target) was still working when the request's time ran out, so it was stopped; it may have done part of its work. Read the state before trying again.")
 }
 
+private func leftRunning(_ target: String) -> HelperError {
+  HelperError(code: "outcome_unknown", message: "\(target) finished, but a process it started was still running, so it was stopped; it may have done part of its work. Read the state before trying again.")
+}
+
 private func outputHeldOpen(_ target: String) -> HelperError {
   HelperError(code: "outcome_unknown", message: "\(target) finished, but a process it started kept its output open, so its result could not be read. Read the state before trying again.")
 }
 
 private func unstoppable(_ target: String, pid: pid_t) -> HelperError {
-  HelperError(code: "outcome_unknown", message: "\(target) had to be stopped but still runs (process \(pid)) after it was killed, so it may go on working. Tell the user; read the state before trying again.")
+  HelperError(code: "outcome_unknown", message: "\(target) or a process it started had to be stopped but still runs (process group \(pid)) after it was killed, so it may go on working. Tell the user; read the state before trying again.")
 }
 
-// What a running child's waiter hears of: the child's exit, and a cancel of the request it runs for.
+// What a running child's waiter hears of: the child's exit, a cancel of the request it runs for, and, once the
+// watcher has reaped the child, its wait status.
 private final class ChildWatch: Sendable {
   enum Event { case exited, cancelled, timedOut }
   private struct State {
+    var exited = false
+    var cancelled = false
+    var reapAllowed = false
     // The wait status, once the child is reaped.
     var status: Int32?
-    var cancelled = false
-    var exited: Bool { status != nil }
   }
   private let state = Mutex(State())
   private let changed = DispatchSemaphore(value: 0)
+  private let reap = DispatchSemaphore(value: 0)
 
-  func noteExit(status: Int32) {
-    state.withLock { $0.status = status }
+  func noteExit() {
+    state.withLock { $0.exited = true }
     changed.signal()
   }
 
@@ -300,14 +343,23 @@ private final class ChildWatch: Sendable {
     changed.signal()
   }
 
-  var hasExited: Bool { state.withLock { $0.exited } }
-
-  // The exit code of a child that exited, or the wait status's own encoding of the signal that ended it.
-  var exitStatus: Int32? {
-    state.withLock { state in state.status.map { $0 & 0x7f == 0 ? ($0 >> 8) & 0xff : $0 & 0x7f } }
+  func noteStatus(_ status: Int32) {
+    state.withLock { $0.status = status }
+    changed.signal()
   }
 
-  var diedOfSignal: Bool { state.withLock { $0.status.map { $0 & 0x7f != 0 && $0 & 0x7f != 0x7f } ?? false } }
+  // Lets the watcher reap the child; only the first call counts.
+  func allowReap() {
+    let first = state.withLock { state in
+      defer { state.reapAllowed = true }
+      return !state.reapAllowed
+    }
+    if first { reap.signal() }
+  }
+
+  func waitUntilReapAllowed() { reap.wait() }
+
+  var hasExited: Bool { state.withLock { $0.exited } }
 
   // The first of an exit, a cancel and the deadline; an exit wins over a cancel that came with it.
   func wait(until deadline: DispatchTime) -> Event {
@@ -324,6 +376,14 @@ private final class ChildWatch: Sendable {
       if changed.wait(timeout: deadline) == .timedOut { return hasExited }
     }
     return true
+  }
+
+  // The wait status once the child is reaped, or nil if that has not happened by the deadline.
+  func status(by deadline: DispatchTime) -> Int32? {
+    while true {
+      if let status = state.withLock({ $0.status }) { return status }
+      if changed.wait(timeout: deadline) == .timedOut { return state.withLock { $0.status } }
+    }
   }
 }
 
