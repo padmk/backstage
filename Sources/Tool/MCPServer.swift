@@ -53,11 +53,12 @@ final class MCPServer: @unchecked Sendable {
     self.directories = directories
     handoff = resumed ?? HandoffState(clientName: nil, toolsDigest: toolsDigest(), generation: 0, computers: [])
     clientName = resumed?.clientName
-    remote = RemoteComputers(reached: resumed?.computers ?? [])
+    remote = RemoteComputers(reached: resumed?.computers ?? [], generation: handoff.generation)
     helper = HelperClient(directories: directories, managesHelper: managesHelper, expectedBuild: expectedBuild,
                           clientName: { server?.currentClientName })
     server = self
     helper.handoffGeneration = handoff.generation
+    helper.elementNumberBase = handoff.elementNumberBase
     if managesHelper { helper.onOutdated = { server?.handOff() } }
   }
 
@@ -101,8 +102,8 @@ final class MCPServer: @unchecked Sendable {
     let deadline = Date().addingTimeInterval(handoffDrainSeconds)
     var unsent: [(ticket: Ticket, line: String, order: Int)] = []
     while true {
-      // A call on another Mac cannot cross over, since it may have run there.
-      let (calls, remoteRunning) = lock.withLock { (Array(callsInProgress.values), !remoteCalls.isEmpty) }
+      // A call on another Mac cannot cross over, since it may have run there; one still waiting for this Mac's list can.
+      let (calls, remoteRunning) = lock.withLock { (Array(callsInProgress.values), remoteCalls.keys.contains { callsInProgress[$0] == nil }) }
       if !remoteRunning, calls.allSatisfy({ helper.isAwaitingConnection($0.ticket) }) {
         unsent = calls
         break
@@ -124,7 +125,7 @@ final class MCPServer: @unchecked Sendable {
     remote.closeAll()
     // The tools this process served are what the client knows now.
     let state = HandoffState(clientName: currentClientName, toolsDigest: toolsDigest(), generation: handoff.generation + 1,
-                             computers: remote.reachedComputers)
+                             computers: remote.reachedComputers, elementNumberBase: helper.elementNumberBase)
     _ = execInstalledCommand(state: state, input: input, directories: directories)
     inputLock.withLock { handingOff = false }
   }
@@ -222,6 +223,10 @@ final class MCPServer: @unchecked Sendable {
     case "initialize":
       let name = (params?["clientInfo"] as? JSON)?["name"] as? String
       lock.withLock { clientName = name }
+      // From a command on another Mac that reached this one again: numbers of its own, apart from the last session's.
+      if let base = ((params?["_meta"] as? JSON)?[Product.elementNumberBaseKey] as? NSNumber)?.intValue, base > 0, base < Int.max / 2 {
+        helper.elementNumberBase = base
+      }
       // Unknown or stateless revisions get the newest one that opens with initialize.
       let requested = params?["protocolVersion"] as? String
       let version = requested.flatMap { handshakeProtocols.contains($0) ? $0 : nil } ?? handshakeProtocols[0]
@@ -268,7 +273,7 @@ final class MCPServer: @unchecked Sendable {
     let key = idKey(id)
     var fields = arguments as! JSON
     if let computer = fields.removeValue(forKey: computerArgument) as? String {
-      callRemote(computer, name, fields, key: key, reply: reply)
+      callRemote(computer, name, fields, key: key, line: line, reply: reply)
       return
     }
     let ticket = Ticket()
@@ -288,14 +293,27 @@ final class MCPServer: @unchecked Sendable {
     }
   }
 
-  private func callRemote(_ computer: String, _ name: String, _ arguments: JSON, key: String, reply: @escaping (JSON) -> Void) {
+  // Until this Mac's helper has said the Mac is on the list, the call is one in progress here, which a handoff may send
+  // again to the next command; from then on it is a call on that Mac, which a handoff waits for.
+  private func callRemote(_ computer: String, _ name: String, _ arguments: JSON, key: String, line: String, reply: @escaping (JSON) -> Void) {
     let cancellation = RemoteCancellation()
-    lock.withLock { remoteCalls[key] = cancellation }
+    let ticket = Ticket()
+    lock.withLock {
+      callsReceived += 1
+      callsInProgress[key] = (ticket, line, callsReceived)
+      remoteCalls[key] = cancellation
+    }
     calls.async {
-      defer { self.lock.withLock { _ = self.remoteCalls.removeValue(forKey: key) } }
+      defer {
+        self.lock.withLock {
+          _ = self.callsInProgress.removeValue(forKey: key)
+          _ = self.remoteCalls.removeValue(forKey: key)
+        }
+      }
       do {
         // This Mac's helper keeps the list of Macs agents may reach; that Mac's own list then decides the call.
-        _ = try self.helper.request("require_computer", ["computer": computer])
+        _ = try self.helper.request("require_computer", ["computer": computer], ticket: ticket)
+        self.lock.withLock { _ = self.callsInProgress.removeValue(forKey: key) }
         reply(try self.remote.call(computer, name, arguments, clientName: self.currentClientName, cancellation: cancellation))
       } catch let failure as HelperFailure {
         reply(self.errorResult(failure.code.map { "\($0): \(failure.message)" } ?? failure.message))

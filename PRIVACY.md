@@ -1,6 +1,6 @@
 # Privacy
 
-Backstage sends nothing over the network itself. It has no telemetry. macOS may: Photos' `export` asks PhotoKit for an item that is only in iCloud and lets it download the item (the reply says `downloaded`), and the apps an agent operates use the network as they would for you, as when Messages sends a message.
+Backstage sends nothing over the network itself, apart from calls an agent makes with `computer`: those go over SSH, with their arguments (such as a message's text, a search or a path), to another of your Macs that you added to the list of other Macs, and its reply comes back the same way; that Mac handles them as described here. It has no telemetry. macOS may: Photos' `export` asks PhotoKit for an item that is only in iCloud and lets it download the item (the reply says `downloaded`), and the apps an agent operates use the network as they would for you, as when Messages sends a message.
 
 ## What leaves the Mac
 

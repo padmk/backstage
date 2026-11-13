@@ -23,6 +23,10 @@ private let connectSeconds: TimeInterval = 30
 // That Mac's server keeps its own deadlines; this only ends a wait on a connection that stopped answering.
 private let callSeconds: TimeInterval = requestTimeout + 30
 private let keptErrorBytes = 2000
+// The ranges a Mac reached again numbers its elements from: above what one session there numbers through its own
+// handoffs and reconnections, and apart for each reopening in each handoff here.
+private let remoteElementNumbersPerReopen = 10_000_000_000
+private let remoteReopensPerGeneration = 1000
 // A write that ssh does not take in this time, as when that Mac's server stopped reading, ends the connection.
 private let writeSeconds: TimeInterval = 10
 // Run through sh, whose quoting Fish, zsh and Bash pass on alike, whatever the login shell there is.
@@ -71,7 +75,14 @@ final class RemoteComputers: @unchecked Sendable {
   // which numbers its elements anew.
   private var reached: Set<String>
 
-  init(reached: [String]) { self.reached = Set(reached) }
+  // Connections opened again in this process, for their element number ranges.
+  private var reopened = 0
+  private let generation: Int
+
+  init(reached: [String], generation: Int) {
+    self.reached = Set(reached)
+    self.generation = generation
+  }
 
   var reachedComputers: [String] { lock.withLock { reached.sorted() } }
 
@@ -112,7 +123,14 @@ final class RemoteComputers: @unchecked Sendable {
     opening.lock()
     defer { opening.unlock() }
     if let link = lock.withLock({ links[computer] }), link.isOpen { return link }
-    let link = try RemoteLink(computer: computer, clientName: clientName)
+    // A Mac this session reached before numbers elements from a range no earlier connection there used, so a number
+    // read before does not name another element; a Backstage there too old for this numbers anew, as the note says.
+    let base = lock.withLock { () -> Int in
+      guard reached.contains(computer) else { return 0 }
+      reopened += 1
+      return (generation * remoteReopensPerGeneration + reopened) * remoteElementNumbersPerReopen
+    }
+    let link = try RemoteLink(computer: computer, clientName: clientName, elementNumberBase: base)
     lock.withLock {
       links[computer] = link
       if !reached.insert(computer).inserted { link.owesReopenNote() }
@@ -136,7 +154,7 @@ final class RemoteLink: @unchecked Sendable {
   // Set on a connection to a Mac this session reached before, until a reply to the client carries the note.
   private var reopenNoteDue = false
 
-  init(computer: String, clientName: String?) throws {
+  init(computer: String, clientName: String?, elementNumberBase: Int) throws {
     self.computer = computer
     let toServer = Pipe()
     let fromServer = Pipe()
@@ -181,10 +199,17 @@ final class RemoteLink: @unchecked Sendable {
         }
       }
     }.start()
-    let opened = try request("initialize", [
-      "protocolVersion": "2025-06-18", "capabilities": [:] as JSON,
-      "clientInfo": ["name": clientName ?? Product.commandName, "version": Product.version],
-    ], seconds: connectSeconds, lostMessage: nil)
+    // A connection that never opens leaves no ssh behind.
+    let opened: JSON
+    do {
+      var params: JSON = ["protocolVersion": "2025-06-18", "capabilities": [:] as JSON,
+        "clientInfo": ["name": clientName ?? Product.commandName, "version": Product.version]]
+      if elementNumberBase > 0 { params["_meta"] = [Product.elementNumberBaseKey: elementNumberBase] }
+      opened = try request("initialize", params, seconds: connectSeconds, lostMessage: nil)
+    } catch {
+      close()
+      throw error
+    }
     guard opened["result"] is JSON else {
       close()
       throw unreachable(computer, (opened["error"] as? JSON)?["message"] as? String ?? "its server did not start")

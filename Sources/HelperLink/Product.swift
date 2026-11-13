@@ -28,6 +28,9 @@ public enum Product {
   // An Info.plist key saying which way of taking over a running MCP session the bundle's command speaks
   // (`make app` writes both); a command hands its session only to a bundle with its own revision.
   public static let sessionHandoffKey = "SessionHandoffRevision"
+  // Wire format: the key in an MCP initialize request's _meta by which one command, reaching another Mac's command
+  // again, asks it to number elements from a range of their own.
+  public static let elementNumberBaseKey = "\(bundleIdentifier)/elementNumberBase"
   public static let sessionHandoffRevision = 1
 
   // The pane of Privacy & Security in System Settings for one permission, such as Privacy_Accessibility.

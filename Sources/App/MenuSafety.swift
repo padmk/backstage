@@ -118,12 +118,13 @@ func requireAllowedPoint(_ point: CGPoint, app: AppIdentity) throws {
     }
     element = parent
   }
+  // No menu item, button or window within reach above the hit: what it belongs to is unknown.
+  try requireNoMenuUnder(point, app: app, application: application)
 }
 
 // When Accessibility cannot tell what is under a point, as in many custom views and web content, or gives only the
-// window, the click goes on
-// unless one of the app's menus is open or one of its windows at menu level covers the point: the item there cannot
-// be checked then.
+// window, the click goes on unless one of the app's menus is open or one of its windows at menu level covers the
+// point: the item there cannot be checked then.
 private func requireNoMenuUnder(_ point: CGPoint, app: AppIdentity, application: AXUIElement) throws {
   let menuLevel = Int(CGWindowLevelForKey(.popUpMenuWindow))
   let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]) ?? []

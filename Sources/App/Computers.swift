@@ -17,18 +17,17 @@ enum ComputerList {
   // A client asking again and again must not grow the list or keep bringing the window forward.
   private static let maxWaiting = 20
 
-  // Names are compared without regard to case, as ssh_config and DNS do.
-  private static func key(_ name: String) -> String { name.lowercased() }
-
   static var allowed: [String] { Preferences.allowedComputers }
   static var requests: [ComputerRequest] { lock.withLock { waiting } }
 
-  static func isAllowed(_ name: String) -> Bool { allowed.contains { key($0) == key(name) } }
+  // Names are compared exactly: ssh matches Host patterns in ~/.ssh/config with case, so two spellings of one name
+  // can lead to two Macs.
+  static func isAllowed(_ name: String) -> Bool { allowed.contains(name) }
 
   static func add(_ name: String, by client: String) {
     lock.withLock {
-      waiting.removeAll { key($0.name) == key(name) }
-      if !allowed.contains(where: { key($0) == key(name) }) {
+      waiting.removeAll { $0.name == name }
+      if !allowed.contains(name) {
         Preferences.allowedComputers = (allowed + [name]).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
       }
     }
@@ -38,7 +37,7 @@ enum ComputerList {
   static func remove(_ name: String, by client: String) {
     let removed = lock.withLock { () -> Bool in
       let before = allowed
-      Preferences.allowedComputers = before.filter { key($0) != key(name) }
+      Preferences.allowedComputers = before.filter { $0 != name }
       return before.count != Preferences.allowedComputers.count
     }
     if removed { writeDecisionLog(client: client, bundleId: name, decision: "computer_removed") }
@@ -49,7 +48,7 @@ enum ComputerList {
   static func decline(_ name: String, by client: String) -> Bool {
     let was = lock.withLock { () -> Bool in
       let before = waiting.count
-      waiting.removeAll { key($0.name) == key(name) }
+      waiting.removeAll { $0.name == name }
       return waiting.count != before
     }
     if was { writeDecisionLog(client: client, bundleId: name, decision: "computer_declined") }
@@ -59,7 +58,7 @@ enum ComputerList {
   // Returns whether the request is new, so the window comes forward only once for it.
   fileprivate static func ask(_ name: String, client: String?) throws -> Bool {
     try lock.withLock {
-      if waiting.contains(where: { key($0.name) == key(name) }) { return false }
+      if waiting.contains(where: { $0.name == name }) { return false }
       guard waiting.count < maxWaiting else {
         throw HelperError(code: "busy", message: "Too many requests are waiting for the user's answer in the Backstage window.")
       }

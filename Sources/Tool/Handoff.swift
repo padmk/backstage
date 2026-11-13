@@ -14,6 +14,8 @@ struct HandoffState {
   var generation: Int
   // The other Macs the session reached; their connections close in a handoff, so the next call there says so.
   var computers: [String]
+  // Added to every element number, for a session another Mac's command opened again (see RemoteComputers).
+  var elementNumberBase = 0
 }
 
 let resumeArgument = "--resume-fd"
@@ -45,6 +47,7 @@ func execInstalledCommand(state: HandoffState, input: Data, directories: Directo
   var header: JSON = ["tools_digest": state.toolsDigest, "generation": state.generation]
   if let name = state.clientName { header["client_name"] = name }
   if !state.computers.isEmpty { header["computers"] = state.computers }
+  if state.elementNumberBase > 0 { header["element_number_base"] = state.elementNumberBase }
   var contents = jsonLine(header)
   contents.append(input)
   // The new command reads at most this much, so more would lose input; the session stays here instead.
@@ -96,6 +99,7 @@ func readResume(arguments: [String]) -> (HandoffState, Data)? {
   guard let end = contents.firstIndex(of: 0x0A),
     let header = try? JSONSerialization.jsonObject(with: contents[contents.startIndex..<end]) as? JSON else { return nil }
   let state = HandoffState(clientName: header["client_name"] as? String, toolsDigest: header["tools_digest"] as? String ?? "",
-                           generation: header["generation"] as? Int ?? 1, computers: header["computers"] as? [String] ?? [])
+                           generation: header["generation"] as? Int ?? 1, computers: header["computers"] as? [String] ?? [],
+                           elementNumberBase: max(0, header["element_number_base"] as? Int ?? 0))
   return (state, Data(contents[contents.index(after: end)...]))
 }
