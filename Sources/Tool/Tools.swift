@@ -28,13 +28,16 @@ struct ToolDefinition {
   let required: [String]
   let annotations: JSON
 
+  // Every tool also runs on another of the user's Macs.
+  private var allProperties: [(String, JSON)] { properties + [(computerArgument, computerRule)] }
+
   var inputSchema: JSON {
-    ["type": "object", "properties": Dictionary(uniqueKeysWithValues: properties), "required": required, "additionalProperties": false]
+    ["type": "object", "properties": Dictionary(uniqueKeysWithValues: allProperties), "required": required, "additionalProperties": false]
   }
 
   var listed: JSON { ["name": name, "description": description, "inputSchema": inputSchema, "annotations": annotations] }
 
-  func rule(for key: String) -> JSON? { properties.first { $0.0 == key }?.1 }
+  func rule(for key: String) -> JSON? { allProperties.first { $0.0 == key }?.1 }
 }
 
 // The apps with ready operations, kept in step with the app's catalog (Sources/App/apps/Catalog.swift; a helper test
@@ -319,6 +322,7 @@ func validateArguments(_ name: String, _ arguments: Any, keys: [String]? = nil) 
     guard let value = arguments[key] else { continue }
     guard let rule = tool.rule(for: key) else { return "unknown argument \(key)" }
     if let found = problem(key, value, rule) { return found }
+    if key == computerArgument, let found = problemWithComputer(value as! String) { return found }
   }
   if name == "run_actions", let steps = arguments["steps"] as? [Any] { return problemWithSteps(steps) }
   return nil
@@ -341,6 +345,7 @@ private func problemWithSteps(_ steps: [Any]) -> String? {
     let stepTool = rest.removeValue(forKey: "tool")
     guard let name = stepTool as? String, stepTools.contains(name) else { return "step \(index + 1): tool must be one of \(stepTools.joined(separator: ", "))" }
     if rest["app"] != nil { return "step \(index + 1): app is given once, outside the steps" }
+    if rest[computerArgument] != nil { return "step \(index + 1): computer is given once, outside the steps" }
     var withApp = rest
     withApp["app"] = "-"
     if let found = validateArguments(name, withApp) ?? missingPlace(name, rest) { return "step \(index + 1) (\(name)): \(found)" }
