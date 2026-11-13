@@ -146,10 +146,11 @@ final class HelperClient: @unchecked Sendable {
   func isCancelled(_ ticket: Ticket) -> Bool { queue.sync { ticket.cancelled } }
 
   // Ends the request the ticket names, running or queued, leaving the others alone.
-  // Runs off the caller's thread, so a request stuck in its write never holds up the reader of the client's input.
+  // Runs off the caller's thread, so a request stuck in its write never holds up the reader of the client's input, and
+  // on a thread of its own, since work on a busy Dispatch queue can start seconds late.
   func cancel(_ ticket: Ticket?) {
     guard let ticket else { return }
-    DispatchQueue.global().async { self.sendCancel(ticket) }
+    Thread.detachNewThread { self.sendCancel(ticket) }
   }
 
   private func sendCancel(_ ticket: Ticket) {

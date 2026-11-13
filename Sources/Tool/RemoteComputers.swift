@@ -55,8 +55,9 @@ final class RemoteCancellation: Sendable {
       state.cancelled = true
       return state.sent
     }) else { return }
-    // The reader of the client's input calls this, and must never wait on ssh.
-    DispatchQueue.global().async { sent.link.notify("notifications/cancelled", ["requestId": sent.id]) }
+    // The reader of the client's input calls this, and must never wait on ssh; a thread of its own, since work on a
+    // busy Dispatch queue can start seconds late.
+    Thread.detachNewThread { sent.link.notify("notifications/cancelled", ["requestId": sent.id]) }
   }
 
   // After the request was written, so the cancellation can never reach that Mac before it.
