@@ -61,11 +61,11 @@ private let neverAvailable = [
     try withTemporaryHome {
       Preferences.allowsEveryApp = true
       for bundleId in neverAvailable {
-        let app = AppIdentity(pid: 0, bundleId: bundleId, name: bundleId, launchDate: nil, path: nil)
+        let app = AppIdentity(pid: 0, bundleId: bundleId, name: bundleId, processStart: nil, path: nil)
         #expect(ApprovalGate.access(app) == .neverAvailable, "\(bundleId)")
         #expect(throws: HelperError.self) { try addToList(app, by: settingsClient) }
       }
-      let other = AppIdentity(pid: 0, bundleId: "com.example.other", name: "Other", launchDate: nil, path: nil)
+      let other = AppIdentity(pid: 0, bundleId: "com.example.other", name: "Other", processStart: nil, path: nil)
       #expect(ApprovalGate.access(other) == .allowed)
     }
   }
@@ -108,7 +108,7 @@ private let neverAvailable = [
 
   @MainActor @Test func aWaitingRequestIsAnsweredOnce() throws {
     try withTemporaryHome {
-      let app = AppIdentity(pid: 0, bundleId: "com.example.asked", name: "Asked", launchDate: nil, path: nil)
+      let app = AppIdentity(pid: 0, bundleId: "com.example.asked", name: "Asked", processStart: nil, path: nil)
       #expect(try ApprovalRequests.add(app, client: "agent"))
       let request = try #require(ApprovalRequests.all.first { $0.app.bundleId == app.bundleId })
       let model = ControlModel(live: false)

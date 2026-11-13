@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Requests to an approved app no longer incorrectly report `app_changed` when LaunchServices temporarily cannot find its running process. Process checks use the kernel's process start time to reject stopped processes and reused PIDs.
+
 ## 0.3.1
 
 - A script or shortcut that finishes while a process it started in its process group still runs no longer frees the app while that process goes on working: what is left of the group is stopped before the call returns (SIGTERM, then SIGKILL after 1 s), and the call answers `outcome_unknown`, since the process may have done part of its work. Before, such a call could answer success while the process changed things after the reply.

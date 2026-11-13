@@ -30,7 +30,7 @@ func visibleApps() -> [NSRunningApplication] {
 func identity(of app: NSRunningApplication) -> AppIdentity {
   AppIdentity(
     pid: app.processIdentifier, bundleId: app.bundleIdentifier ?? "", name: app.localizedName ?? app.bundleIdentifier ?? "app",
-    launchDate: app.launchDate, path: app.bundleURL?.path)
+    processStart: processStart(of: app.processIdentifier), path: app.bundleURL?.path)
 }
 
 // Apps with a Dock icon first. An app without one, such as Control Center, is reachable only when it has items
@@ -54,13 +54,6 @@ private func hasMenuExtras(pid: pid_t) -> Bool {
   AXIsProcessTrusted() && attribute(AXUIElementCreateApplication(pid), "AXExtrasMenuBar") != nil
 }
 
-func requireSameProcess(_ app: AppIdentity) throws {
-  let current = onMain { NSRunningApplication(processIdentifier: app.pid) }
-  guard let current, !current.isTerminated, current.bundleIdentifier == app.bundleId, current.launchDate == app.launchDate else {
-    throw HelperError(code: "app_changed", message: "\(app.name) stopped while waiting. Try again.")
-  }
-}
-
 // Only names, never paths, so a request cannot point the helper at a bundle of its choosing.
 func installedApp(_ query: String) throws -> URL {
   guard !query.contains("/"), !query.contains("\0") else {
@@ -80,7 +73,7 @@ func installedIdentity(_ url: URL) throws -> AppIdentity {
   guard let bundleId = Bundle(url: url)?.bundleIdentifier else {
     throw HelperError(code: "app_not_found", message: "\(url.lastPathComponent) has no bundle identifier.")
   }
-  return AppIdentity(pid: 0, bundleId: bundleId, name: url.deletingPathExtension().lastPathComponent, launchDate: nil, path: url.path)
+  return AppIdentity(pid: 0, bundleId: bundleId, name: url.deletingPathExtension().lastPathComponent, processStart: nil, path: url.path)
 }
 
 // With files, the app opens them, started if it is not running. Apps often come forward to show a file they were
@@ -92,7 +85,7 @@ func launch(_ query: String, files paths: [String] = [], session: ApprovalSessio
   }
   let name = (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
     ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? url.deletingPathExtension().lastPathComponent
-  let approved = AppIdentity(pid: 0, bundleId: bundleId, name: name, launchDate: nil, path: url.path)
+  let approved = AppIdentity(pid: 0, bundleId: bundleId, name: name, processStart: nil, path: url.path)
   try ApprovalGate.require(approved, session: session)
   // Paths are looked at only for an allowed app, so a refusal says nothing about which files exist.
   let files = try paths.map(openableFile)

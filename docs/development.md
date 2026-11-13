@@ -100,6 +100,7 @@ The tag starts `.github/workflows/release.yml`. It builds the app and runs the t
 | `Sources/App/Computers.swift` | The other Macs agents may reach with `computer`, and those asked for, waiting for the user |
 | `Sources/App/SystemPermissions.swift` | Screen Recording and System Audio Recording, asked for only from the window |
 | `Sources/App/Apps.swift` | Finding apps, starting them in the background and handing them files |
+| `Sources/App/ProcessIdentity.swift` | Kernel process start times and checking that a resolved process is still the same one |
 | `Sources/App/Accessibility.swift`, `Tree.swift` | Reading apps and numbering elements; rendering windows as lines |
 | `Sources/App/Actions.swift`, `TextSelection.swift` | Acting on windows; reading and selecting text by what it says |
 | `Sources/App/Observation.swift`, `Sequences.swift` | Change reports after actions, the per-app lock, and `run_actions` |
