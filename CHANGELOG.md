@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The check of the Apple, Services and Share menus refuses an element whose place it cannot prove: one whose way up breaks off at an element without a parent, runs past 256 levels or reaches a menu bar the app does not list, and a menu item its menu bar does not list. Before, such an item passed as if it were in a context menu. Return or space is refused while an open menu's selection nests deeper than the check reads.
 - The app and the command are signed with the hardened runtime, so no program can start Backstage with its own library inside (`DYLD_INSERT_LIBRARIES`) and use its permissions. SECURITY.md lists the trade-offs of signing on each Mac until builds are signed with a Developer ID and notarized.
 - The check of the Apple, Services and Share menus refuses what it cannot read instead of taking it for nothing: a shortcut while the app's menu bar or one of those menus does not answer, return or space while an open menu's selection cannot be read, text with a space while it cannot be told whether a menu is open, and an item whose place in the menus breaks off. A read that ends past the check's deadline counts as not read.
 - Pages and Numbers check an open document's file in the helper by the same path rule as every other path, whatever its letter case and through links, so a document open from `~/LIBRARY` is refused; one whose file the app does not give is refused too instead of passing for a document without a file, and `list_documents` marks it `path_unknown`.

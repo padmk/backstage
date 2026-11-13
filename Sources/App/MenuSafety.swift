@@ -116,31 +116,65 @@ struct MenuReader {
   }
 }
 
+// The way up from an element ends at the app's menu bar, at a window or the app, or nowhere it can prove:
+// `menuBar` is a top-level menu found among the menu bar's items, at that place; `outsideMenuBar` is a control in a
+// window, a context menu or an item of the app's own status menus, whose path alone decides.
+private enum MenuPlace {
+  case menuBar(index: Int)
+  case outsideMenuBar
+}
+
+// How far up the check follows an element: far enough for a control deep in web content, and a bound for an app
+// whose parents loop.
+private let maxAncestorDepth = 256
+
 // Why `element` may not be acted on, or nil: an item in the Apple menu, or under a Services or Share submenu,
-// whether in the menu bar or in a context menu, or a Share button in a toolbar. The way up ends at the menu bar, a
-// window or the app, above which nothing decides.
+// whether in the menu bar or in a context menu, or a Share button in a toolbar. Only a way up that ends at the menu
+// bar, a window or the app decides; one that breaks off (no parent), runs past the depth bound or meets a menu bar
+// the app does not list is refused, since the item could belong to any menu.
 func restrictedMenu(_ element: AXUIElement, in application: AXUIElement, reader: MenuReader) throws -> String? {
   var chain = [element]
-  var reachedBar = false
-  while chain.count < maxMenuDepth, let parent = try reader.element(chain[chain.count - 1], kAXParentAttribute) {
-    let role = try reader.string(parent, kAXRoleAttribute)
-    if role == kAXMenuBarRole {
-      reachedBar = true
-      break
+  var place: MenuPlace?
+  if try reader.string(element, kAXRoleAttribute) == kAXApplicationRole { place = .outsideMenuBar }
+  while place == nil {
+    let current = chain[chain.count - 1]
+    guard chain.count <= maxAncestorDepth else { throw untraceable(reader.appName, "nests deeper than \(maxAncestorDepth) levels") }
+    guard let parent = try reader.element(current, kAXParentAttribute) else {
+      throw untraceable(reader.appName, "has no parent, so its menu is unknown")
     }
-    if role == kAXWindowRole || role == kAXApplicationRole { break }
-    chain.append(parent)
+    switch try reader.string(parent, kAXRoleAttribute) {
+    case kAXMenuBarRole:
+      place = try menuBarPlace(of: current, in: parent, application: application, reader: reader)
+    case kAXWindowRole, kAXApplicationRole:
+      place = .outsideMenuBar
+    default:
+      chain.append(parent)
+    }
   }
   if try isShareButton(element, chain: chain, reader: reader) { return "the Share button" }
   var submenuTitles: [String] = []
   for item in chain.reversed() where try reader.string(item, kAXRoleAttribute) == kAXMenuItemRole && !reader.elements(item).isEmpty {
     submenuTitles.append(try reader.string(item, kAXTitleAttribute) ?? "")
   }
-  var topIndex: Int?
-  if reachedBar, let bar = try reader.element(application, kAXMenuBarAttribute), let top = chain.last {
-    topIndex = try reader.elements(bar).firstIndex { CFEqual($0, top) }
+  if case .menuBar(let index) = place { return refusedMenu(topIndex: index, submenuTitles: submenuTitles) }
+  return refusedMenu(topIndex: nil, submenuTitles: submenuTitles)
+}
+
+// `top` sits in `bar`: the app's menu bar, where its place must be found, or the bar of its own status items, which
+// holds no Apple menu. Any other menu bar is not the app's to tell.
+private func menuBarPlace(of top: AXUIElement, in bar: AXUIElement, application: AXUIElement, reader: MenuReader) throws -> MenuPlace {
+  if let menuBar = try reader.element(application, kAXMenuBarAttribute), CFEqual(menuBar, bar) {
+    guard let index = try reader.elements(menuBar).firstIndex(where: { CFEqual($0, top) }) else {
+      throw untraceable(reader.appName, "is in a menu that its menu bar does not list")
+    }
+    return .menuBar(index: index)
   }
-  return refusedMenu(topIndex: topIndex, submenuTitles: submenuTitles)
+  if let extras = try reader.element(application, "AXExtrasMenuBar"), CFEqual(extras, bar) { return .outsideMenuBar }
+  throw untraceable(reader.appName, "is in a menu bar that is not the app's")
+}
+
+private func untraceable(_ appName: String, _ why: String) -> HelperError {
+  HelperError(code: "not_allowed", message: "This element of \(appName) \(why), so it cannot be told apart from an item of the Apple, Services or Share menu, and nothing was done. Read the state again, or use list_menu_commands and run_menu_command.")
 }
 
 // A toolbar's Share button has no identifier of its own either: it is told by its role, AppKit's title for Share
@@ -367,9 +401,10 @@ private func selectedMenuItem(of application: AXUIElement, reader: MenuReader) t
         break search
       }
     }
-    guard let item = next else { break }
+    guard let item = next else { return selected }
     selected = item
     menus = try reader.elements(item)
   }
-  return selected
+  // Still deeper: the item a key would confirm lies past what was read.
+  throw HelperError(code: "not_allowed", message: "\(reader.appName)'s open menus nest too deep to tell which item the key would confirm, so it was not sent. Close the menu with press_key escape, or choose its item with press.")
 }
