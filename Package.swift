@@ -4,6 +4,12 @@
 
 import PackageDescription
 
+// The compiler checks the shared code and the command for data races, and warnings fail their build. Set
+// ALLOW_WARNINGS=1 to build anyway, as the Homebrew formula does, so a newer Xcode's new warnings never stop an install.
+let allowsWarnings = !(Context.environment["ALLOW_WARNINGS"] ?? "").isEmpty
+let strict: [SwiftSetting] = [.swiftLanguageMode(.v5), .enableUpcomingFeature("StrictConcurrency")]
+  + (allowsWarnings ? [] : [.treatAllWarnings(as: .error)])
+
 let package = Package(
   name: "Backstage",
   platforms: [.macOS(.v26)],
@@ -14,9 +20,9 @@ let package = Package(
   targets: [
     // What the app and the command share: the product's name and version, its directories, line framing and
     // build identity.
-    .target(name: "HelperLink", swiftSettings: [.swiftLanguageMode(.v5)]),
+    .target(name: "HelperLink", swiftSettings: strict),
     .executableTarget(name: "App", dependencies: ["HelperLink"], swiftSettings: [.swiftLanguageMode(.v5)]),
-    .executableTarget(name: "Tool", dependencies: ["HelperLink"], swiftSettings: [.swiftLanguageMode(.v5)]),
+    .executableTarget(name: "Tool", dependencies: ["HelperLink"], swiftSettings: strict),
     .testTarget(name: "ToolTests", dependencies: ["Tool", "HelperLink"], exclude: [], swiftSettings: [.swiftLanguageMode(.v5)]),
     .testTarget(name: "AppTests", dependencies: ["App", "HelperLink"], swiftSettings: [.swiftLanguageMode(.v5)]),
   ]

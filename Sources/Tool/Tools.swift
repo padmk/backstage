@@ -5,9 +5,9 @@ import HelperLink
 
 typealias JSON = [String: Any]
 
-private let app: JSON = ["type": "string", "description": "App name, bundle id or pid"]
-private let window: JSON = ["type": "integer", "minimum": 0, "description": "Window index shown in get_window_state; default the first"]
-private let element: JSON = ["type": "integer", "minimum": 1, "description": "Element number from get_window_state"]
+private var app: JSON { ["type": "string", "description": "App name, bundle id or pid"] }
+private var window: JSON { ["type": "integer", "minimum": 0, "description": "Window index shown in get_window_state; default the first"] }
+private var element: JSON { ["type": "integer", "minimum": 1, "description": "Element number from get_window_state"] }
 
 private func described(_ rule: JSON, _ description: String) -> JSON {
   var copy = rule
@@ -17,11 +17,13 @@ private func described(_ rule: JSON, _ description: String) -> JSON {
 
 // Tools that only read say so, so a client can allow or batch them. Of the tools that act on apps, those that
 // only arrange, show or start them are not destructive; input can replace or delete what an app holds, so it is.
-private let reads: JSON = ["readOnlyHint": true, "destructiveHint": false, "openWorldHint": false]
-private let acts: JSON = ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false]
-private let changes: JSON = ["readOnlyHint": false, "destructiveHint": true, "openWorldHint": false]
+private var reads: JSON { ["readOnlyHint": true, "destructiveHint": false, "openWorldHint": false] }
+private var acts: JSON { ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false] }
+private var changes: JSON { ["readOnlyHint": false, "destructiveHint": true, "openWorldHint": false] }
 
-struct ToolDefinition {
+// Unchecked: the schemas are JSON literals (strings, numbers, booleans, arrays and dictionaries, all values), and a
+// definition is never changed once the tool list is built, so threads share it only for reading.
+struct ToolDefinition: @unchecked Sendable {
   let name: String
   let description: String
   let properties: [(String, JSON)]

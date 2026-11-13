@@ -22,30 +22,17 @@ func runProcess(_ path: String, _ arguments: [String], timeout: TimeInterval = 1
   process.standardInput = FileHandle.nullDevice
   try process.run()
   // Read while it runs, so a full pipe never blocks it.
-  var outputData = Data()
-  var errorData = Data()
-  let group = DispatchGroup()
-  group.enter()
-  DispatchQueue.global().async {
-    outputData = output.fileHandleForReading.readDataToEndOfFile()
-    group.leave()
-  }
-  group.enter()
-  DispatchQueue.global().async {
-    errorData = errors.fileHandleForReading.readDataToEndOfFile()
-    group.leave()
-  }
+  let outputReader = PipeReader(output.fileHandleForReading)
+  let errorReader = PipeReader(errors.fileHandleForReading)
   let finished = DispatchSemaphore(value: 0)
   process.terminationHandler = { _ in finished.signal() }
   if finished.wait(timeout: .now() + timeout) == .timedOut {
     process.terminate()
     finished.wait()
-    group.wait()
     throw HelperFailure(code: nil, message: "\(path) did not finish in time.")
   }
-  group.wait()
-  let result = ProcessOutput(status: process.terminationStatus, output: String(decoding: outputData, as: UTF8.self),
-                             errors: String(decoding: errorData, as: UTF8.self))
+  let result = ProcessOutput(status: process.terminationStatus, output: String(decoding: outputReader.data() ?? Data(), as: UTF8.self),
+                             errors: String(decoding: errorReader.data() ?? Data(), as: UTF8.self))
   if result.status != 0, !allowFailure {
     let detail = (result.errors.isEmpty ? result.output : result.errors).trimmingCharacters(in: .whitespacesAndNewlines)
     throw HelperFailure(code: nil, message: "\(path) failed: \(detail.prefix(2000))")

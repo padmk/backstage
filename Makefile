@@ -6,7 +6,8 @@
 #   make bench     latency against the installed app
 #   make check     what CI runs
 # SWIFT_BUILD_FLAGS goes to every `swift build`; the Homebrew formula passes --disable-sandbox, since SwiftPM's own
-# sandbox cannot start inside Homebrew's.
+# sandbox cannot start inside Homebrew's. Warnings fail the build (Package.swift); ALLOW_WARNINGS=1, which the formula
+# passes, keeps them warnings.
 
 PRODUCT := Sources/HelperLink/Product.swift
 APP_NAME := $(shell sed -n 's/.*static let appName = "\(.*\)"/\1/p' $(PRODUCT))

@@ -21,11 +21,11 @@ private func printLine(_ text: String) {
 // MARK: setup
 
 // The MCP clients setup registers with, each through its own command, at user scope.
-private struct MCPClient {
+private struct MCPClient: Sendable {
   let name: String
   let command: String
-  let remove: (String) -> [String]
-  let add: (String, [String]) -> [String]
+  let remove: @Sendable (String) -> [String]
+  let add: @Sendable (String, [String]) -> [String]
 }
 
 private let mcpClients = [

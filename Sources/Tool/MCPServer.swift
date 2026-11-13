@@ -3,6 +3,7 @@
 
 import Foundation
 import HelperLink
+import Synchronization
 
 // Revisions a client names in each request's `_meta`, newest first.
 private let statelessProtocols = ["2026-07-28"]
@@ -10,11 +11,11 @@ private let statelessProtocols = ["2026-07-28"]
 private let handshakeProtocols = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
 private let supportedProtocols = statelessProtocols + handshakeProtocols
 private let meta = "io.modelcontextprotocol/"
-private let serverInfo: JSON = ["name": Product.commandName, "version": Product.version]
+private var serverInfo: JSON { ["name": Product.commandName, "version": Product.version] }
 // The tools and instructions stay the same while the server runs and hold nothing about the user.
-private let cacheHint: JSON = ["ttlMs": 3_600_000, "cacheScope": "public"]
+private var cacheHint: JSON { ["ttlMs": 3_600_000, "cacheScope": "public"] }
 // The tool list can change when a handoff brings in a newer build.
-private let toolCapabilities: JSON = ["tools": ["listChanged": true] as JSON]
+private var toolCapabilities: JSON { ["tools": ["listChanged": true] as JSON] }
 // A handoff waits this long for calls that already reached the old helper to finish; otherwise it does not happen.
 private let handoffDrainSeconds: TimeInterval = 5
 private let handoffPollSeconds: TimeInterval = 0.02
@@ -25,6 +26,10 @@ let instructions =
   + "\n\n"
   + "Operate allowed Mac apps in the background. For a well-known app, such as Notes, Reminders, Calendar or System Settings, call list_operations first: its ready operations are faster than the window and check their own result. In any other app, list_menu_commands shows what it can do and run_menu_command runs it; otherwise read with get_window_state, act by element number and check `state` in the reply. Menus, pop-up buttons, popovers and palettes an action opens show on the user's screen above their work: choose the item or close them with press_key escape before moving on. list_windows, set_window and close manage windows. Nothing here brings an app forward, though an app may do so itself. Start or restart an app with launch_app (after close with quit: true), not open in the shell, which brings it forward and takes the user's focus. When a click does not land, check with a screenshot and retry it with click_at and foreground: true, which brings the window forward for that one click and gives the focus back; tell the user. For other actions that do not land, tell the user. Use the shell for files and command-line tools; for an allowed app's data use its ready operations, not osascript, so macOS asks once, for \(Product.appName). On permission_missing, tell the user what the message says to allow in the Backstage window. While the screen is locked (screen_locked in list_apps), windows are out of reach: use ready operations, and menu commands through get_window_state with menu_bar: true and press; never try to unlock the Mac. For another of the user's Macs, pass computer with the name `ssh` reaches it under, the one the user calls it by or a Host in ~/.ssh/config, to any tool; that Mac's own app list and checks apply, and its user may be at it. On computer_not_approved, tell the user to add that Mac in the Backstage window, and do not reach it another way."
 
+// Unchecked: the calls of one client run on the `calls` queue at once, so every mutable property is guarded. `lock`
+// guards the client's name and the calls in progress, `inputLock` the input framer and the handoff flag, and only the
+// serial `output` queue writes to stdout; the other properties are constants or the Sendable clients of the helper and
+// of other Macs.
 final class MCPServer: @unchecked Sendable {
   private let helper: HelperClient
   private let output = DispatchQueue(label: "mcp-output")
@@ -182,26 +187,26 @@ final class MCPServer: @unchecked Sendable {
 
   // A request that names its revision in `_meta` is served on its own, without initialize.
   private func handleStateless(_ message: JSON, _ fields: JSON, line: String) {
-    let id = message["id"]!
+    let id = SharedJSON(message["id"] ?? NSNull())
     let method = message["method"] as? String
     guard let requested = fields["\(meta)protocolVersion"] as? String else {
-      send(["id": id, "error": ["code": -32602, "message": "\(meta)protocolVersion must be a string"]])
+      send(["id": id.value, "error": ["code": -32602, "message": "\(meta)protocolVersion must be a string"]])
       return
     }
     guard statelessProtocols.contains(requested) else {
-      send(["id": id, "error": ["code": -32022, "message": "Unsupported protocol version", "data": ["supported": supportedProtocols, "requested": requested]]])
+      send(["id": id.value, "error": ["code": -32022, "message": "Unsupported protocol version", "data": ["supported": supportedProtocols, "requested": requested]]])
       return
     }
     guard fields["\(meta)clientCapabilities"] is JSON else {
-      send(["id": id, "error": ["code": -32602, "message": "\(meta)clientCapabilities is required"]])
+      send(["id": id.value, "error": ["code": -32602, "message": "\(meta)clientCapabilities is required"]])
       return
     }
     if let name = (fields["\(meta)clientInfo"] as? JSON)?["name"] as? String { lock.withLock { clientName = name } }
-    let reply = { (result: JSON) in
+    let reply: @Sendable (JSON) -> Void = { result in
       var full = result
       full["resultType"] = "complete"
       full["_meta"] = ["\(meta)serverInfo": serverInfo]
-      self.send(["id": id, "result": full])
+      self.send(["id": id.value, "result": full])
     }
     switch method {
     case "server/discover":
@@ -211,7 +216,7 @@ final class MCPServer: @unchecked Sendable {
     case "tools/call":
       handleToolCall(message, line: line, reply: reply)
     default:
-      send(["id": id, "error": ["code": -32601, "message": "Method not found: \(method ?? "undefined")"]])
+      send(["id": id.value, "error": ["code": -32601, "message": "Method not found: \(method ?? "undefined")"]])
     }
   }
 
@@ -236,7 +241,7 @@ final class MCPServer: @unchecked Sendable {
     case "tools/list":
       send(["id": id ?? NSNull(), "result": ["tools": tools.map(\.listed)]])
     case "tools/call":
-      if let id { handleToolCall(message, line: line) { self.send(["id": id, "result": $0]) } }
+      if let id = id.map(SharedJSON.init) { handleToolCall(message, line: line) { self.send(["id": id.value, "result": $0]) } }
     case "notifications/cancelled":
       // Only the call it names; a late cancellation finds nothing and ends nothing.
       let key = params?["requestId"].map(idKey)
@@ -255,8 +260,8 @@ final class MCPServer: @unchecked Sendable {
 
   // MARK: Tools
 
-  private func handleToolCall(_ message: JSON, line: String, reply: @escaping (JSON) -> Void) {
-    let id = message["id"]!
+  private func handleToolCall(_ message: JSON, line: String, reply: @escaping @Sendable (JSON) -> Void) {
+    let id = message["id"] ?? NSNull()
     let params = message["params"] as? JSON
     guard let name = params?["name"] as? String, toolsByName[name] != nil else {
       let shown = params?["name"].map { "\($0)" } ?? "undefined"
@@ -270,8 +275,12 @@ final class MCPServer: @unchecked Sendable {
       reply(errorResult("invalid_arguments: \(problem)"))
       return
     }
+    // The checks above accept only an object.
+    guard var fields = arguments as? JSON else {
+      reply(errorResult("invalid_arguments: arguments must be an object"))
+      return
+    }
     let key = idKey(id)
-    var fields = arguments as! JSON
     if let computer = fields.removeValue(forKey: computerArgument) as? String {
       callRemote(computer, name, fields, key: key, line: line, reply: reply)
       return
@@ -281,10 +290,11 @@ final class MCPServer: @unchecked Sendable {
       callsReceived += 1
       callsInProgress[key] = (ticket, line, callsReceived)
     }
+    let shared = SharedJSON(fields)
     calls.async {
       defer { self.lock.withLock { _ = self.callsInProgress.removeValue(forKey: key) } }
       do {
-        reply(try self.callTool(name, arguments as! JSON, ticket: ticket))
+        reply(try self.callTool(name, shared.value, ticket: ticket))
       } catch let failure as HelperFailure {
         reply(self.errorResult(failure.code.map { "\($0): \(failure.message)" } ?? failure.message))
       } catch {
@@ -295,7 +305,7 @@ final class MCPServer: @unchecked Sendable {
 
   // Until this Mac's helper has said the Mac is on the list, the call is one in progress here, which a handoff may send
   // again to the next command; from then on it is a call on that Mac, which a handoff waits for.
-  private func callRemote(_ computer: String, _ name: String, _ arguments: JSON, key: String, line: String, reply: @escaping (JSON) -> Void) {
+  private func callRemote(_ computer: String, _ name: String, _ arguments: JSON, key: String, line: String, reply: @escaping @Sendable (JSON) -> Void) {
     let cancellation = RemoteCancellation()
     let ticket = Ticket()
     lock.withLock {
@@ -303,6 +313,7 @@ final class MCPServer: @unchecked Sendable {
       callsInProgress[key] = (ticket, line, callsReceived)
       remoteCalls[key] = cancellation
     }
+    let shared = SharedJSON(arguments)
     calls.async {
       defer {
         self.lock.withLock {
@@ -314,7 +325,7 @@ final class MCPServer: @unchecked Sendable {
         // This Mac's helper keeps the list of Macs agents may reach; that Mac's own list then decides the call.
         _ = try self.helper.request("require_computer", ["computer": computer], ticket: ticket)
         self.lock.withLock { _ = self.callsInProgress.removeValue(forKey: key) }
-        reply(try self.remote.call(computer, name, arguments, clientName: self.currentClientName, cancellation: cancellation))
+        reply(try self.remote.call(computer, name, shared.value, clientName: self.currentClientName, cancellation: cancellation))
       } catch let failure as HelperFailure {
         reply(self.errorResult(failure.code.map { "\($0): \(failure.message)" } ?? failure.message))
       } catch {
@@ -347,40 +358,51 @@ func runMCPServer(arguments: [String]) -> Never {
   let testHome = ProcessInfo.processInfo.environment["HELPER_TEST_HOME"]
   let directories = Directories(testHome: testHome)
   let managesHelper = ProcessInfo.processInfo.environment["HELPER_NO_START"] == nil
-  var server: MCPServer!
-  let stopping = NSLock()
-  var stopped = false
-  let shutdown = {
-    let first = stopping.withLock { () -> Bool in
-      defer { stopped = true }
-      return !stopped
-    }
-    guard first else { return }
-    server.close()
-    server.flush()
-    exit(0)
-  }
+  let stop = ServerStop()
   let resumed = readResume(arguments: arguments)
-  server = MCPServer(directories: directories, managesHelper: managesHelper, expectedBuild: appBuildOfOwnBundle(), resumed: resumed?.0,
-                     // The output queue itself reports the failure, so the shutdown, which waits for that queue, runs elsewhere.
-                     onOutputFailure: { DispatchQueue.global().async { shutdown() } })
-  for signalNumber in [SIGINT, SIGTERM, SIGHUP] {
+  let server = MCPServer(directories: directories, managesHelper: managesHelper, expectedBuild: appBuildOfOwnBundle(), resumed: resumed?.0,
+                         // The output queue itself reports the failure, so the shutdown, which waits for that queue, runs elsewhere.
+                         onOutputFailure: { DispatchQueue.global().async { stop.run() } })
+  stop.attach(server)
+  // Kept for as long as the process runs, which dispatchMain never ends.
+  let signalSources = [SIGINT, SIGTERM, SIGHUP].map { signalNumber in
     signal(signalNumber, SIG_IGN)
     let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .global())
-    source.setEventHandler { shutdown() }
+    source.setEventHandler { stop.run() }
     source.resume()
-    retainedSignalSources.append(source)
+    return source
   }
   server.announceToolChanges()
   let reader = Thread {
     server.readInput(after: resumed?.1 ?? Data())
-    shutdown()
+    stop.run()
   }
   reader.start()
-  dispatchMain()
+  withExtendedLifetime(signalSources) { dispatchMain() }
 }
 
-nonisolated(unsafe) private var retainedSignalSources: [DispatchSourceSignal] = []
+// Ends the process once, from whichever comes first: the end of input, a failed write or a signal.
+private final class ServerStop: Sendable {
+  private struct State {
+    var server: MCPServer?
+    var stopped = false
+  }
+
+  private let state = Mutex(State())
+
+  func attach(_ server: MCPServer) { state.withLock { $0.server = server } }
+
+  func run() {
+    let (first, server) = state.withLock { state in
+      defer { state.stopped = true }
+      return (!state.stopped, state.server)
+    }
+    guard first else { return }
+    server?.close()
+    server?.flush()
+    exit(0)
+  }
+}
 
 // One JSON value as compact text, as a tool result carries it.
 func jsonText(_ value: Any) -> String {

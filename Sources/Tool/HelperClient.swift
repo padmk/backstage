@@ -12,6 +12,7 @@ struct HelperFailure: Error {
 }
 
 // Names one request, so a client can cancel it later. Cancelled before it is sent, the request is never sent.
+// Unchecked: its fields are read and written only on the helper client's serial queue.
 final class Ticket: @unchecked Sendable {
   fileprivate var id: Int?
   fileprivate var cancelled = false
@@ -30,6 +31,7 @@ let requestTimeout: TimeInterval = {
 private let quitWait: TimeInterval = 3
 
 // One socket, read by its own thread. Replies go to the client's queue.
+// Unchecked: writes hold `writeLock`, and `closed` is read and written only on the helper client's serial queue.
 private final class SocketConnection: @unchecked Sendable {
   let descriptor: Int32
   private let writeLock = NSLock()
@@ -78,6 +80,9 @@ private func connectSocket(_ path: String) -> Int32? {
   return descriptor
 }
 
+// Unchecked: the connection, the requests waiting and the ids are read and written only on the serial `queue`, and
+// the count of connections made only holding `connectLock`; `onOutdated`, `handoffGeneration` and `elementNumberBase`
+// are set before the first request and only read after.
 final class HelperClient: @unchecked Sendable {
   private let directories: Directories
   // For tests with a helper they started themselves: nothing is started or replaced.
