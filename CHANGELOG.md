@@ -3,6 +3,7 @@
 ## 0.2.3
 
 - Every tool takes `computer`, the name `ssh` reaches another of the user's Macs under, and runs there through that Mac's installed Backstage, with its own app list and checks. One SSH connection per Mac stays open for the session, so element numbers keep their meaning; a Mac that cannot be reached, or has no Backstage, answers `computer_unreachable`. No entry per Mac is needed in the MCP client.
+- Messages: the names `list_chats` and `read_chat` take from Contacts are found again; Contacts refused the lookup by phone number and email address without asking for those keys.
 
 ## 0.2.2
 
