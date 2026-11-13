@@ -21,7 +21,7 @@ struct RecognizedLine: Equatable {
 
   var json: JSON {
     ["text": text, "confidence": (confidence * 100).rounded() / 100,
-     "frame": [Int(frame.minX.rounded()), Int(frame.minY.rounded()), Int(frame.width.rounded()), Int(frame.height.rounded())]]
+     "frame": [wholePoints(frame.minX), wholePoints(frame.minY), wholePoints(frame.width), wholePoints(frame.height)]]
   }
 }
 

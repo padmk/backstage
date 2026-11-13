@@ -94,7 +94,9 @@ func frame(of element: AXUIElement) -> CGRect? {
     AXValueGetValue(positionValue, .cgPoint, &position),
     AXValueGetValue(sizeValue, .cgSize, &size)
   else { return nil }
-  return CGRect(origin: position, size: size)
+  // The app reports these itself; a frame that is not a number or lies beyond any screen counts as none.
+  let frame = CGRect(origin: position, size: size)
+  return isPlausibleGeometry(frame) ? frame : nil
 }
 
 private func flattened(_ text: String) -> String {

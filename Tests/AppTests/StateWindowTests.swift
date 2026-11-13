@@ -5,6 +5,23 @@
 import CoreGraphics
 import Testing
 
+@Suite struct RequestedFrameTests {
+  // A finite frame too large for any screen would reach the window and then trap when the reply rounds it to Int.
+  @Test func aFrameBeyondAnyScreenIsRefusedBeforeItReachesTheWindow() throws {
+    for box: [String: Any] in [["x": 0, "y": 0, "width": 1e100, "height": 300], ["x": -1e19, "y": 0, "width": 400, "height": 300]] {
+      helperError("invalid_request") { try requestedFrame(box) }
+    }
+    #expect(try requestedFrame(["x": -1920, "y": 25, "width": 800, "height": 600]) == CGRect(x: -1920, y: 25, width: 800, height: 600))
+  }
+
+  @Test func aReplyRoundsAnyValueWithoutTrapping() {
+    #expect(wholePoints(1e100) == Int(maxScreenCoordinate))
+    #expect(wholePoints(-1e100) == -Int(maxScreenCoordinate))
+    #expect(wholePoints(.nan) == 0)
+    #expect(wholePoints(799.6) == 800)
+  }
+}
+
 @Suite struct StateWindowTests {
   // A display left of and above the main one, with a 25-point menu bar at the top and an 80-point Dock at the bottom,
   // and an odd size so halves and thirds fall between points.

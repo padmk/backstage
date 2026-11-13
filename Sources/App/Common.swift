@@ -43,6 +43,21 @@ func number(_ params: JSON, _ key: String) throws -> Double {
   return value
 }
 
+// Screen geometry in points stays far inside this bound on any Mac. A larger value comes from a wrong request or an
+// app's broken report, and keeping geometry inside it keeps every conversion to whole points in range.
+let maxScreenCoordinate: CGFloat = 1_000_000
+
+func isPlausibleGeometry(_ rect: CGRect) -> Bool {
+  [rect.minX, rect.minY, rect.width, rect.height].allSatisfy { $0.isFinite && abs($0) <= maxScreenCoordinate }
+}
+
+// Whole points for a reply. Int(_:) traps on a value out of its range, so this clamps to the plausible bound;
+// a value that is not a number, which no check above lets in, becomes 0.
+func wholePoints(_ value: CGFloat) -> Int {
+  guard value.isFinite else { return 0 }
+  return Int(min(max(value, -maxScreenCoordinate), maxScreenCoordinate).rounded())
+}
+
 // A framework object that is not Sendable, such as a contact or event store, used by one thread at a time.
 // Unchecked: the value is reached only inside `withLock`, holding the lock, and callers keep nothing of it past the
 // closure except objects their framework documents as safe to share, such as the CNContact values a fetch returns.
