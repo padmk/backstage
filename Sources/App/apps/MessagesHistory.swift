@@ -47,10 +47,45 @@ private func text(_ value: Any??) -> String? {
   return text
 }
 
-// A chat by the id list_chats gives (its guid), else by the one handle or group id it is known by, else by its name;
-// more than one match is refused. A person reached over several services, such as iMessage and SMS, has a chat for
-// each under the same handle: those read as one conversation, addressed by the handle.
-private func chat(_ database: ReadOnlyDatabase, _ wanted: String) throws -> (keys: [Int64], id: String, name: String) {
+// Messages keeps no names for people; Messages shows the names in Contacts, which label chats here when the user
+// has allowed Contacts. Business senders, such as "Orange", are named by their handle and are not looked up.
+private func person(_ handle: String?, _ contacts: ContactLookup?) -> HandleContact? {
+  guard let contacts, let handle, let parsed = ContactHandle(handle) else { return nil }
+  return contacts(parsed)
+}
+
+// Names compared as people type them: without case, accents or strokes, so "lodz" finds "Łódź".
+func searchFolded(_ text: String) -> String {
+  String(text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).map { letter in
+    switch letter {
+    case "ł": "l"
+    case "ø": "o"
+    case "đ": "d"
+    case "ı": "i"
+    default: letter
+    }
+  })
+}
+
+// Each chat's participants' handles, in the order Messages added them.
+private func participants(_ database: ReadOnlyDatabase) throws -> [Int64: [String]] {
+  try database.rows("""
+    SELECT x.chat_id AS chat, h.id AS handle FROM chat_handle_join x JOIN handle h ON h.ROWID = x.handle_id ORDER BY h.ROWID
+    """).reduce(into: [Int64: [String]]()) { map, row in
+      if let chat = int(row["chat"]), let handle = text(row["handle"]) { map[chat, default: []].append(handle) }
+    }
+}
+
+// The handle of the one other person in a chat, or nil for a group.
+private func otherPerson(_ participants: [String], identifier: String?) -> String? {
+  participants.count > 1 ? nil : participants.first ?? identifier
+}
+
+// A chat by the id list_chats gives (its guid), else by the one handle or group id it is known by, else by its name,
+// else by the contact name of the one person in it; more than one match is refused. A person reached over several
+// services, such as iMessage and SMS, has a chat for each under the same handle: those read as one conversation,
+// addressed by the handle, and so do the one-to-one chats of the one contact a name gives.
+private func chat(_ database: ReadOnlyDatabase, _ wanted: String, contacts: ContactLookup?) throws -> (keys: [Int64], id: String, name: String) {
   let rows = try database.rows("SELECT ROWID, guid, chat_identifier, display_name FROM chat")
   let tiers: [([String: Any?]) -> Bool] = [
     { text($0["guid"]) == wanted },
@@ -59,13 +94,33 @@ private func chat(_ database: ReadOnlyDatabase, _ wanted: String) throws -> (key
   ]
   for (tier, matches) in tiers.map({ rows.filter($0) }).enumerated() where !matches.isEmpty {
     let keys = matches.compactMap { int($0["ROWID"]) }
+    let fallback = { (handle: String) in person(handle, contacts)?.name ?? handle }
     if matches.count == 1, let row = matches.first, let key = keys.first {
-      return ([key], text(row["guid"]) ?? "", text(row["display_name"]) ?? text(row["chat_identifier"]) ?? "")
+      return ([key], text(row["guid"]) ?? "", text(row["display_name"]) ?? text(row["chat_identifier"]).map(fallback) ?? "")
     }
     if tier == 1, keys.count == matches.count, try oneToOne(database, keys) {
-      return (keys, wanted, matches.lazy.compactMap { text($0["display_name"]) }.first ?? wanted)
+      return (keys, wanted, matches.lazy.compactMap { text($0["display_name"]) }.first ?? fallback(wanted))
     }
     throw HelperError(code: "ambiguous", message: "\(matches.count) chats match \(wanted). Use the id from list_chats.")
+  }
+  if let contacts {
+    let members = try participants(database)
+    let folded = searchFolded(wanted.trimmingCharacters(in: .whitespaces))
+    let matches = rows.compactMap { row -> (key: Int64, handle: String, contact: HandleContact)? in
+      guard let key = int(row["ROWID"]), text(row["display_name"]) == nil,
+        let handle = otherPerson(members[key] ?? [], identifier: text(row["chat_identifier"])),
+        let contact = person(handle, contacts), searchFolded(contact.name) == folded
+      else { return nil }
+      return (key, handle, contact)
+    }
+    let people = Set(matches.map(\.contact.id))
+    if people.count == 1, let contact = matches.first?.contact {
+      let handles = Set(matches.map(\.handle))
+      return (matches.map(\.key), handles.count == 1 ? handles.first ?? contact.name : contact.name, contact.name)
+    }
+    if people.count > 1 {
+      throw HelperError(code: "ambiguous", message: "\(people.count) people in Contacts are named \(wanted). Use a phone number, an email address or the id from list_chats.")
+    }
   }
   throw HelperError(code: "not_found", message: "No chat has the id, handle or name \(wanted). Use list_chats.")
 }
@@ -83,50 +138,58 @@ private func placeholders(_ count: Int) -> String {
   (1...count).map { "?\($0)" }.joined(separator: ", ")
 }
 
-// The chats as list_chats gives them, latest first, from the database: ids, names, participants' handles and when
-// the last message came.
-func messagesChatList(query: String?, limit: Int) throws -> JSON {
-  let database = try openMessagesDatabase()
+// The chats as list_chats gives them, latest first, from the database: ids, names, participants' handles with the
+// names Contacts gives them, and when the last message came.
+func messagesChatList(_ database: ReadOnlyDatabase, query: String?, limit: Int, contacts: ContactLookup?) throws -> JSON {
   let chats = try database.rows("""
     SELECT c.ROWID AS key, c.guid AS id, c.display_name AS name, c.chat_identifier AS identifier,
       (SELECT MAX(m.date) FROM chat_message_join j JOIN message m ON m.ROWID = j.message_id WHERE j.chat_id = c.ROWID) AS last
     FROM chat c ORDER BY last IS NULL, last DESC
     """)
-  let participants = try database.rows("""
-    SELECT x.chat_id AS chat, h.id AS handle FROM chat_handle_join x JOIN handle h ON h.ROWID = x.handle_id ORDER BY h.ROWID
-    """).reduce(into: [Int64: [String]]()) { map, row in
-      if let chat = int(row["chat"]), let handle = text(row["handle"]) { map[chat, default: []].append(handle) }
-    }
-  let wanted = query?.lowercased()
-  let described = chats.map { row -> JSON in
-    var chat: JSON = ["id": text(row["id"]) ?? "", "name": text(row["name"]) ?? "", "participants": participants[int(row["key"]) ?? -1] ?? []]
+  let members = try participants(database)
+  let wanted = query.map(searchFolded).flatMap { $0.isEmpty ? nil : $0 }
+  let described = chats.compactMap { row -> JSON? in
+    let handles = members[int(row["key"]) ?? -1] ?? []
+    let identifier = text(row["identifier"])
+    var chat: JSON = ["id": text(row["id"]) ?? "", "name": text(row["name"]) ?? "", "participants": handles]
     if let last = seconds(row["last"]) { chat["last_message"] = timeText(Date(timeIntervalSinceReferenceDate: last)) }
-    if let identifier = text(row["identifier"]) { chat["handle"] = identifier }
+    if let identifier { chat["handle"] = identifier }
+    // A one-to-one chat without participants rows is known by its identifier alone.
+    let other = otherPerson(handles, identifier: identifier)
+    let named = Dictionary((handles.isEmpty ? other.map { [$0] } ?? [] : handles).compactMap { handle in
+      person(handle, contacts).map { (handle, $0.name) }
+    }, uniquingKeysWith: { first, _ in first })
+    if !named.isEmpty { chat["contact_names"] = named }
+    if text(row["name"]) == nil, let other, let name = named[other] { chat["name"] = name }
+    if let wanted {
+      let texts = [chat["name"] as? String ?? "", identifier ?? ""] + handles + Array(named.values)
+      guard texts.contains(where: { searchFolded($0).contains(wanted) }) else { return nil }
+    }
     return chat
-  }.filter { chat in
-    guard let wanted else { return true }
-    let names = [chat["name"] as? String ?? "", chat["handle"] as? String ?? ""] + (chat["participants"] as? [String] ?? [])
-    return names.contains { $0.lowercased().contains(wanted) }
   }
   let shown = Array(described.prefix(limit))
-  return ["total": described.count, "has_more": described.count > shown.count, "chats": shown, "source": "database"]
+  var result: JSON = ["total": described.count, "has_more": described.count > shown.count, "chats": shown, "source": "database"]
+  if wanted != nil, described.isEmpty, contacts == nil {
+    result["note"] = "Messages keeps no names for people; it shows the names in Contacts. Backstage matches names once the user allows Contacts on the Setup tab (after adding Contacts on the Apps tab); until then, search by phone number or email address."
+  }
+  return result
 }
 
 let messagesReadChat = Operation(
   name: "read_chat", summary: "Read a conversation's messages, oldest first, from Messages' data on this Mac", effect: .reads,
   arguments: [
-    Argument(name: "chat", kind: .string, required: true, description: "Chat id from list_chats, a phone number or email address of a one-to-one chat, or a group's name"),
+    Argument(name: "chat", kind: .string, required: true, description: "Chat id from list_chats, a phone number or email address of a one-to-one chat, a group's name, or a person's name in Contacts"),
     Argument(name: "since", kind: .string, required: false, description: "Only messages from this time on: an ISO 8601 date or time"),
     Argument(name: "until", kind: .string, required: false, description: "Only messages before this time"),
     Argument(name: "before", kind: .integer, required: false, description: "Only messages older than this message id; pass the first message's id to read earlier ones", minimum: 1),
     Argument(name: "limit", kind: .integer, required: false, description: "Most messages to return, the latest in the range; default \(defaultMessages)", minimum: 1, maximum: maxMessages),
   ]
 ) { arguments in
-  try readMessagesChat(openMessagesDatabase(), arguments)
+  try readMessagesChat(openMessagesDatabase(), arguments, contacts: contactLookup())
 }
 
-func readMessagesChat(_ database: ReadOnlyDatabase, _ arguments: JSON) throws -> JSON {
-  let found = try chat(database, try string(arguments, "chat"))
+func readMessagesChat(_ database: ReadOnlyDatabase, _ arguments: JSON, contacts: ContactLookup? = nil) throws -> JSON {
+  let found = try chat(database, try string(arguments, "chat"), contacts: contacts)
   let inChat = "m.ROWID IN (SELECT message_id FROM chat_message_join WHERE chat_id IN (\(placeholders(found.keys.count))))"
   // Reactions and other messages that point at another one are left out; they are not messages of their own.
   var conditions = [inChat, "IFNULL(m.associated_message_type, 0) = 0"]
@@ -163,6 +226,7 @@ func readMessagesChat(_ database: ReadOnlyDatabase, _ arguments: JSON) throws ->
   let messages = try rows.prefix(count).reversed().map { row -> JSON in
     var item: JSON = ["id": int(row["id"]) ?? 0, "time": seconds(row["at"]).map { timeText(Date(timeIntervalSinceReferenceDate: $0)) } ?? ""]
     item["from"] = int(row["mine"]) == 1 ? "me" : text(row["sender"]) ?? "unknown"
+    if int(row["mine"]) != 1, let sender = person(text(row["sender"]), contacts) { item["from_name"] = sender.name }
     // Item types other than 0 are events in the chat, such as a renamed group or someone joining.
     if let kind = int(row["kind"]), kind != 0 { item["event"] = kind }
     if let body = text(row["body"]) {

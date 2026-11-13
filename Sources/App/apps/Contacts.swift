@@ -75,14 +75,7 @@ private let search = Operation(
   let query = try string(arguments, "query").trimmingCharacters(in: .whitespaces)
   guard !query.isEmpty else { throw HelperError(code: "invalid_arguments", message: "query is empty.") }
   return try withContacts {
-    let predicate: NSPredicate
-    if query.contains("@") {
-      predicate = CNContact.predicateForContacts(matchingEmailAddress: query)
-    } else if query.allSatisfy({ $0.isNumber || "+-() ".contains($0) }), query.contains(where: \.isNumber) {
-      predicate = CNContact.predicateForContacts(matching: CNPhoneNumber(stringValue: query))
-    } else {
-      predicate = CNContact.predicateForContacts(matchingName: query)
-    }
+    let predicate = ContactHandle(query)?.predicate ?? CNContact.predicateForContacts(matchingName: query)
     let found = try store.unifiedContacts(matching: predicate, keysToFetch: summaryKeys)
     return ["total": found.count, "contacts": found.prefix(limit(arguments)).map(summary)] as JSON
   }
@@ -141,6 +134,66 @@ let contactsKnowledge = AppKnowledge(
   access: "Read and add contacts in every account, even while Contacts is closed",
   pitfalls: ["A person linked across accounts appears once, with the details of every linked card."],
   operations: [search, read, add])
+
+// MARK: Names for other apps' handles
+
+// A phone number or email address as messaging apps store a person's handle. Anything else, such as a business
+// sender's name ("Orange") or a group's id, is no handle.
+enum ContactHandle: Hashable {
+  // Digits, with a leading + when the handle has one.
+  case phone(String)
+  // Lowercased.
+  case email(String)
+
+  init?(_ handle: String) {
+    let trimmed = handle.trimmingCharacters(in: .whitespaces)
+    if trimmed.contains("@") {
+      guard !trimmed.contains(where: \.isWhitespace) else { return nil }
+      self = .email(trimmed.lowercased())
+    } else if trimmed.allSatisfy({ $0.isASCII && ($0.isNumber || "+-(). ".contains($0)) }), trimmed.contains(where: \.isNumber),
+      !trimmed.dropFirst().contains("+")
+    {
+      self = .phone((trimmed.hasPrefix("+") ? "+" : "") + trimmed.filter(\.isNumber))
+    } else {
+      return nil
+    }
+  }
+
+  // Contacts compares phone numbers itself, so one stored without the country code still matches.
+  var predicate: NSPredicate {
+    switch self {
+    case .phone(let number): CNContact.predicateForContacts(matching: CNPhoneNumber(stringValue: number))
+    case .email(let address): CNContact.predicateForContacts(matchingEmailAddress: address)
+    }
+  }
+}
+
+// The person a handle belongs to: the contact's id, which tells apart two people of the same name, and its name.
+struct HandleContact: Equatable {
+  let id: String
+  let name: String
+}
+
+typealias ContactLookup = (ContactHandle) -> HandleContact?
+
+private let nameKeys: [CNKeyDescriptor] = [
+  CNContactFormatter.descriptorForRequiredKeys(for: .fullName), CNContactOrganizationNameKey as CNKeyDescriptor,
+]
+
+// Looks handles up in Contacts, each once, when the user has already allowed Contacts; nil otherwise. It never asks
+// macOS for access, so it shows no prompt. Each request makes its own, so the names are as current as the request.
+func contactLookup() -> ContactLookup? {
+  guard CNContactStore.authorizationStatus(for: .contacts) == .authorized else { return nil }
+  var known: [ContactHandle: HandleContact?] = [:]
+  return { handle in
+    if let found = known[handle] { return found }
+    let contact = lock.withLock { (try? store.unifiedContacts(matching: handle.predicate, keysToFetch: nameKeys))?.first }
+    let name = contact.map { CNContactFormatter.string(from: $0, style: .fullName) ?? $0.organizationName } ?? ""
+    let found = contact.flatMap { name.isEmpty ? nil : HandleContact(id: $0.identifier, name: name) }
+    known[handle] = found
+    return found
+  }
+}
 
 // MARK: Access, for the App Access list
 

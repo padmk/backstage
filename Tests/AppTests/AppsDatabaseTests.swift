@@ -99,6 +99,115 @@ private func ids(_ result: JSON) -> [Int64] { messages(result).compactMap { $0["
   }
 }
 
+// People Contacts knows, added to the chats above: two Annas with chats of their own, one with an accented name and
+// a business sender, which has a name for a handle.
+private let contactRows = """
+  INSERT INTO handle VALUES (4, '+48444'), (5, 'Anna@Example.com'), (6, '+48555'), (7, 'Orange');
+  INSERT INTO chat VALUES (7, 'iMessage;-;+48444', '+48444', NULL), (8, 'iMessage;-;Anna@Example.com', 'Anna@Example.com', NULL),
+    (9, 'SMS;-;+48555', '+48555', NULL), (10, 'SMS;-;Orange', 'Orange', NULL);
+  INSERT INTO chat_handle_join VALUES (7, 4), (8, 5), (9, 6), (10, 7);
+  """
+
+// What a contact lookup would answer, keeping the handles it was asked about.
+private final class FakeContacts {
+  var asked: [ContactHandle] = []
+  private let people: [ContactHandle: HandleContact] = [
+    .phone("+48111"): HandleContact(id: "patryk", name: "Patryk Adamkiewicz"),
+    .phone("+48222"): HandleContact(id: "ola", name: "Ola"),
+    .phone("+48444"): HandleContact(id: "anna-1", name: "Anna Nowak"),
+    .email("anna@example.com"): HandleContact(id: "anna-2", name: "Anna Nowak"),
+    .phone("+48555"): HandleContact(id: "zoe", name: "Zoë Łącka"),
+  ]
+
+  var lookup: ContactLookup {
+    { [self] handle in
+      asked.append(handle)
+      return people[handle]
+    }
+  }
+}
+
+private func chats(_ result: JSON) -> [JSON] { result["chats"] as? [JSON] ?? [] }
+private func chatIds(_ result: JSON) -> [String] { chats(result).compactMap { $0["id"] as? String } }
+
+@Suite struct MessagesContactNameTests {
+  private let folder: TemporaryFolder
+  private let written: TestDatabase
+  private let database: ReadOnlyDatabase
+  private let contacts = FakeContacts()
+
+  init() throws {
+    folder = try TemporaryFolder()
+    written = try TestDatabase(in: folder, messagesTables + messagesRows + contactRows)
+    database = try openMessagesDatabase(at: written.path)
+  }
+
+  @Test func aQueryFindsOnePersonsChatsByTheirContactName() throws {
+    let result = try messagesChatList(database, query: "patryk adamkiewicz", limit: 1, contacts: contacts.lookup)
+    #expect(result["total"] as? Int == 2)
+    #expect(result["has_more"] as? Bool == true)
+    #expect(chatIds(result) == ["iMessage;-;+48111"])
+    let chat = chats(result).first
+    #expect(chat?["name"] as? String == "Patryk Adamkiewicz")
+    #expect(chat?["participants"] as? [String] == ["+48111"])
+    #expect(chat?["contact_names"] as? [String: String] == ["+48111": "Patryk Adamkiewicz"])
+    #expect(result["note"] == nil)
+  }
+
+  @Test func aGroupKeepsItsOwnNameAndListsItsMembersNames() throws {
+    let result = try messagesChatList(database, query: "ola", limit: 10, contacts: contacts.lookup)
+    #expect(Set(chatIds(result)) == ["iMessage;+;chat1", "iMessage;+;chat2", "iMessage;+;chat7", "SMS;+;chat7"])
+    #expect(chatIds(result).first == "iMessage;+;chat1")
+    #expect(chats(result).first?["name"] as? String == "Family")
+    #expect(chats(result).first?["contact_names"] as? [String: String] == ["+48222": "Ola"])
+  }
+
+  @Test func namesMatchWithoutCaseOrAccents() throws {
+    #expect(chatIds(try messagesChatList(database, query: "ZOE LACKA", limit: 10, contacts: contacts.lookup)) == ["SMS;-;+48555"])
+    let read = try readMessagesChat(database, ["chat": "zoe łacka"], contacts: contacts.lookup)
+    #expect((read["chat"] as? JSON)?["id"] as? String == "+48555")
+    #expect((read["chat"] as? JSON)?["name"] as? String == "Zoë Łącka")
+  }
+
+  @Test func readingByANameMergesOnePersonsChatsOverEachService() throws {
+    let result = try readMessagesChat(database, ["chat": "Patryk Adamkiewicz"], contacts: contacts.lookup)
+    #expect(ids(result) == [1, 3, 2, 4, 5, 6])
+    #expect((result["chat"] as? JSON)?["id"] as? String == "+48111")
+    #expect((result["chat"] as? JSON)?["name"] as? String == "Patryk Adamkiewicz")
+    let first = messages(result).first
+    #expect(first?["from"] as? String == "+48111")
+    #expect(first?["from_name"] as? String == "Patryk Adamkiewicz")
+    #expect(messages(result).first { $0["from"] as? String == "me" }?["from_name"] == nil)
+  }
+
+  @Test func twoPeopleOfTheSameNameAreAmbiguous() throws {
+    helperError("ambiguous") { try readMessagesChat(database, ["chat": "Anna Nowak"], contacts: contacts.lookup) }
+    let annas = try messagesChatList(database, query: "anna", limit: 10, contacts: contacts.lookup)
+    #expect(Set(chatIds(annas)) == ["iMessage;-;+48444", "iMessage;-;Anna@Example.com"])
+  }
+
+  @Test func businessSendersAreNotLookedUp() throws {
+    let result = try messagesChatList(database, query: "orange", limit: 10, contacts: contacts.lookup)
+    #expect(chatIds(result) == ["SMS;-;Orange"])
+    #expect(chats(result).first?["name"] as? String == "")
+    #expect(chats(result).first?["contact_names"] == nil)
+    #expect(Set(contacts.asked) == [.phone("+48111"), .phone("+48222"), .phone("+48333"), .phone("+48444"), .email("anna@example.com"), .phone("+48555")])
+  }
+
+  @Test func withoutContactsNothingChangesButAQueryThatFindsNothingSaysWhy() throws {
+    let all = try messagesChatList(database, query: nil, limit: 20, contacts: nil)
+    #expect(chats(all).allSatisfy { $0["contact_names"] == nil })
+    #expect(chats(all).first { $0["id"] as? String == "iMessage;-;+48111" }?["name"] as? String == "")
+    #expect(all["note"] == nil)
+    let byName = try messagesChatList(database, query: "Patryk", limit: 20, contacts: nil)
+    #expect(byName["total"] as? Int == 0)
+    #expect(byName["note"] is String)
+    #expect(try messagesChatList(database, query: "+48111", limit: 20, contacts: nil)["note"] == nil)
+    helperError("not_found") { try readMessagesChat(database, ["chat": "Patryk Adamkiewicz"]) }
+    #expect(messages(try readMessagesChat(database, ["chat": "+48111"])).allSatisfy { $0["from_name"] == nil })
+  }
+}
+
 private let whatsAppTables = """
   CREATE TABLE ZWACHATSESSION (Z_PK INTEGER PRIMARY KEY, ZCONTACTJID TEXT, ZPARTNERNAME TEXT, ZLASTMESSAGEDATE REAL);
   CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY, ZCHATSESSION INTEGER, ZISFROMME INTEGER, ZMESSAGEDATE REAL, ZTEXT TEXT,
