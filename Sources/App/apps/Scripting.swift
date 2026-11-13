@@ -86,6 +86,7 @@ private func reportingChange<Value>(_ child: ChildRun, target: String, details g
     case .interrupted: throw HelperError(code: "interrupted", message: "The request was cancelled while \(target) was working, so it was stopped.")
     case .outputHeldOpen: throw outputHeldOpen(target)
     case .outOfTime: throw outOfTime(target)
+    case .unstoppable: throw unstoppable(target, pid: child.pid)
     case .exited:
       guard child.status == 0 else { throw scriptFailure(errors, target: target) }
       return try result()
@@ -106,12 +107,14 @@ private func reportingChange<Value>(_ child: ChildRun, target: String, details g
 struct ChildRun {
   // outputHeldOpen: it exited, but a process it started kept its output open, so what it wrote is not known.
   // outOfTime: it was stopped at the request's deadline, before its own limit.
-  enum End { case exited, timedOut, interrupted, outputHeldOpen, outOfTime }
+  // unstoppable: it was to be stopped, but it still ran after the last signal.
+  enum End { case exited, timedOut, interrupted, outputHeldOpen, outOfTime, unstoppable }
   let end: End
   let status: Int32
   let output: String
   let errors: String
   let timeout: TimeInterval
+  let pid: pid_t
 }
 
 // Runs a child of the helper, which macOS treats as acting for the helper, and kills it when it overruns.
@@ -122,11 +125,18 @@ func runProcess(_ path: String, _ arguments: [String], input: Data? = nil, targe
   case .interrupted: throw HelperError(code: "interrupted", message: "The request was cancelled while \(target) was working, so it was stopped.")
   case .outputHeldOpen: throw outputHeldOpen(target)
   case .outOfTime: throw outOfTime(target)
+  case .unstoppable: throw unstoppable(target, pid: child.pid)
   case .exited: return (child.status, child.output, child.errors)
   }
 }
 
-// Throws only when the child did not start; once it has, how it ended comes back with what it wrote so far.
+// How long a child that was told to stop has to end before it is killed, and to be gone after that.
+private let terminateGraceSeconds = 1.0
+private let killGraceSeconds = 2.0
+
+// Throws only when the child did not start; once it has, how it ended comes back with what it wrote so far. A child
+// that overruns or is cancelled is stopped before this returns, so it never outlives the request and the app's lock
+// that it ran under: see `stopChild`.
 func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target: String, timeout: TimeInterval) throws -> ChildRun {
   let process = Process()
   process.executableURL = URL(fileURLWithPath: path)
@@ -137,8 +147,8 @@ func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target:
   process.standardError = errors
   let inputPipe = input.map { _ in Pipe() }
   process.standardInput = inputPipe ?? FileHandle.nullDevice
-  let finished = DispatchSemaphore(value: 0)
-  process.terminationHandler = { _ in finished.signal() }
+  let watch = ChildWatch()
+  process.terminationHandler = { _ in watch.noteExit() }
   // A request cancelled or out of time before this point starts nothing. A child ends before the request's deadline,
   // leaving time for the reply.
   let connection = currentConnection()
@@ -147,10 +157,9 @@ func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target:
   if let timeLeft, timeLeft <= 0 { throw expiredError }
   let limit = min(timeout, timeLeft ?? timeout)
   try process.run()
-  // A cancelled request ends its child, so a long script or shortcut does not hold the connection. Only a child
-  // that the cancel actually stopped counts as interrupted; one that finished first keeps its result.
-  let interruption = ChildInterruption()
-  let stopWatching = connection?.onCancel { interruption.interrupt(process) }
+  let pid = process.processIdentifier
+  // A cancelled request ends its child, so a long script or shortcut does not hold the connection.
+  let stopWatching = connection?.onCancel { watch.noteCancel() }
   defer { stopWatching?() }
   // Written while the child runs, as a large input would fill the pipe; a child that ends first only fails the write.
   if let input, let inputPipe {
@@ -167,21 +176,50 @@ func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target:
   let outputReader = PipeReader(output.fileHandleForReading)
   let errorReader = PipeReader(errors.fileHandleForReading)
   var end = ChildRun.End.exited
-  if finished.wait(timeout: .now() + limit) == .timedOut {
-    process.terminate()
-    _ = finished.wait(timeout: .now() + 1)
+  switch watch.wait(until: .now() + limit) {
+  case .exited:
+    break
+  case .cancelled:
+    // Only a child the cancel actually stopped counts as interrupted; one that finished first keeps its result.
+    if !stopChild(pid, watch: watch) {
+      end = .unstoppable
+    } else if process.terminationReason == .uncaughtSignal {
+      end = .interrupted
+    }
+  case .timedOut:
     // Cut short by the request's deadline rather than its own limit, the child may have done part of its work.
-    end = limit < timeout ? .outOfTime : .timedOut
+    end = stopChild(pid, watch: watch) ? (limit < timeout ? .outOfTime : .timedOut) : .unstoppable
   }
-  if end == .exited, interruption.happened, process.terminationReason == .uncaughtSignal { end = .interrupted }
   // A process the child started can keep the output open after the child ends; what was read is then incomplete.
   let outputDeadline = DispatchTime.now() + 2
   let out = outputReader.data(by: outputDeadline)
   let err = errorReader.data(by: outputDeadline)
   if end == .exited, out == nil || err == nil { end = .outputHeldOpen }
-  return ChildRun(end: end, status: process.isRunning ? -1 : process.terminationStatus,
+  return ChildRun(end: end, status: watch.hasExited ? process.terminationStatus : -1,
                   output: out.map { String(decoding: $0, as: UTF8.self) } ?? "", errors: err.map { String(decoding: $0, as: UTF8.self) } ?? "",
-                  timeout: timeout)
+                  timeout: timeout, pid: pid)
+}
+
+// Stops a child and what it started: SIGTERM to its process group, then SIGKILL to the group once the grace period
+// passes, and SIGKILL to the group again after the child is gone, for processes it started that ignored SIGTERM.
+// Foundation starts each child as the leader of a process group of its own (observed on macOS 27: the child's pgid
+// is its pid), so the group holds the child and every process it started that did not leave it. A process that
+// left the group (setsid, a daemon) or one launchd starts for it (open, an app) is out of reach and is not
+// stopped. Returns whether the child itself is confirmed gone.
+private func stopChild(_ pid: pid_t, watch: ChildWatch) -> Bool {
+  // The group is signalled only while the child has not been seen to exit: until then its pid, and with it the
+  // group's id, cannot belong to another process. After the exit the id stays the group's while members remain.
+  if !watch.hasExited { kill(-pid, SIGTERM) }
+  if !watch.waitForExit(until: .now() + terminateGraceSeconds) {
+    kill(-pid, SIGKILL)
+    guard watch.waitForExit(until: .now() + killGraceSeconds) else {
+      appLog.error("A child of the helper (pid \(pid, privacy: .public)) still ran after SIGKILL.")
+      return false
+    }
+  }
+  // ESRCH when nothing of the group is left, which is the usual case.
+  kill(-pid, SIGKILL)
+  return true
 }
 
 private func outOfTime(_ target: String) -> HelperError {
@@ -192,19 +230,48 @@ private func outputHeldOpen(_ target: String) -> HelperError {
   HelperError(code: "outcome_unknown", message: "\(target) finished, but a process it started kept its output open, so its result could not be read. Read the state before trying again.")
 }
 
-// Whether a cancel stopped the child: it ends the child only while it runs, and only then counts.
-private final class ChildInterruption: Sendable {
-  private let interrupted = Mutex(false)
+private func unstoppable(_ target: String, pid: pid_t) -> HelperError {
+  HelperError(code: "outcome_unknown", message: "\(target) had to be stopped but still runs (process \(pid)) after it was killed, so it may go on working. Tell the user; read the state before trying again.")
+}
 
-  func interrupt(_ process: Process) {
-    interrupted.withLock { interrupted in
-      guard process.isRunning else { return }
-      interrupted = true
-      process.terminate()
+// What a running child's waiter hears of: the child's exit, and a cancel of the request it runs for.
+private final class ChildWatch: Sendable {
+  enum Event { case exited, cancelled, timedOut }
+  private struct State {
+    var exited = false
+    var cancelled = false
+  }
+  private let state = Mutex(State())
+  private let changed = DispatchSemaphore(value: 0)
+
+  func noteExit() {
+    state.withLock { $0.exited = true }
+    changed.signal()
+  }
+
+  func noteCancel() {
+    state.withLock { $0.cancelled = true }
+    changed.signal()
+  }
+
+  var hasExited: Bool { state.withLock { $0.exited } }
+
+  // The first of an exit, a cancel and the deadline; an exit wins over a cancel that came with it.
+  func wait(until deadline: DispatchTime) -> Event {
+    while true {
+      let now = state.withLock { $0 }
+      if now.exited { return .exited }
+      if now.cancelled { return .cancelled }
+      if changed.wait(timeout: deadline) == .timedOut { return hasExited ? .exited : .timedOut }
     }
   }
 
-  var happened: Bool { interrupted.withLock { $0 } }
+  func waitForExit(until deadline: DispatchTime) -> Bool {
+    while !hasExited {
+      if changed.wait(timeout: deadline) == .timedOut { return hasExited }
+    }
+    return true
+  }
 }
 
 private func scriptFailure(_ text: String, target: String) -> HelperError {

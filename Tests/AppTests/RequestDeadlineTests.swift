@@ -96,6 +96,29 @@ private func code(of error: any Error) -> String? { (error as? HelperError)?.cod
     #expect { try pair.connection.throwIfStopped() } throws: { code(of: $0) == "cancelled" }
   }
 
+  // A child that ignores SIGTERM is still gone when the call returns, with what it started, so it cannot act after
+  // the request and its app's lock have ended. Here it would touch the marker 3 seconds in.
+  @Test(arguments: ["timeout", "cancel"])
+  func aChildThatIgnoresTerminationIsKilledBeforeTheCallReturns(_ stop: String) throws {
+    let pair = try SocketPair()
+    let marker = FileManager.default.temporaryDirectory.appendingPathComponent("unstoppable-\(UUID().uuidString)").path
+    defer { try? FileManager.default.removeItem(atPath: marker) } // swiftlint:disable:this try_without_reason
+    #expect(pair.connection.enqueue(id: "1"))
+    pair.connection.begin(generation: 0, id: "1", deadline: nil)
+    let connection = pair.connection
+    if stop == "cancel" {
+      DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { connection.cancel(requestId: "1") }
+    }
+    let script = "trap '' TERM; (sleep 3; touch \"$0\") & sleep 3; touch \"$0\""
+    let started = Date()
+    #expect {
+      try withCurrentConnection(connection) { try runProcess("/bin/sh", ["-c", script, marker], target: "sh", timeout: stop == "timeout" ? 0.5 : 30) }
+    } throws: { code(of: $0) == (stop == "timeout" ? "timeout" : "interrupted") }
+    #expect(Date().timeIntervalSince(started) < 3)
+    Thread.sleep(forTimeInterval: 3.5)
+    #expect(!FileManager.default.fileExists(atPath: marker))
+  }
+
   // A client that stops reading must not hold the reply's write, and with it the connection's worker and a restart.
   @Test func aReplyToAClientThatStopsReadingGivesUpAtItsDeadline() throws {
     let pair = try SocketPair()
