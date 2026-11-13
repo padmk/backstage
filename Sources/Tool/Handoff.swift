@@ -43,7 +43,7 @@ func execInstalledCommand(state: HandoffState, input: Data, directories: Directo
   var path = Array(template.utf8CString)
   let descriptor = mkstemp(&path)
   guard descriptor >= 0 else { return false }
-  unlink(String(cString: path))
+  unlink(path)
   var header: JSON = ["tools_digest": state.toolsDigest, "generation": state.generation]
   if let name = state.clientName { header["client_name"] = name }
   if !state.computers.isEmpty { header["computers"] = state.computers }

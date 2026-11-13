@@ -29,6 +29,7 @@ final class TemporaryHome {
   var socketPath: String { path + "/helper.sock" }
 }
 
+@discardableResult
 func until<T>(timeout: TimeInterval = 10, _ check: () -> T?) throws -> T {
   let started = Date()
   while Date().timeIntervalSince(started) < timeout {
