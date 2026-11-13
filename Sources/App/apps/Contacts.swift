@@ -182,10 +182,13 @@ private let nameKeys: [CNKeyDescriptor] = [
   CNContactPhoneNumbersKey as CNKeyDescriptor, CNContactEmailAddressesKey as CNKeyDescriptor,
 ]
 
-// Looks handles up in Contacts, each once, when the user has already allowed Contacts; nil otherwise. It never asks
-// macOS for access, so it shows no prompt. Each request makes its own, so the names are as current as the request.
+// Looks handles up in Contacts, each once, when Contacts is on the user's list and macOS allows it; nil otherwise. It
+// never asks macOS for access, so it shows no prompt. Each request makes its own, so the names are as current as the
+// request and follow the list.
 func contactLookup() -> ContactLookup? {
-  guard CNContactStore.authorizationStatus(for: .contacts) == .authorized else { return nil }
+  guard CNContactStore.authorizationStatus(for: .contacts) == .authorized,
+    let contacts = try? installedIdentity(installedApp(contactsKnowledge.bundleId)), ApprovalGate.access(contacts) == .allowed
+  else { return nil }
   var known: [ContactHandle: HandleContact?] = [:]
   return { handle in
     if let found = known[handle] { return found }

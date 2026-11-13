@@ -100,16 +100,24 @@ func requireAllowedPoint(_ point: CGPoint, app: AppIdentity) throws {
     try requireNoMenuUnder(point, app: app, application: application)
     return
   }
+  // A hit on the window or the app itself, or on an element outside any window, says no more than a failed one.
+  let foundRole = stringAttribute(found, kAXRoleAttribute) ?? ""
+  if [kAXWindowRole, kAXApplicationRole].contains(foundRole) {
+    return try requireNoMenuUnder(point, app: app, application: application)
+  }
   var element = found
   for _ in 0..<maxMenuDepth {
     let role = stringAttribute(element, kAXRoleAttribute) ?? ""
     if pointRoles.contains(role) { return try requireAllowedMenu(element, app: app) }
-    guard role != kAXWindowRole, let parent = attribute(element, kAXParentAttribute).map({ $0 as! AXUIElement }) else { return }
+    if role == kAXWindowRole { return }
+    guard let parent = attribute(element, kAXParentAttribute).map({ $0 as! AXUIElement }) else { break }
     element = parent
   }
+  try requireNoMenuUnder(point, app: app, application: application)
 }
 
-// When Accessibility cannot tell what is under a point, as in many custom views and web content, the click goes on
+// When Accessibility cannot tell what is under a point, as in many custom views and web content, or gives only the
+// window, the click goes on
 // unless one of the app's menus is open or one of its windows at menu level covers the point: the item there cannot
 // be checked then.
 private func requireNoMenuUnder(_ point: CGPoint, app: AppIdentity, application: AXUIElement) throws {
