@@ -171,7 +171,7 @@ func runOperation(_ params: JSON, session: ApprovalSession, connection: Connecti
   let arguments = try validated(params["arguments"], for: operation)
   let target = try operationTarget(app)
   try ApprovalGate.require(target, session: session)
-  try connection.throwIfCancelled()
+  try connection.throwIfStopped()
   // One request at a time per app, as for the window tools, also while an operation starts a closed app.
   var locked = target.bundleId
   for _ in 0..<3 {
@@ -211,7 +211,7 @@ private func execute(_ operation: Operation, of app: AppKnowledge, target: AppId
   do {
     // Nothing has acted yet: a failure here leaves no change.
     try requireGrant(for: operation.name, of: target.bundleId)
-    try connection.throwIfCancelled()
+    try connection.throwIfStopped()
   } catch {
     _ = tidyUp()
     throw error

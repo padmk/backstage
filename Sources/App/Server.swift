@@ -108,6 +108,13 @@ final class Connection: Sendable {
     // was cancelled by its id.
     var isCancelled: Bool { isClosed || requestGeneration != generation || runningId.map(cancelledIds.contains) == true }
 
+    // Why the running request must stop: it was cancelled, or the deadline its client gave has passed.
+    func stopReason(at now: Date) -> HelperError? {
+      if isCancelled { return HelperError(code: "cancelled", message: "The request was cancelled.") }
+      if let runningDeadline, now >= runningDeadline { return expiredError }
+      return nil
+    }
+
     mutating func takeCancelHandlers() -> [@Sendable () -> Void] {
       defer { cancelHandlers.removeAll() }
       return Array(cancelHandlers.values)
@@ -139,10 +146,12 @@ final class Connection: Sendable {
 
   var isCancelled: Bool { state.withLock { $0.isCancelled } }
 
-  func throwIfCancelled() throws {
-    if isCancelled {
-      throw HelperError(code: "cancelled", message: "The request was cancelled.")
-    }
+  // Why the running request must stop now, if it must: called while it waits and right before each effect, so a
+  // request whose client has given up does nothing more.
+  var stopReason: HelperError? { state.withLock { $0.stopReason(at: Date()) } }
+
+  func throwIfStopped() throws {
+    if let stopReason { throw stopReason }
   }
 
   func begin(generation captured: Int, id: String?, deadline: Date?) {
@@ -155,6 +164,9 @@ final class Connection: Sendable {
 
   // When the client gives up on the running request, if it said.
   var deadline: Date? { state.withLock { $0.runningDeadline } }
+
+  // The time a child or a wait of the running request may take, leaving time for the reply; nil without a deadline.
+  var timeLeftForWork: TimeInterval? { deadline.map { $0.timeIntervalSinceNow - replyReserveSeconds } }
 
   // Takes a place in this connection's queue, or refuses one beyond the limit.
   func enqueue(id: String?) -> Bool {
@@ -246,19 +258,28 @@ func encodedReply(_ reply: JSON) -> Data {
   return data
 }
 
+// The longest a reply may take to reach its client.
+private let replyWriteSeconds: TimeInterval = 10
+
 private func write(_ reply: JSON, to connection: Connection) {
+  _ = sendReply(reply, to: connection)
+}
+
+// Writes one reply whole, before the next one starts, by a deadline: a client that stops reading is disconnected, so
+// it holds up neither this connection's worker nor a restart. Returns whether the reply was written.
+func sendReply(_ reply: JSON, to connection: Connection, within seconds: TimeInterval = replyWriteSeconds) -> Bool {
   let data = encodedReply(reply)
-  let descriptor = connection.descriptor
-  connection.writeLock.lock()
-  defer { connection.writeLock.unlock() }
-  data.withUnsafeBytes { buffer in
-    var offset = 0
-    while offset < buffer.count {
-      let written = Darwin.write(descriptor, buffer.baseAddress! + offset, buffer.count - offset)
-      if written <= 0 { return }
-      offset += written
-    }
+  let deadline = Date().addingTimeInterval(seconds)
+  guard connection.writeLock.lock(before: deadline) else {
+    connection.disconnect()
+    return false
   }
+  defer { connection.writeLock.unlock() }
+  guard writeAll(connection.descriptor, data, deadline: deadline) else {
+    connection.disconnect()
+    return false
+  }
+  return true
 }
 
 // How many requests run now, so a restart for a new grant waits until none does. None starts once the restart is
@@ -294,12 +315,21 @@ enum RequestActivity {
 }
 
 let expiredError = HelperError(code: "expired", message: "The request waited too long and was not run.")
+// Kept from a request's deadline for writing its reply.
+let replyReserveSeconds: TimeInterval = 0.5
 
 private let connectionKey = "connection"
 
 // The connection whose request runs on this thread, so deep waits such as a script child can end when the
-// request is cancelled without every caller passing it down.
+// request is cancelled or out of time without every caller passing it down.
 func currentConnection() -> Connection? { Thread.current.threadDictionary[connectionKey] as? Connection }
+
+// Runs a request's work with its connection as the current one.
+func withCurrentConnection<T>(_ connection: Connection, _ work: () throws -> T) rethrows -> T {
+  Thread.current.threadDictionary[connectionKey] = connection
+  defer { Thread.current.threadDictionary.removeObject(forKey: connectionKey) }
+  return try work()
+}
 
 private func perform(_ request: JSON, generation: Int, connection: Connection) {
   let id = request["id"] ?? NSNull()
@@ -307,29 +337,28 @@ private func perform(_ request: JSON, generation: Int, connection: Connection) {
   // Milliseconds since 1970.
   let deadline = (request["deadline"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
   connection.begin(generation: generation, id: key, deadline: deadline)
-  Thread.current.threadDictionary[connectionKey] = connection
   let admitted = RequestActivity.started()
   defer {
     if admitted { RequestActivity.ended() }
-    Thread.current.threadDictionary.removeObject(forKey: connectionKey)
     connection.finish(id: key)
   }
-  do {
-    guard admitted else {
-      throw HelperError(code: "restarting", message: "Backstage is restarting to pick up a permission the user just allowed. Try again in a few seconds.")
+  let reply: JSON = withCurrentConnection(connection) {
+    do {
+      guard admitted else {
+        throw HelperError(code: "restarting", message: "Backstage is restarting to pick up a permission the user just allowed. Try again in a few seconds.")
+      }
+      try connection.throwIfStopped()
+      let params = request["params"] as? JSON ?? [:]
+      let method = request["method"] as? String ?? ""
+      if method == "hello", let sessionId = params["session_id"] as? String { connection.adopt(sessionId: sessionId) }
+      return ["id": id, "result": try handle(method: method, params: params, connection: connection)]
+    } catch let error as HelperError {
+      return ["id": id, "error": ["code": error.code, "message": error.message]]
+    } catch {
+      return ["id": id, "error": ["code": "failed", "message": error.localizedDescription]]
     }
-    try connection.throwIfCancelled()
-    if let deadline, Date() > deadline { throw expiredError }
-    let params = request["params"] as? JSON ?? [:]
-    let method = request["method"] as? String ?? ""
-    if method == "hello", let sessionId = params["session_id"] as? String { connection.adopt(sessionId: sessionId) }
-    let result = try handle(method: method, params: params, connection: connection)
-    write(["id": id, "result": result], to: connection)
-  } catch let error as HelperError {
-    write(["id": id, "error": ["code": error.code, "message": error.message]], to: connection)
-  } catch {
-    write(["id": id, "error": ["code": "failed", "message": error.localizedDescription]], to: connection)
   }
+  write(reply, to: connection)
 }
 
 private func serve(_ descriptor: Int32) {

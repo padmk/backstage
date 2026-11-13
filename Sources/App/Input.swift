@@ -126,9 +126,10 @@ func postKey(_ combination: KeyCombination, pid: pid_t) throws {
 
 func postText(_ text: String, pid: pid_t) throws {
   for (sent, character) in text.enumerated() {
-    // A cancel stops the typing between characters; what was typed stays, so the outcome is unknown.
-    if currentConnection()?.isCancelled == true {
-      throw HelperError(code: sent == 0 ? "cancelled" : "outcome_unknown", message: sent == 0 ? "The request was cancelled." : "Cancelled after \(sent) characters were typed. Read the state before trying again.")
+    // A cancel or the deadline stops the typing between characters; what was typed stays, so the outcome is unknown.
+    if let stop = currentConnection()?.stopReason {
+      if sent == 0 { throw stop }
+      throw HelperError(code: "outcome_unknown", message: "Stopped (\(stop.code)) after \(sent) characters were typed. Read the state before trying again.")
     }
     let units = Array(String(character).utf16)
     for down in [true, false] {
