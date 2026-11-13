@@ -303,6 +303,7 @@ func postForegroundClick(at point: CGPoint, window: AXUIElement, pid: pid_t, cou
   defer {
     if let cursor { CGWarpMouseCursorPosition(cursor) }
     CGAssociateMouseAndMouseCursorPosition(1)
+    noteOwnSystemInput()
   }
   guard let moved = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else {
     throw HelperError(code: "action_failed", message: "Could not create a mouse event.")
@@ -310,6 +311,7 @@ func postForegroundClick(at point: CGPoint, window: AXUIElement, pid: pid_t, cou
   moved.flags = []
   try requireOwnWindowOnTop(at: point, pid: pid)
   moved.post(tap: .cghidEventTap)
+  noteOwnSystemInput()
   sleep(seconds: pointerEventGap)
   for click in 1...min(max(1, count), 3) {
     for type in [style.types.down, style.types.up] {
@@ -321,6 +323,7 @@ func postForegroundClick(at point: CGPoint, window: AXUIElement, pid: pid_t, cou
       event.flags = style.flags
       event.setIntegerValueField(.mouseEventClickState, value: Int64(click))
       event.post(tap: .cghidEventTap)
+      noteOwnSystemInput()
       sleep(seconds: pointerEventGap)
     }
   }

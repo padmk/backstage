@@ -30,6 +30,13 @@ func runActions(app: AppIdentity, params: JSON, session: ApprovalSession) throws
     if index > 0 { sleep(seconds: stepPauseSeconds) }
     do {
       try currentConnection()?.throwIfCancelled()
+      // The request was checked before the first step; the user may start working, the app quit or the screen lock
+      // while the steps run.
+      if index > 0 {
+        try requireSameProcess(app)
+        try requireScreenUnlocked("run_actions", params: params, app: app, session: session)
+        try requireUserNotWorking(in: app)
+      }
       var arguments = step
       arguments["tool"] = nil
       arguments["app"] = params["app"]

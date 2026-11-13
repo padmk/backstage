@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `user_active` also covers an app in the background: scrolling, dragging or clicking over its window in the last 2 s refuses an action there. Scrolling now counts at all; macOS keeps no time for it in the state Backstage read. A click with `foreground: true` no longer counts as the user's own input.
+- `run_actions` checks the app, the screen lock and `user_active` again before each step after the first, and reports the steps that ran when it stops.
+- A click where Accessibility cannot tell what lies under the point is refused while the app shows a menu, since the item there cannot be checked against the Apple, Services and Share menus. A click on a part of such an item, such as its image, is checked as the item.
+- `launch_app` looks at `files` only for an app on the list, so a refusal no longer depends on whether a path exists.
+
 ## 0.2.3
 
 - Every tool takes `computer`, the name `ssh` reaches another of the user's Macs under, and runs there through that Mac's installed Backstage, with its own app list and checks. One SSH connection per Mac stays open for the session, so element numbers keep their meaning; a Mac that cannot be reached, or has no Backstage, answers `computer_unreachable`. No entry per Mac is needed in the MCP client.
