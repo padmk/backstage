@@ -238,6 +238,9 @@ private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
     #expect(hellos[0]["session_id"] as? String == hellos[1]["session_id"] as? String)
     #expect(hellos[0]["first_element_number"] == nil)
     #expect((hellos[1]["first_element_number"] as? Int ?? 0) > 100_000)
+    // Each range ends where the next connection's begins, and the helper stops numbering there.
+    #expect(hellos[0]["element_number_limit"] as? Int == hellos[1]["first_element_number"] as? Int)
+    #expect(hellos[1]["element_number_limit"] as? Int == (hellos[1]["first_element_number"] as? Int ?? 0) + 1_000_000)
   }
 
   // MARK: Builds

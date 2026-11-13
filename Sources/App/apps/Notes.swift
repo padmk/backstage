@@ -112,6 +112,7 @@ private let create = Operation(
   try dictionary(runScript(script(#"""
     const folder = args.folder ? folderNamed(args.folder) : Notes.defaultAccount().defaultFolder();
     const html = '<div><h1>' + escape(args.title) + '</h1></div>' + (args.text ? paragraphs(args.text) : '');
+    changeBegins({ title: args.title });
     const made = Notes.make({ new: 'note', at: folder, withProperties: { body: html } });
     // The note exists from here on, so a failure to read it back must not look like nothing happened.
     try {

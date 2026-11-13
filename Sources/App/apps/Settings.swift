@@ -22,6 +22,7 @@ private let setAppearance = Operation(
   let wanted = try string(arguments, "mode")
   let dark = try runScript(#"""
     const preferences = Application('System Events').appearancePreferences;
+    changeBegins({ mode: args.mode });
     preferences.darkMode = args.mode === 'dark';
     return preferences.darkMode();
     """#, arguments: arguments, target: systemEvents) as? Bool
@@ -32,6 +33,7 @@ private let setAppearance = Operation(
 private let volumeScript = #"""
   const app = Application.currentApplication();
   app.includeStandardAdditions = true;
+  if (args.level !== undefined || args.muted !== undefined) changeBegins({ level: args.level, muted: args.muted });
   if (args.level !== undefined) app.setVolume(null, { outputVolume: args.level });
   if (args.muted !== undefined) app.setVolume(null, { outputMuted: args.muted });
   const settings = app.getVolumeSettings();

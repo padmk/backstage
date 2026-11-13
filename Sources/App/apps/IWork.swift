@@ -3,6 +3,17 @@
 
 import Foundation
 
+// Where a document's file is: its path, '' for a document that has no file, or null when the app did not say, which
+// reachableDocumentPath refuses.
+let documentFile = #"""
+  function fileOf(document) {
+    let file;
+    try { file = document.file(); } catch (error) { return null; }
+    if (file === null || file === undefined) return '';
+    try { return file.toString(); } catch (error) { return null; }
+  }
+  """#
+
 private let prelude = #"""
   const App = Application(args.app_id);
   const fail = (code, text) => { throw new Error(code + ': ' + text); };
@@ -12,37 +23,53 @@ private let prelude = #"""
     const byId = App.documents.byId(query);
     let found = true;
     try { byId.name(); } catch (error) { found = false; }
-    if (found) return reachable(byId);
+    if (found) return byId;
     const matches = App.documents.whose({ name: query });
     const count = matches.length;
     if (count === 0) fail('not_found', 'No open document is named ' + query + '. Use list_documents.');
     if (count > 1) fail('ambiguous', 'Several open documents are named ' + query + '. Give its id.');
-    return reachable(App.documents.byId(matches[0].id()));
+    return App.documents.byId(matches[0].id());
   }
-  // A document already open from elsewhere, such as /tmp or Library, is outside what operations may touch; the
-  // rule is UserPaths.swift's, given as its prefixes and pattern.
-  function reachable(document) {
-    let path = '';
-    try { path = document.file().toString(); } catch (error) {}
-    const library = args.library_dir;
-    const inLibrary = path === library || path.startsWith(library + '/');
-    const allowed = inLibrary ? args.library_reachable.some((prefix) => path.startsWith(prefix))
-      : path.startsWith(args.home_dir + '/') || (path.startsWith('/Volumes/') && !new RegExp(args.volume_refused, 'i').test(path));
-    if (path !== '' && !allowed) {
-      fail('not_allowed', 'This document is not in your home folder outside Library, in iCloud Drive or on an external volume, so operations cannot reach it.');
-    }
+  \#(documentFile)
+  // The document whose place the helper checked, by id, as long as it is still where the check found it.
+  function checkedDocument() {
+    const document = App.documents.byId(args.document_id);
+    let found = true;
+    try { document.name(); } catch (error) { found = false; }
+    if (!found) fail('not_found', 'The document was closed meanwhile. Use list_documents.');
+    if (fileOf(document) !== args.document_path) fail('action_failed', 'The document was saved elsewhere meanwhile, so nothing was done. Try again.');
     return document;
   }
   function describe(document) {
-    let path = '';
-    try { path = document.file().toString(); } catch (error) {}
-    return { id: document.id(), name: document.name(), path: path, modified: document.modified() };
+    return { id: document.id(), name: document.name(), path: fileOf(document), modified: document.modified() };
   }
   """#
 
 // The app is the one runOperation chose, passed as app_id; the definition's own id is the fallback.
 private func run(_ body: String, app: String, _ arguments: JSON, name: String, timeout: TimeInterval = 60) throws -> JSON {
-  try dictionary(runScript(prelude + body, arguments: arguments.merging(["app_id": app]) { current, _ in current }.merging(["home_dir": resolvedHome, "library_dir": libraryFolder, "library_reachable": reachableInLibrary, "volume_refused": anotherLibraryOrBackup]) { _, rule in rule }, target: name, timeout: timeout), from: name)
+  try dictionary(runScript(prelude + body, arguments: arguments.merging(["app_id": app]) { current, _ in current }, target: name, timeout: timeout), from: name)
+}
+
+// A document's file as the script read it, checked by the path rule in UserPaths.swift: its path, or "" for a
+// document without a file. A document open from elsewhere, such as /tmp or Library, is refused, and so is one
+// whose place the app did not give, since it could be anywhere.
+func reachableDocumentPath(_ value: Any?, home: String = resolvedHome) throws -> String {
+  guard let path = value as? String else {
+    throw HelperError(code: "action_failed", message: "The app did not say where this document is saved, so operations do not touch it. Try again in a moment.")
+  }
+  guard path.isEmpty || reportablePath(path, home: home) != nil else {
+    throw HelperError(code: "not_allowed", message: "This document is not in your home folder outside Library, in iCloud Drive or on an external volume, so operations cannot reach it.")
+  }
+  return path
+}
+
+// Finds the document by id or name and checks where it is saved, before a script that acts on it runs: that script
+// gets the arguments plus the document's id and checked path, and reaches it through checkedDocument().
+private func checkedDocumentArguments(_ arguments: JSON, app: String, name: String) throws -> JSON {
+  let found = try run("const document = documentNamed(args.document); return { id: document.id(), path: fileOf(document) };",
+                      app: app, ["document": try string(arguments, "document"), "app_id": arguments["app_id"] ?? app], name: name)
+  guard let id = found["id"] as? String, !id.isEmpty else { throw HelperError(code: "action_failed", message: "\(name) gave no id for the document.") }
+  return arguments.merging(["document_id": id, "document_path": try reachableDocumentPath(found["path"])]) { $1 }
 }
 
 private let documentArgument = Argument(name: "document", kind: .string, required: true, description: "Document id or name from list_documents")
@@ -52,10 +79,16 @@ private let pathArgument = Argument(name: "path", kind: .string, required: true,
 private func documentOperations(app: String, name: String) -> [Operation] {
   let list = Operation(name: "list_documents", summary: "List open documents with their files", effect: .reads, arguments: []) { arguments in
     var result = try run("return { documents: App.documents().map(describe) };", app: app, arguments, name: name)
-    // A document from outside the reachable set is listed without its path.
+    // A document from outside the reachable set is listed without its path, and so is one whose place the app did
+    // not give.
     result["documents"] = (result["documents"] as? [JSON] ?? []).map { document in
       var entry = document
-      if let path = document["path"] as? String, !path.isEmpty, reportablePath(path) == nil {
+      guard let path = document["path"] as? String else {
+        entry["path"] = ""
+        entry["path_unknown"] = true
+        return entry
+      }
+      if !path.isEmpty, reportablePath(path) == nil {
         entry["path"] = ""
         entry["outside_reach"] = true
       }
@@ -65,9 +98,14 @@ private func documentOperations(app: String, name: String) -> [Operation] {
   }
   let open = Operation(name: "open", summary: "Open a file as a document, behind the app you are in", effect: .changes, arguments: [pathArgument]) { arguments in
     let url = try userPath(arguments, followingLink: true)
-    var result = try run("return describe(App.open(Path(args.path)));", app: app, ["path": url.path, "app_id": arguments["app_id"] ?? app], name: name)
+    var result = try run("changeBegins({ path: args.path }); return describe(App.open(Path(args.path)));", app: app, ["path": url.path, "app_id": arguments["app_id"] ?? app], name: name)
     // A file in another format, such as CSV or plain text, opens as a new document with no file of its own.
-    let path = result["path"] as? String ?? ""
+    guard let path = result["path"] as? String else {
+      result["path"] = ""
+      result["path_unknown"] = true
+      result["verified"] = false
+      return result
+    }
     if path.isEmpty { result["imported"] = true }
     result["verified"] = path.isEmpty ? (result["id"] as? String)?.isEmpty == false : URL(fileURLWithPath: path).standardizedFileURL.path == url.path
     return result
@@ -86,9 +124,10 @@ private func documentOperations(app: String, name: String) -> [Operation] {
     // A short name of its own, so a long destination name still fits the file system's limit.
     let staging = url.deletingLastPathComponent().appendingPathComponent(".export-\(UUID().uuidString).pdf")
     defer { try? FileManager.default.removeItem(at: staging) }
+    let document = try checkedDocumentArguments(arguments, app: app, name: name)
     do {
-      _ = try run("App.export(documentNamed(args.document), { to: Path(args.path), as: 'PDF' }); return {};",
-                  app: app, ["document": try string(arguments, "document"), "path": staging.path, "app_id": arguments["app_id"] ?? app], name: name, timeout: 120)
+      _ = try run("const document = checkedDocument(); changeBegins({ document: args.document_id, path: args.path }); App.export(document, { to: Path(args.path), as: 'PDF' }); return {};",
+                  app: app, document.merging(["path": staging.path]) { $1 }, name: name, timeout: 120)
     } catch {
       // The app may still finish an export the script gave up on, so the hidden file is removed again later.
       for minutes in [2.0, 10.0] {
@@ -109,16 +148,17 @@ private func documentOperations(app: String, name: String) -> [Operation] {
     arguments: [documentArgument, Argument(name: "save", kind: .boolean, required: true, description: "true saves to its file first; false discards unsaved changes")]
   ) { arguments in
     try run(#"""
-      const document = documentNamed(args.document);
+      const document = checkedDocument();
       // Saving a document that has no file would open a save dialog.
-      if (args.save && describe(document).path === '') fail('not_allowed', 'This document has no file yet, so it cannot be saved here. Export it, or close it without saving.');
+      if (args.save && args.document_path === '') fail('not_allowed', 'This document has no file yet, so it cannot be saved here. Export it, or close it without saving.');
       const closed = describe(document);
+      changeBegins({ document: closed.id, name: closed.name });
       document.close({ saving: args.save ? 'yes' : 'no' });
       let open = true;
       try { App.documents.byId(closed.id).name(); } catch (error) { open = false; }
       closed.verified = !open;
       return closed;
-      """#, app: app, arguments, name: name)
+      """#, app: app, try checkedDocumentArguments(arguments, app: app, name: name), name: name)
   }
   return [list, open, exportPDF, close]
 }
@@ -131,13 +171,13 @@ private let earlierPagesId = "com.apple.iWork.Pages"
 
 private let readText = Operation(name: "read_text", summary: "Read a document's body text", effect: .reads, arguments: [documentArgument]) { arguments in
   try run(#"""
-    const document = documentNamed(args.document);
+    const document = checkedDocument();
     const text = document.bodyText() || '';
     const result = describe(document);
     result.text = text.slice(0, 100000);
     if (text.length > 100000) result.text_truncated = true;
     return result;
-    """#, app: pagesId, arguments, name: "Pages")
+    """#, app: pagesId, try checkedDocumentArguments(arguments, app: pagesId, name: "Pages"), name: "Pages")
 }
 
 let pagesKnowledge = AppKnowledge(
@@ -182,7 +222,7 @@ private let readTable = Operation(
   given["rows"] = arguments["rows"] as? Int ?? 50
   given["first_row"] = arguments["first_row"] as? Int ?? 1
   return try run(findTable + #"""
-    const document = documentNamed(args.document);
+    const document = checkedDocument();
     const { sheet, table } = tableIn(document);
     const rowCount = table.rowCount();
     const first = args.first_row - 1;
@@ -190,7 +230,7 @@ private let readTable = Operation(
     return { document: describe(document), sheets: document.sheets().map((item) => ({ name: item.name(), tables: item.tables.name() })),
       sheet: sheet.name(), table: table.name(), row_count: rowCount, column_count: table.columnCount(), first_row: args.first_row, rows: rows,
       has_more: rowCount > first + rows.length };
-    """#, app: numbersId, given, name: "Numbers")
+    """#, app: numbersId, try checkedDocumentArguments(given, app: numbersId, name: "Numbers"), name: "Numbers")
 }
 
 private let setCell = Operation(
@@ -205,17 +245,18 @@ private let setCell = Operation(
     throw HelperError(code: "invalid_arguments", message: "cell must be an address such as B2.")
   }
   return try run(findTable + #"""
-    const document = documentNamed(args.document);
+    const document = checkedDocument();
     const { sheet, table } = tableIn(document);
     const cell = table.cells.byName(args.cell);
     try { cell.name(); } catch (error) { fail('not_found', 'The table has no cell ' + args.cell + '.'); }
+    changeBegins({ document: args.document_id, sheet: sheet.name(), table: table.name(), cell: args.cell });
     cell.value = args.value;
     const shown = cell.formattedValue();
     const stored = cell.value();
     const result = { document: describe(document), sheet: sheet.name(), table: table.name(), cell: args.cell, shown: shown === null ? '' : shown };
     result.verified = args.value === '' ? stored === null : (String(stored) === args.value || result.shown === args.value || (stored !== null && Number(args.value) === stored));
     return result;
-    """#, app: numbersId, arguments.merging(["cell": cell]) { $1 }, name: "Numbers")
+    """#, app: numbersId, try checkedDocumentArguments(arguments.merging(["cell": cell]) { $1 }, app: numbersId, name: "Numbers"), name: "Numbers")
 }
 
 private let maxCells = 500
@@ -253,7 +294,7 @@ private let setCells = Operation(
   var given = arguments
   given["values"] = try cellValues(try string(arguments, "values"))
   return try run(findTable + #"""
-    const document = documentNamed(args.document);
+    const document = checkedDocument();
     const { sheet, table } = tableIn(document);
     const addresses = Object.keys(args.values).sort();
     const targets = addresses.map((address) => {
@@ -261,24 +302,22 @@ private let setCells = Operation(
       try { cell.name(); } catch (error) { fail('not_found', 'The table has no cell ' + address + '. Nothing was changed.'); }
       return cell;
     });
-    // Once a cell is written, a failure leaves the earlier ones changed, so it reports what was done.
+    // Once a cell is written, a failure leaves the earlier ones changed, so each write first says which cells are
+    // set and which one is being written.
     const results = [];
+    const where = { document: args.document_id, sheet: sheet.name(), table: table.name() };
     for (let index = 0; index < addresses.length; index++) {
       const address = addresses[index];
       const value = args.values[address];
-      try {
-        targets[index].value = value;
-        const shown = targets[index].formattedValue();
-        const stored = targets[index].value();
-        const verified = value === '' ? stored === null : (String(stored) === value || shown === value || (stored !== null && Number(value) === stored));
-        results.push({ cell: address, shown: shown === null ? '' : shown, verified: verified });
-      } catch (error) {
-        fail('outcome_unknown', 'Writing ' + address + ' failed (' + error.message + '), after ' + results.length + ' cells were set: '
-          + JSON.stringify(results) + '. ' + address + ' may have changed; read the table before trying again.');
-      }
+      changeBegins(Object.assign({ writing: address, set: results.map((item) => item.cell) }, where));
+      targets[index].value = value;
+      const shown = targets[index].formattedValue();
+      const stored = targets[index].value();
+      const verified = value === '' ? stored === null : (String(stored) === value || shown === value || (stored !== null && Number(value) === stored));
+      results.push({ cell: address, shown: shown === null ? '' : shown, verified: verified });
     }
     return { document: describe(document), sheet: sheet.name(), table: table.name(), cells: results, verified: results.every((item) => item.verified) };
-    """#, app: numbersId, given, name: "Numbers", timeout: 120)
+    """#, app: numbersId, try checkedDocumentArguments(given, app: numbersId, name: "Numbers"), name: "Numbers", timeout: 120)
 }
 
 let numbersKnowledge = AppKnowledge(

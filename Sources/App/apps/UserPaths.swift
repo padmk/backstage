@@ -7,9 +7,6 @@ let resolvedHome = URL(fileURLWithPath: NSHomeDirectory()).resolvingSymlinksInPa
 
 // Library holds other apps' data, which macOS guards per app; with Full Disk Access, which the WhatsApp operations
 // need, nothing else would, so only iCloud Drive and cloud storage folders in it are reachable.
-let libraryFolder = resolvedHome + "/Library"
-let reachableInLibrary = reachableFolders(inLibrary: libraryFolder)
-
 private func reachableFolders(inLibrary library: String) -> [String] {
   ["/Mobile Documents/", "/CloudStorage/"].map { library + $0 }
 }
@@ -23,8 +20,8 @@ func isReachablePath(_ path: String, home: String = resolvedHome) -> Bool {
 }
 
 // Another volume can hold a copy of a home folder, such as a mounted system's Data volume, or Time Machine's
-// backups: their Library folders and backup trees are refused whole. A pattern, so iWork's scripts share it.
-let anotherLibraryOrBackup = #"/(users/[^/]+/library|backups\.backupdb|\.timemachine)(/|$)"#
+// backups: their Library folders and backup trees are refused whole.
+private let anotherLibraryOrBackup = #"/(users/[^/]+/library|backups\.backupdb|\.timemachine)(/|$)"#
 
 private func holdsAnotherLibraryOrBackup(_ path: String) -> Bool {
   path.range(of: anotherLibraryOrBackup, options: [.regularExpression, .caseInsensitive]) != nil

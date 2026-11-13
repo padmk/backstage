@@ -8,11 +8,20 @@ import Foundation
 private let osascript = "/usr/bin/osascript"
 private let defaultScriptSeconds: TimeInterval = 30
 
+// What a script writes to its standard error, alone on a line, when it may start to change something; JSON
+// details may follow on the line. From then on a failure, whatever its kind, may leave the change made.
+private let changeMarker = "\u{1}change_began\u{1}"
+
 // The body sees the arguments as `args` and returns a value that becomes the result. It reports a known
-// problem by throwing an Error whose message starts with an error code, such as "not_found: ...".
+// problem by throwing an Error whose message starts with an error code, such as "not_found: ...". Right before
+// its first command that may change something, it calls `changeBegins(details)` with what identifies the change,
+// such as a document id and a cell; every failure after that is reported as outcome_unknown with those details.
 func runScript(_ body: String, arguments: JSON = [:], target: String, timeout: TimeInterval = defaultScriptSeconds) throws -> Any {
   let source = """
     ObjC.import('Foundation');
+    function changeBegins(details) {
+      console.log(\(jsonText(changeMarker)) + JSON.stringify(details === undefined ? {} : details));
+    }
     function run() {
       const input = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
       const args = JSON.parse($.NSString.alloc.initWithDataEncoding(input, $.NSUTF8StringEncoding).js);
@@ -23,20 +32,21 @@ func runScript(_ body: String, arguments: JSON = [:], target: String, timeout: T
     }
     """
   let input = try JSONSerialization.data(withJSONObject: arguments)
-  let finished = try runProcess(osascript, ["-l", "JavaScript", "-e", source], input: input, target: target, timeout: timeout)
-  guard finished.status == 0 else {
-    throw scriptFailure(finished.errors, target: target)
+  let child = try runChild(osascript, ["-l", "JavaScript", "-e", source], input: input, target: target, timeout: timeout)
+  return try reportingChange(child, target: target) {
+    let text = child.output.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let data = text.data(using: .utf8), let value = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
+      throw HelperError(code: "action_failed", message: "\(target) gave an answer that could not be read.")
+    }
+    return value
   }
-  let text = finished.output.trimmingCharacters(in: .whitespacesAndNewlines)
-  guard let data = text.data(using: .utf8), let value = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
-    throw HelperError(code: "action_failed", message: "\(target) gave an answer that could not be read.")
-  }
-  return value
 }
 
 // For the few commands JavaScript for Automation cannot address reliably. The script's `on main(argv)` receives the
 // arguments as a list of strings, read from standard input as for JavaScript, and its result comes back as text.
-func runAppleScript(_ source: String, arguments: [String], target: String, timeout: TimeInterval = defaultScriptSeconds) throws -> String {
+// Right before its first command that may change something it calls `my changeBegins()`, and `changeDetails` then
+// names the change in an outcome_unknown; they stay out of the script's text like every argument.
+func runAppleScript(_ source: String, arguments: [String], target: String, timeout: TimeInterval = defaultScriptSeconds, changeDetails: JSON = [:]) throws -> String {
   let reader = """
     use framework "Foundation"
     use scripting additions
@@ -44,15 +54,69 @@ func runAppleScript(_ source: String, arguments: [String], target: String, timeo
       set input to current application's NSFileHandle's fileHandleWithStandardInput()'s readDataToEndOfFile()
       return main((current application's NSJSONSerialization's JSONObjectWithData:input options:0 |error|:(missing value)) as list)
     end run
+    on changeBegins()
+      log (character id 1) & "change_began" & (character id 1)
+    end changeBegins
     """
   let input = try JSONSerialization.data(withJSONObject: arguments)
-  let finished = try runProcess(osascript, ["-e", reader + "\n" + source], input: input, target: target, timeout: timeout)
-  guard finished.status == 0 else { throw scriptFailure(finished.errors, target: target) }
-  return finished.output.trimmingCharacters(in: .whitespacesAndNewlines)
+  let child = try runChild(osascript, ["-e", reader + "\n" + source], input: input, target: target, timeout: timeout)
+  return try reportingChange(child, target: target, details: changeDetails) { child.output.trimmingCharacters(in: .whitespacesAndNewlines) }
+}
+
+// A string as a JavaScript literal.
+private func jsonText(_ text: String) -> String {
+  let data = (try? JSONSerialization.data(withJSONObject: [text], options: [.fragmentsAllowed])) ?? Data("[\"\"]".utf8)
+  return String(String(decoding: data, as: UTF8.self).dropFirst().dropLast())
+}
+
+// The one place a script's end becomes its result or its error. Once the script said a change began, any failure
+// (its own error, a timeout, a cancel, an answer that cannot be read) is outcome_unknown, naming what it changed;
+// before that, failures keep their own codes, since nothing has changed yet.
+private func reportingChange<Value>(_ child: ChildRun, target: String, details given: JSON = [:], result: () throws -> Value) throws -> Value {
+  let lines = child.errors.split(separator: "\n", omittingEmptySubsequences: false)
+  let marks = lines.filter { $0.hasPrefix(changeMarker) }
+  let errors = lines.filter { !$0.hasPrefix(changeMarker) }.joined(separator: "\n")
+  do {
+    switch child.end {
+    case .timedOut: throw HelperError(code: "timeout", message: "\(target) did not answer within \(Int(child.timeout)) seconds.")
+    case .interrupted: throw HelperError(code: "interrupted", message: "The request was cancelled while \(target) was working, so it was stopped.")
+    case .exited:
+      guard child.status == 0 else { throw scriptFailure(errors, target: target) }
+      return try result()
+    }
+  } catch let error as HelperError {
+    guard let mark = marks.last, error.code != "outcome_unknown" else { throw error }
+    var details = mark.dropFirst(changeMarker.count).trimmingCharacters(in: .whitespaces)
+    if details.isEmpty || details == "{}", !given.isEmpty, let data = try? JSONSerialization.data(withJSONObject: given, options: [.sortedKeys]) {
+      details = String(decoding: data, as: UTF8.self)
+    }
+    let what = details.isEmpty || details == "{}" ? "" : " It concerned \(details)."
+    throw HelperError(code: "outcome_unknown", message: "\(target) may have made the change: \(error.message)\(what) Read the state before trying again.")
+  }
+}
+
+// How a child of the helper ended, with what it wrote.
+struct ChildRun {
+  enum End { case exited, timedOut, interrupted }
+  let end: End
+  let status: Int32
+  let output: String
+  let errors: String
+  let timeout: TimeInterval
 }
 
 // Runs a child of the helper, which macOS treats as acting for the helper, and kills it when it overruns.
 func runProcess(_ path: String, _ arguments: [String], input: Data? = nil, target: String, timeout: TimeInterval) throws -> (status: Int32, output: String, errors: String) {
+  let child = try runChild(path, arguments, input: input, target: target, timeout: timeout)
+  switch child.end {
+  case .timedOut: throw HelperError(code: "timeout", message: "\(target) did not answer within \(Int(timeout)) seconds.")
+  case .interrupted: throw HelperError(code: "interrupted", message: "The request was cancelled while \(target) was working, so it was stopped.")
+  case .exited: return (child.status, child.output, child.errors)
+  }
+}
+
+// Throws only when the child did not start; once it has, how it ended comes back with what it wrote so far.
+func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target: String, timeout: TimeInterval) throws -> ChildRun {
   let process = Process()
   process.executableURL = URL(fileURLWithPath: path)
   process.arguments = arguments
@@ -90,6 +154,7 @@ func runProcess(_ path: String, _ arguments: [String], input: Data? = nil, targe
   }
 
   // Read while it runs, because a large result would fill the pipe and stall the child.
+  let collected = NSLock()
   var outputData = Data()
   var errorData = Data()
   let readers = DispatchGroup()
@@ -97,20 +162,21 @@ func runProcess(_ path: String, _ arguments: [String], input: Data? = nil, targe
     readers.enter()
     DispatchQueue.global().async {
       let data = pipe.fileHandleForReading.readDataToEndOfFile()
-      if isOutput { outputData = data } else { errorData = data }
+      collected.withLock { if isOutput { outputData = data } else { errorData = data } }
       readers.leave()
     }
   }
+  var end = ChildRun.End.exited
   if finished.wait(timeout: .now() + timeout) == .timedOut {
     process.terminate()
     _ = finished.wait(timeout: .now() + 1)
-    throw HelperError(code: "timeout", message: "\(target) did not answer within \(Int(timeout)) seconds.")
+    end = .timedOut
   }
   _ = readers.wait(timeout: .now() + 2)
-  if stopped.withLock({ interrupted }), process.terminationReason == .uncaughtSignal {
-    throw HelperError(code: "interrupted", message: "The request was cancelled while \(target) was working, so it was stopped.")
-  }
-  return (process.terminationStatus, String(data: outputData, encoding: .utf8) ?? "", String(data: errorData, encoding: .utf8) ?? "")
+  if end == .exited, stopped.withLock({ interrupted }), process.terminationReason == .uncaughtSignal { end = .interrupted }
+  let (out, err) = collected.withLock { (outputData, errorData) }
+  return ChildRun(end: end, status: process.isRunning ? -1 : process.terminationStatus,
+                  output: String(data: out, encoding: .utf8) ?? "", errors: String(data: err, encoding: .utf8) ?? "", timeout: timeout)
 }
 
 private func scriptFailure(_ text: String, target: String) -> HelperError {

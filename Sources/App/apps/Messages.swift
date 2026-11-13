@@ -35,17 +35,21 @@ private let listChats = Operation(
     """#, arguments: ["limit": limit(arguments), "query": optionalString(arguments, "query") ?? ""], target: target), from: target)
 }
 
-// A chat id from list_chats contains semicolons ("iMessage;-;+15555550100"); anything else is a handle.
+// A chat id from list_chats contains semicolons ("iMessage;-;+15555550100"); anything else is a handle. The
+// recipient is looked up before the change begins, so one that does not exist fails as not_found, while any failure
+// of the send itself may have sent the message.
 private let sendScript = """
   on main(argv)
     set destination to item 1 of argv
     set message to item 2 of argv
     tell application "Messages"
       if destination contains ";" then
-        send message to chat id destination
+        set addressee to get chat id destination
       else
-        send message to participant destination of (first account whose service type = iMessage)
+        set addressee to get participant destination of (first account whose service type = iMessage)
       end if
+      my changeBegins()
+      send message to addressee
     end tell
     return "sent"
   end main
@@ -68,7 +72,7 @@ private let send = Operation(
   // While the screen is locked the chat list cannot be read, so the message goes out unchecked.
   let locked = isScreenLocked()
   let before = checkable ? chatLabels(containing: text) : nil
-  _ = try runAppleScript(sendScript, arguments: [destination, text], target: target)
+  _ = try runAppleScript(sendScript, arguments: [destination, text], target: target, changeDetails: ["to": destination])
   // Scripting cannot read messages, but each chat in the window's list is labelled with its latest message, so
   // a new label holding the text shows the message was sent.
   // Without a list read before sending, an older label with the same text could pass for the new one.

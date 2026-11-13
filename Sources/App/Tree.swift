@@ -8,6 +8,8 @@ let treeDeadlineSeconds: TimeInterval = 10
 private let maxDepth = 60
 private let silentContainers: Set<String> = ["AXGroup", "AXSplitGroup", "AXLayoutArea", "AXUnknown"]
 
+let usedUpNumbers = "this session has given out every element number of its range; start a new session"
+
 struct RenderedTree {
   var lines: [String]
   var partialReason: String?
@@ -63,8 +65,10 @@ private func line(for element: AXUIElement, attributes: ElementAttributes, role:
   return text
 }
 
+// `attributesOf` reads an element; the tests pass a stand-in.
 func renderTree(roots: [AXUIElement], pid: pid_t, table: ElementTable, maxElements: Int, shownToAgent: Bool,
-                seconds: TimeInterval = treeDeadlineSeconds) -> RenderedTree {
+                seconds: TimeInterval = treeDeadlineSeconds,
+                attributesOf: (AXUIElement) -> ElementAttributes = ElementAttributes.init(of:)) -> RenderedTree {
   var tree = RenderedTree(lines: [], partialReason: nil)
   let deadline = Date().addingTimeInterval(seconds)
   // An element that lists itself or an ancestor among its children, as apps do while the screen is locked, is
@@ -82,9 +86,13 @@ func renderTree(roots: [AXUIElement], pid: pid_t, table: ElementTable, maxElemen
       tree.partialReason = "time limit; the app is slow or the tree is large"
       return
     }
-    guard depth <= maxDepth else { return }
+    // Every limit marks the tree partial, so a text that is missing below it does not pass for gone.
+    guard depth <= maxDepth else {
+      tree.partialReason = "depth limit of \(maxDepth) levels; read a deeper subtree with root"
+      return
+    }
 
-    let attributes = ElementAttributes(of: element)
+    let attributes = attributesOf(element)
     if attributes.appStoppedAnswering {
       tree.partialReason = "the app stopped answering"
       return
@@ -95,14 +103,26 @@ func renderTree(roots: [AXUIElement], pid: pid_t, table: ElementTable, maxElemen
 
     // Containers that say nothing would only add noise.
     let says = attributes.string(kAXTitleAttribute) ?? attributes.string(kAXDescriptionAttribute)
+    let unreadKids = "the app did not give an element's children"
     if silentContainers.contains(role), says == nil, actionNames.isEmpty, describeValue(attributes.value(kAXValueAttribute)) == nil {
+      if attributes.childrenUnreadable {
+        tree.partialReason = unreadKids
+        return
+      }
       kids.forEach { visit($0, depth: depth) }
       return
     }
 
-    let number = table.number(for: element, pid: pid, shownToAgent: shownToAgent, attributes: attributes)
+    guard let number = table.number(for: element, pid: pid, shownToAgent: shownToAgent, attributes: attributes) else {
+      tree.partialReason = usedUpNumbers
+      return
+    }
     tree.fingerprints[number] = fingerprint(from: attributes)
     tree.lines.append(line(for: element, attributes: attributes, role: role, number: number, depth: depth, actionNames: actionNames))
+    if attributes.childrenUnreadable {
+      tree.partialReason = unreadKids
+      return
+    }
     kids.forEach { visit($0, depth: depth + 1) }
   }
 

@@ -28,10 +28,6 @@ let requestTimeout: TimeInterval = {
   return seconds
 }()
 private let quitWait: TimeInterval = 3
-// Element numbers start this far apart for each handoff, and for each connection within one, above any a session
-// reaches; a helper that kept the session ignores the start and goes on with its own numbers.
-private let elementNumbersPerHandoff = 100_000_000
-private let elementNumbersPerConnection = 1_000_000
 
 // One socket, read by its own thread. Replies go to the client's queue.
 private final class SocketConnection: @unchecked Sendable {
@@ -278,9 +274,17 @@ final class HelperClient: @unchecked Sendable {
   private func hello(_ socket: SocketConnection) throws -> JSON {
     var params: JSON = ["session_id": sessionId]
     if let name = clientName() { params["client_name"] = name }
-    let first = elementNumberBase + handoffGeneration * elementNumbersPerHandoff + connectionsMade * elementNumbersPerConnection + 1
+    // A helper that kept the session goes on with its numbers, from no lower than the new range's start.
+    let range: Range<Int>
+    do {
+      range = try ElementNumbers.connectionRange(base: elementNumberBase, generation: handoffGeneration, connection: connectionsMade)
+    } catch {
+      socket.shut()
+      throw error
+    }
     connectionsMade += 1
-    if first > 1 { params["first_element_number"] = first }
+    if range.lowerBound > 1 { params["first_element_number"] = range.lowerBound }
+    params["element_number_limit"] = range.upperBound
     return try send(socket, "hello", params, ticket: nil) as? JSON ?? [:]
   }
 

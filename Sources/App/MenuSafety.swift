@@ -37,39 +37,117 @@ func refusedMenu(topIndex: Int?, submenuTitles: [String]) -> String? {
   return nil
 }
 
+// How long a check may read before it refuses, apart from the search for refused shortcuts, which has its own.
+private let menuCheckSeconds = 2.0
+
+// The reads of the menu check. Unlike `attribute`, they tell an attribute the element lacks from one the app could
+// not give, and each one checks the check's deadline before and after it, since one call can wait for an app that
+// does not answer: a check that could not read all it needs refuses, because what it missed may be a refused item.
+struct MenuReader {
+  typealias Copy = (AXUIElement, String) -> AttributeRead
+  let appName: String
+  let deadline: Date
+  private let copy: Copy
+
+  init(appName: String, seconds: TimeInterval = menuCheckSeconds, copy: @escaping Copy = readAttribute) {
+    self.appName = appName
+    deadline = Date().addingTimeInterval(seconds)
+    self.copy = copy
+  }
+
+  func value(_ element: AXUIElement, _ name: String) throws -> AnyObject? {
+    try requireTime()
+    let read = copy(element, name)
+    try requireTime()
+    switch read {
+    case .value(let value): return value
+    case .absent: return nil
+    case .unreadable(let result): throw unreadable(result)
+    }
+  }
+
+  func string(_ element: AXUIElement, _ name: String) throws -> String? {
+    guard let value = try value(element, name) else { return nil }
+    guard let text = value as? String else { throw unexpected(name) }
+    return text.isEmpty ? nil : text
+  }
+
+  func bool(_ element: AXUIElement, _ name: String) throws -> Bool {
+    guard let value = try value(element, name) else { return false }
+    guard let flag = value as? Bool else { throw unexpected(name) }
+    return flag
+  }
+
+  func element(_ element: AXUIElement, _ name: String) throws -> AXUIElement? {
+    guard let value = try value(element, name) else { return nil }
+    guard CFGetTypeID(value) == AXUIElementGetTypeID() else { throw unexpected(name) }
+    return (value as! AXUIElement)
+  }
+
+  func elements(_ element: AXUIElement, _ name: String = kAXChildrenAttribute) throws -> [AXUIElement] {
+    guard let value = try value(element, name) else { return [] }
+    guard let list = value as? [AnyObject], list.allSatisfy({ CFGetTypeID($0) == AXUIElementGetTypeID() }) else { throw unexpected(name) }
+    return list.map { $0 as! AXUIElement }
+  }
+
+  private func requireTime() throws {
+    guard Date() < deadline else {
+      throw HelperError(code: "timeout", message: "\(appName)'s menus could not be read in time to check that this is not an item of the Apple, Services or Share menu, so nothing was done. Try again in a moment.")
+    }
+  }
+
+  private func unreadable(_ result: AXError) -> HelperError {
+    switch result {
+    case .invalidUIElement:
+      return HelperError(code: "stale_element", message: "An element or menu the check needed went away while it was read, so nothing was done. Read the window state again.")
+    case .apiDisabled:
+      return axFailure(result, "checking the menus")
+    case .cannotComplete:
+      return HelperError(code: "timeout", message: "\(appName) did not answer while its menus were checked for items of the Apple, Services or Share menu, so nothing was done. Try again in a moment.")
+    default:
+      return HelperError(code: "action_failed", message: "\(appName)'s menus could not be read to check for items of the Apple, Services or Share menu (AX error \(result.rawValue)), so nothing was done.")
+    }
+  }
+
+  private func unexpected(_ name: String) -> HelperError {
+    HelperError(code: "action_failed", message: "\(appName) answered \(name) with something other than expected while its menus were checked, so nothing was done.")
+  }
+}
+
 // Why `element` may not be acted on, or nil: an item in the Apple menu, or under a Services or Share submenu,
-// whether in the menu bar or in a context menu, or a Share button in a toolbar.
-func restrictedMenu(_ element: AXUIElement, in application: AXUIElement) -> String? {
+// whether in the menu bar or in a context menu, or a Share button in a toolbar. The way up ends at the menu bar, a
+// window or the app, above which nothing decides.
+func restrictedMenu(_ element: AXUIElement, in application: AXUIElement, reader: MenuReader) throws -> String? {
   var chain = [element]
   var reachedBar = false
-  while chain.count < maxMenuDepth, let parent = attribute(chain[chain.count - 1], kAXParentAttribute).map({ $0 as! AXUIElement }) {
-    if stringAttribute(parent, kAXRoleAttribute) == kAXMenuBarRole {
+  while chain.count < maxMenuDepth, let parent = try reader.element(chain[chain.count - 1], kAXParentAttribute) {
+    let role = try reader.string(parent, kAXRoleAttribute)
+    if role == kAXMenuBarRole {
       reachedBar = true
       break
     }
+    if role == kAXWindowRole || role == kAXApplicationRole { break }
     chain.append(parent)
   }
-  if isShareButton(element, chain: chain) { return "the Share button" }
-  let submenuTitles = chain.reversed().filter { stringAttribute($0, kAXRoleAttribute) == kAXMenuItemRole && hasSubmenu($0) }
-    .map { stringAttribute($0, kAXTitleAttribute) ?? "" }
+  if try isShareButton(element, chain: chain, reader: reader) { return "the Share button" }
+  var submenuTitles: [String] = []
+  for item in chain.reversed() where try reader.string(item, kAXRoleAttribute) == kAXMenuItemRole && !reader.elements(item).isEmpty {
+    submenuTitles.append(try reader.string(item, kAXTitleAttribute) ?? "")
+  }
   var topIndex: Int?
-  if reachedBar, let bar = attribute(application, kAXMenuBarAttribute).map({ $0 as! AXUIElement }), let top = chain.last {
-    topIndex = ((attribute(bar, kAXChildrenAttribute) as? [AXUIElement]) ?? []).firstIndex { CFEqual($0, top) }
+  if reachedBar, let bar = try reader.element(application, kAXMenuBarAttribute), let top = chain.last {
+    topIndex = try reader.elements(bar).firstIndex { CFEqual($0, top) }
   }
   return refusedMenu(topIndex: topIndex, submenuTitles: submenuTitles)
 }
 
 // A toolbar's Share button has no identifier of its own either: it is told by its role, AppKit's title for Share
 // and its place in a toolbar.
-private func isShareButton(_ element: AXUIElement, chain: [AXUIElement]) -> Bool {
-  guard [kAXButtonRole, kAXMenuButtonRole].contains(stringAttribute(element, kAXRoleAttribute) ?? "") else { return false }
-  let label = stringAttribute(element, kAXDescriptionAttribute) ?? stringAttribute(element, kAXTitleAttribute) ?? ""
+private func isShareButton(_ element: AXUIElement, chain: [AXUIElement], reader: MenuReader) throws -> Bool {
+  guard [kAXButtonRole, kAXMenuButtonRole].contains(try reader.string(element, kAXRoleAttribute) ?? "") else { return false }
+  let label = try reader.string(element, kAXDescriptionAttribute) ?? reader.string(element, kAXTitleAttribute) ?? ""
   guard label != "Services", handOffTitles.contains(label) else { return false }
-  return chain.dropFirst().contains { stringAttribute($0, kAXRoleAttribute) == kAXToolbarRole }
-}
-
-private func hasSubmenu(_ item: AXUIElement) -> Bool {
-  !((attribute(item, kAXChildrenAttribute) as? [AXUIElement]) ?? []).isEmpty
+  return try chain.dropFirst().contains { try reader.string($0, kAXRoleAttribute) == kAXToolbarRole }
 }
 
 // `shortcut` names the combination when a key, not an element, was refused.
@@ -82,8 +160,11 @@ private func refusal(_ menu: String, shortcut: KeyCombination? = nil) -> HelperE
 }
 
 func requireAllowedMenu(_ element: AXUIElement, app: AppIdentity) throws {
-  let application = AXUIElementCreateApplication(app.pid)
-  guard let menu = restrictedMenu(element, in: application) else { return }
+  try requireAllowedMenu(element, in: AXUIElementCreateApplication(app.pid), reader: MenuReader(appName: app.name))
+}
+
+func requireAllowedMenu(_ element: AXUIElement, in application: AXUIElement, reader: MenuReader) throws {
+  guard let menu = try restrictedMenu(element, in: application, reader: reader) else { return }
   throw refusal(menu)
 }
 
@@ -96,38 +177,41 @@ private let pointAncestorDepth = 3
 // window are looked at too.
 func requireAllowedPoint(_ point: CGPoint, app: AppIdentity) throws {
   let application = AXUIElementCreateApplication(app.pid)
+  let reader = MenuReader(appName: app.name)
   var found: AXUIElement?
   guard AXUIElementCopyElementAtPosition(application, Float(point.x), Float(point.y), &found) == .success,
     let found else {
-    try requireNoMenuUnder(point, app: app, application: application)
+    try requireNoMenuUnder(point, app: app, application: application, reader: reader)
     return
   }
   // A hit on the window or the app itself, or on an element outside any window, says no more than a failed one.
-  let foundRole = stringAttribute(found, kAXRoleAttribute) ?? ""
+  let foundRole = try reader.string(found, kAXRoleAttribute) ?? ""
   if [kAXWindowRole, kAXApplicationRole].contains(foundRole) {
-    return try requireNoMenuUnder(point, app: app, application: application)
+    return try requireNoMenuUnder(point, app: app, application: application, reader: reader)
   }
   var element = found
   for _ in 0..<pointAncestorDepth {
-    let role = stringAttribute(element, kAXRoleAttribute) ?? ""
-    if pointRoles.contains(role) { return try requireAllowedMenu(element, app: app) }
-    guard role != kAXWindowRole, let parent = attribute(element, kAXParentAttribute).map({ $0 as! AXUIElement }) else {
+    let role = try reader.string(element, kAXRoleAttribute) ?? ""
+    if pointRoles.contains(role) { return try requireAllowedMenu(element, in: application, reader: reader) }
+    guard role != kAXWindowRole, let parent = try reader.element(element, kAXParentAttribute) else {
       // An element outside any window may be part of a menu.
-      if role != kAXWindowRole { try requireNoMenuUnder(point, app: app, application: application) }
+      if role != kAXWindowRole { try requireNoMenuUnder(point, app: app, application: application, reader: reader) }
       return
     }
     element = parent
   }
   // No menu item, button or window within reach above the hit: what it belongs to is unknown.
-  try requireNoMenuUnder(point, app: app, application: application)
+  try requireNoMenuUnder(point, app: app, application: application, reader: reader)
 }
 
 // When Accessibility cannot tell what is under a point, as in many custom views and web content, or gives only the
 // window, the click goes on unless one of the app's menus is open or one of its windows at menu level covers the
 // point: the item there cannot be checked then.
-private func requireNoMenuUnder(_ point: CGPoint, app: AppIdentity, application: AXUIElement) throws {
+private func requireNoMenuUnder(_ point: CGPoint, app: AppIdentity, application: AXUIElement, reader: MenuReader) throws {
   let menuLevel = Int(CGWindowLevelForKey(.popUpMenuWindow))
-  let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]) ?? []
+  guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
+    throw HelperError(code: "action_failed", message: "The window server's list of windows could not be read to check what lies under that point, so nothing was clicked.")
+  }
   let menuWindow = windows.contains { info in
     guard (info[kCGWindowOwnerPID as String] as? Int).map({ pid_t($0) }) == app.pid,
       (info[kCGWindowLayer as String] as? Int ?? 0) >= menuLevel,
@@ -135,7 +219,7 @@ private func requireNoMenuUnder(_ point: CGPoint, app: AppIdentity, application:
       let frame = CGRect(dictionaryRepresentation: bounds) else { return false }
     return frame.contains(point)
   }
-  if !shownMenus(of: application).isEmpty {
+  if try !shownMenus(of: application, reader: reader).isEmpty {
     throw HelperError(code: "not_allowed", message: "\(app.name) has a menu open and what lies under that point cannot be read, so nothing was clicked: it could be an item in the Apple, Services or Share menu. Close the menu with press_key escape, or choose its item with press.")
   }
   if menuWindow {
@@ -183,102 +267,106 @@ private let confirmingKeys: Set<String> = ["return", "space"]
 // A key the app's menus answer to: a shortcut of a refused item, or a key that confirms the selected item of an
 // open menu when that item is refused. Other keys go to the focused view and are not looked at.
 func requireAllowedKey(_ combination: KeyCombination, app: AppIdentity) throws {
-  if confirmingKeys.contains(combination.key), let item = selectedMenuItem(of: AXUIElementCreateApplication(app.pid)) {
-    try requireAllowedMenu(item, app: app)
+  guard confirmingKeys.contains(combination.key) || combination.isShortcut else { return }
+  if let menu = refusedMenu(for: combination, among: []) { throw refusal(menu, shortcut: combination) }
+  let application = try applicationElement(app)
+  try requireAllowedKey(combination, application: application, appName: app.name)
+}
+
+func requireAllowedKey(_ combination: KeyCombination, application: AXUIElement, appName: String,
+                       copy: @escaping MenuReader.Copy = readAttribute, shortcutSeconds: TimeInterval = refusedSearchSeconds) throws {
+  if confirmingKeys.contains(combination.key) {
+    let reader = MenuReader(appName: appName, copy: copy)
+    if let item = try selectedMenuItem(of: application, reader: reader) { try requireAllowedMenu(item, in: application, reader: reader) }
   }
   guard combination.isShortcut else { return }
   if let menu = refusedMenu(for: combination, among: []) { throw refusal(menu, shortcut: combination) }
-  let refused: [(shortcut: String, menu: String)]
-  do {
-    refused = try refusedShortcuts(app: app)
-  } catch let error as HelperError where error.code == "window_not_found" {
-    return
-  }
+  let refused = try refusedShortcuts(of: application, reader: MenuReader(appName: appName, seconds: shortcutSeconds, copy: copy))
   if let menu = refusedMenu(for: combination, among: refused) { throw refusal(menu, shortcut: combination) }
 }
 
-private let refusedSearchSeconds = 1.0
+let refusedSearchSeconds = 1.0
 
 // The shortcuts of the app's refused items, read only where they can be: the whole Apple menu, and in full the
 // submenus that `refusedMenu` refuses from their title among the direct items of each top-level menu (every
-// submenu of the app menu, which is Services, and a Services or Share submenu anywhere). Allowed commands are not read. A Share
-// submenu nested inside another submenu is not looked for; such items carry no shortcuts in practice.
-private func refusedShortcuts(app: AppIdentity) throws -> [(shortcut: String, menu: String)] {
-  let application = try applicationElement(app)
-  guard let bar = attribute(application, kAXMenuBarAttribute).map({ $0 as! AXUIElement }) else {
-    throw HelperError(code: "window_not_found", message: "\(app.name) has no menu bar.")
-  }
-  let started = Date()
+// submenu of the app menu, which is Services, and a Services or Share submenu anywhere). Allowed commands are not
+// read. A Share submenu nested inside another submenu is not looked for; such items carry no shortcuts in practice.
+// An app without a menu bar has no such items; one whose menu bar or menus cannot be read in full is refused.
+private func refusedShortcuts(of application: AXUIElement, reader: MenuReader) throws -> [(shortcut: String, menu: String)] {
+  guard let bar = try reader.element(application, kAXMenuBarAttribute) else { return [] }
   var found: [(shortcut: String, menu: String)] = []
-  var cut = false
-  func children(_ element: AXUIElement) -> [AXUIElement] {
-    guard Date().timeIntervalSince(started) < refusedSearchSeconds else {
-      cut = true
-      return []
-    }
-    return (attribute(element, kAXChildrenAttribute) as? [AXUIElement]) ?? []
-  }
   // Every item under `parent`, an item or a menu bar item whose child is its menu.
-  func collect(_ parent: AXUIElement, menu: String, depth: Int) {
+  func collect(_ parent: AXUIElement, menu: String, depth: Int) throws {
     guard depth < maxMenuDepth else {
-      cut = true
-      return
+      throw HelperError(code: "timeout", message: "\(reader.appName)'s Apple, Services and Share menus nest too deep to check that the key is not one of their shortcuts, so it was not sent.")
     }
-    for list in children(parent) {
-      for item in children(list) {
-        if let shortcut = shortcutText(of: item) { found.append((shortcut: shortcut, menu: menu)) }
-        collect(item, menu: menu, depth: depth + 1)
+    for list in try reader.elements(parent) {
+      for item in try reader.elements(list) {
+        if let shortcut = try shortcutText(of: item, reading: reader.value) { found.append((shortcut: shortcut, menu: menu)) }
+        try collect(item, menu: menu, depth: depth + 1)
       }
     }
   }
-  for (index, top) in children(bar).enumerated() {
+  for (index, top) in try reader.elements(bar).enumerated() {
     if let menu = refusedMenu(topIndex: index, submenuTitles: []) {
-      collect(top, menu: menu, depth: 1)
+      try collect(top, menu: menu, depth: 1)
       continue
     }
-    for list in children(top) {
-      for item in children(list) {
-        let title = stringAttribute(item, kAXTitleAttribute) ?? ""
+    for list in try reader.elements(top) {
+      for item in try reader.elements(list) {
+        let title = try reader.string(item, kAXTitleAttribute) ?? ""
         guard let menu = refusedMenu(topIndex: index, submenuTitles: [title]) else { continue }
-        collect(item, menu: menu, depth: 2)
+        try collect(item, menu: menu, depth: 2)
       }
     }
-  }
-  guard !cut else {
-    throw HelperError(code: "timeout", message: "\(app.name)'s Apple, Services and Share menus could not be read in time to check that the key is not one of their shortcuts, so it was not sent. Try again in a moment.")
   }
   return found
 }
 
 // Typed text goes out as keys. In an open menu letters select an item by its name and a space confirms the selection,
-// so text with a space is refused while the app shows a menu.
+// so text with a space is refused while the app shows a menu, or while it cannot be told whether it shows one.
 func postAllowedText(_ text: String, app: AppIdentity) throws {
-  if text.contains(" "), !shownMenus(of: AXUIElementCreateApplication(app.pid)).isEmpty {
-    throw HelperError(code: "not_allowed", message: "\(app.name) has a menu open, where a space confirms the selected item. Close the menu first, or choose its item with press.")
+  if text.contains(" ") {
+    try requireNoMenuShown(by: AXUIElementCreateApplication(app.pid), appName: app.name)
   }
   try postText(text, pid: app.pid)
 }
 
+func requireNoMenuShown(by application: AXUIElement, appName: String, copy: @escaping MenuReader.Copy = readAttribute) throws {
+  guard try shownMenus(of: application, reader: MenuReader(appName: appName, copy: copy)).isEmpty else {
+    throw HelperError(code: "not_allowed", message: "\(appName) has a menu open, where a space confirms the selected item. Close the menu first, or choose its item with press.")
+  }
+}
+
 // The menus the app shows: context menus, and the menu of the menu bar item that is open.
-private func shownMenus(of application: AXUIElement) -> [AXUIElement] {
-  var menus = openMenus(of: application)
-  if let bar = attribute(application, kAXMenuBarAttribute).map({ $0 as! AXUIElement }) {
-    for top in (attribute(bar, kAXChildrenAttribute) as? [AXUIElement]) ?? [] where boolAttribute(top, kAXSelectedAttribute) {
-      menus += (attribute(top, kAXChildrenAttribute) as? [AXUIElement]) ?? []
+private func shownMenus(of application: AXUIElement, reader: MenuReader) throws -> [AXUIElement] {
+  var menus: [AXUIElement] = []
+  for child in try reader.elements(application) where try reader.string(child, kAXRoleAttribute) == kAXMenuRole {
+    menus.append(child)
+  }
+  if let bar = try reader.element(application, kAXMenuBarAttribute) {
+    for top in try reader.elements(bar) where try reader.bool(top, kAXSelectedAttribute) {
+      menus += try reader.elements(top)
     }
   }
   return menus
 }
 
 // The item an open menu has selected, in the menu bar or a context menu, deepest submenu first.
-private func selectedMenuItem(of application: AXUIElement) -> AXUIElement? {
-  var menus = shownMenus(of: application)
+private func selectedMenuItem(of application: AXUIElement, reader: MenuReader) throws -> AXUIElement? {
+  var menus = try shownMenus(of: application, reader: reader)
   var selected: AXUIElement?
   for _ in 0..<maxMenuDepth {
-    guard let item = menus.lazy.flatMap({ (attribute($0, kAXChildrenAttribute) as? [AXUIElement]) ?? [] })
-      .first(where: { boolAttribute($0, kAXSelectedAttribute) }) else { break }
+    var next: AXUIElement?
+    search: for menu in menus {
+      for item in try reader.elements(menu) where try reader.bool(item, kAXSelectedAttribute) {
+        next = item
+        break search
+      }
+    }
+    guard let item = next else { break }
     selected = item
-    menus = (attribute(item, kAXChildrenAttribute) as? [AXUIElement]) ?? []
+    menus = try reader.elements(item)
   }
   return selected
 }

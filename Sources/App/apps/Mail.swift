@@ -95,6 +95,8 @@ private let read = Operation(
     const found = message(args);
     const wasRead = found.readStatus();
     const result = summary(found);
+    // Reading the content can mark the message read, which is put back below.
+    changeBegins({ account: args.account, mailbox: args.mailbox, id: args.id, read_state_was: wasRead });
     result.to = found.toRecipients().map((item) => item.address());
     result.cc = found.ccRecipients().map((item) => item.address());
     const content = found.content() || '';
@@ -113,6 +115,7 @@ private let setRead = Operation(
 ) { arguments in
   try dictionary(runScript(script(#"""
     const found = message(args);
+    changeBegins({ account: args.account, mailbox: args.mailbox, id: args.id });
     found.readStatus = args.read;
     const result = summary(found);
     result.verified = result.read === args.read;
@@ -135,6 +138,7 @@ private let createDraft = Operation(
     // subject cannot pass for it.
     const draftIds = () => Mail.draftsMailbox.messages.whose({ subject: args.subject }).id();
     const before = new Set(draftIds());
+    changeBegins({ subject: args.subject });
     const draft = Mail.OutgoingMessage({ subject: args.subject, content: args.body, visible: false });
     Mail.outgoingMessages.push(draft);
     addresses(args.to).forEach((address) => draft.toRecipients.push(Mail.ToRecipient({ address })));

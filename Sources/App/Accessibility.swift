@@ -10,6 +10,31 @@ func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
   return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
 }
 
+// An attribute's value as the app answered: a value, nothing (the element lacks the attribute or it has no value),
+// or no answer the caller can trust. Checks that refuse what they cannot see tell the last two apart. Observed on
+// macOS 27.2 in Finder, Signal and Brave: elements without children answer kAXChildren with an empty list or, also
+// in a batched read, noValue (-25212); an application element answers kAXParent with noValue or
+// attributeUnsupported (-25205). Both are absent here, so ordinary trees and menus read in full.
+enum AttributeRead {
+  case value(AnyObject)
+  case absent
+  case unreadable(AXError)
+
+  init(_ result: AXError, _ value: AnyObject?) {
+    switch result {
+    case .success: self = value.map(AttributeRead.value) ?? .absent
+    case .noValue, .attributeUnsupported: self = .absent
+    default: self = .unreadable(result)
+    }
+  }
+}
+
+func readAttribute(_ element: AXUIElement, _ name: String) -> AttributeRead {
+  var value: AnyObject?
+  let result = AXUIElementCopyAttributeValue(element, name as CFString, &value)
+  return AttributeRead(result, value)
+}
+
 func stringAttribute(_ element: AXUIElement, _ name: String) -> String? {
   guard let text = attribute(element, name) as? String, !text.isEmpty else { return nil }
   return text
@@ -139,6 +164,8 @@ struct ElementAttributes {
   private var values: [String: AnyObject] = [:]
   // The app did not answer, so the element's children are unknown.
   private(set) var appStoppedAnswering = false
+  // The app answered the element's children with an error other than having none, so they are unknown.
+  private(set) var childrenUnreadable = false
 
   init(of element: AXUIElement) {
     var answer: CFArray?
@@ -149,14 +176,31 @@ struct ElementAttributes {
     }
     guard outcome == .success, let list = answer as? [AnyObject], list.count == lineAttributeNames.count else {
       // Some elements refuse a batch; asking one by one still works for them.
-      for name in lineAttributeNames { values[name] = attribute(element, name) }
+      for name in lineAttributeNames {
+        switch readAttribute(element, name) {
+        case .value(let value): values[name] = value
+        case .absent: break
+        case .unreadable: if name == kAXChildrenAttribute { childrenUnreadable = true }
+        }
+      }
       return
     }
     for (name, value) in zip(lineAttributeNames, list) {
-      // An attribute the element lacks comes back as an error value.
-      if CFGetTypeID(value) == AXValueGetTypeID(), AXValueGetType(value as! AXValue) == .axError { continue }
+      // An attribute the element lacks comes back as an error value, and so does one the app could not give.
+      if CFGetTypeID(value) == AXValueGetTypeID(), AXValueGetType(value as! AXValue) == .axError {
+        var error = AXError.success
+        _ = AXValueGetValue(value as! AXValue, .axError, &error)
+        if name == kAXChildrenAttribute, case .unreadable = AttributeRead(error, nil) { childrenUnreadable = true }
+        continue
+      }
       values[name] = value
     }
+  }
+
+  // Attributes as given, for the tests of what reads them.
+  init(values: [String: AnyObject], childrenUnreadable: Bool = false) {
+    self.values = values
+    self.childrenUnreadable = childrenUnreadable
   }
 
   func value(_ name: String) -> AnyObject? { values[name] }
@@ -203,6 +247,8 @@ final class ElementTable {
   private var numbersByHash: [CFHashCode: [(element: AXUIElement, number: Int)]] = [:]
   private var entries: [Int: Entry] = [:]
   private var nextNumber = 1
+  // Where the session's range ends; nil for a command that gives none, which numbers without end.
+  private var limit: Int?
   private var reads = 0
 
   // The number the next new element gets, so a read can tell the numbers it gave out.
@@ -229,13 +275,18 @@ final class ElementTable {
     }
   }
 
-  // Only before the first element is numbered, so a number already given never changes meaning.
-  func startNumbering(at first: Int) {
-    lock.withLock { if entries.isEmpty, nextNumber == 1, first > 0 { nextNumber = first } }
+  // The range a connection numbers from, which the command picked above every range this session used before, so
+  // numbers go on from its start at the lowest and stop at its end. Numbers already given keep their meaning.
+  func startNumbering(at first: Int, limit end: Int?) {
+    lock.withLock {
+      if first > nextNumber { nextNumber = first }
+      if let end, end > first { limit = end }
+    }
   }
 
-  // What an element is counts from what the agent saw, so a read it did not see never updates that.
-  func number(for element: AXUIElement, pid: pid_t, shownToAgent: Bool, attributes: ElementAttributes? = nil) -> Int {
+  // What an element is counts from what the agent saw, so a read it did not see never updates that. Nil once the
+  // session's range is used up, since a number past its end may belong to another connection's range.
+  func number(for element: AXUIElement, pid: pid_t, shownToAgent: Bool, attributes: ElementAttributes? = nil) -> Int? {
     let seen = attributes.map(fingerprint(from:)) ?? fingerprint(of: element)
     let hash = CFHash(element)
     return lock.withLock {
@@ -245,6 +296,7 @@ final class ElementTable {
         entries[known.number]?.seenAt = reads
         return known.number
       }
+      if let limit, nextNumber >= limit { return nil }
       if entries.count >= maxRememberedElements { forgetOldest() }
       let number = nextNumber
       nextNumber += 1

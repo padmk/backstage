@@ -33,10 +33,13 @@ struct MenuBarRead {
   var truncated = false
 }
 
-func shortcutText(of item: AXUIElement) -> String? {
-  let modifiers = (attribute(item, "AXMenuItemCmdModifiers") as? NSNumber)?.intValue ?? 0
-  var key = (attribute(item, "AXMenuItemCmdChar") as? String)?.lowercased() ?? ""
-  if key.isEmpty, let code = (attribute(item, "AXMenuItemCmdVirtualKey") as? NSNumber)?.intValue { key = namedKeys[code] ?? "" }
+func shortcutText(of item: AXUIElement) -> String? { shortcutText(of: item, reading: { attribute($0, $1) }) }
+
+// `reading` gives an attribute's value; the menu check passes one that throws when the app cannot answer.
+func shortcutText(of item: AXUIElement, reading value: (AXUIElement, String) throws -> AnyObject?) rethrows -> String? {
+  let modifiers = (try value(item, "AXMenuItemCmdModifiers") as? NSNumber)?.intValue ?? 0
+  var key = (try value(item, "AXMenuItemCmdChar") as? String)?.lowercased() ?? ""
+  if key.isEmpty, let code = (try value(item, "AXMenuItemCmdVirtualKey") as? NSNumber)?.intValue { key = namedKeys[code] ?? "" }
   guard !key.isEmpty else { return nil }
   var parts: [String] = []
   if modifiers & controlBit != 0 { parts.append("ctrl") }
@@ -57,13 +60,23 @@ func menuCommands(app: AppIdentity, topMenu: String? = nil) throws -> MenuBarRea
   }
   var read = MenuBarRead()
   let started = Date()
+  // Children the app could not give make the read partial, so a path or shortcut is never taken as unique from it.
+  func children(_ element: AXUIElement) -> [AXUIElement] {
+    switch readAttribute(element, kAXChildrenAttribute) {
+    case .value(let value): return (value as? [AXUIElement]) ?? []
+    case .absent: return []
+    case .unreadable:
+      read.truncated = true
+      return []
+    }
+  }
   func walk(_ menuParent: AXUIElement, path: [String], topIndex: Int, submenuTitles: [String], depth: Int) {
     guard depth < maxDepth else {
       read.truncated = true
       return
     }
-    for menu in (attribute(menuParent, kAXChildrenAttribute) as? [AXUIElement]) ?? [] {
-      for item in (attribute(menu, kAXChildrenAttribute) as? [AXUIElement]) ?? [] {
+    for menu in children(menuParent) {
+      for item in children(menu) {
         guard Date().timeIntervalSince(started) < listSeconds else {
           read.truncated = true
           return
@@ -71,10 +84,10 @@ func menuCommands(app: AppIdentity, topMenu: String? = nil) throws -> MenuBarRea
         let title = stringAttribute(item, kAXTitleAttribute) ?? ""
         guard !title.isEmpty else { continue }
         let itemPath = path + [title]
-        let children = (attribute(item, kAXChildrenAttribute) as? [AXUIElement]) ?? []
-        let titles = children.isEmpty ? submenuTitles : submenuTitles + [title]
+        let submenu = children(item)
+        let titles = submenu.isEmpty ? submenuTitles : submenuTitles + [title]
         if refusedMenu(topIndex: topIndex, submenuTitles: titles) != nil { continue }
-        if !children.isEmpty {
+        if !submenu.isEmpty {
           walk(item, path: itemPath, topIndex: topIndex, submenuTitles: titles, depth: depth + 1)
         } else {
           read.commands.append(MenuCommand(path: itemPath, element: item))
@@ -82,7 +95,7 @@ func menuCommands(app: AppIdentity, topMenu: String? = nil) throws -> MenuBarRea
       }
     }
   }
-  let tops = Array(((attribute(bar, kAXChildrenAttribute) as? [AXUIElement]) ?? []).enumerated())
+  let tops = Array(children(bar).enumerated())
   let titled = topMenu.map { wanted in tops.filter { normalized(stringAttribute($0.element, kAXTitleAttribute) ?? "") == wanted } } ?? []
   for (index, top) in titled.isEmpty ? tops : titled {
     guard !read.truncated else { break }
@@ -119,8 +132,10 @@ func listMenuCommands(app: AppIdentity, params: JSON, session: ApprovalSession) 
       more = true
       break
     }
-    var entry: JSON = ["path": command.joinedPath, "enabled": enabled,
-                       "element": session.table.number(for: command.element, pid: app.pid, shownToAgent: true)]
+    guard let number = session.table.number(for: command.element, pid: app.pid, shownToAgent: true) else {
+      throw HelperError(code: "action_failed", message: "The commands cannot be numbered: " + usedUpNumbers + ".")
+    }
+    var entry: JSON = ["path": command.joinedPath, "enabled": enabled, "element": number]
     if let shortcut { entry["shortcut"] = shortcut }
     if let mark = checked(command.element), mark { entry["checked"] = true }
     listed.append(entry)
@@ -171,7 +186,7 @@ func runMenuCommand(app: AppIdentity, params: JSON, session: ApprovalSession) th
   let read = try menuCommands(app: app, topMenu: (path?.count ?? 0) > 1 ? path?.first : nil)
   // A path or shortcut that looks unique in part of the menus may not be; the command runs only from all of them.
   guard !read.truncated else {
-    throw HelperError(code: "timeout", message: "\(app.name)'s menus could not be read in full in time, so the command did not run. Give the whole path from its menu, such as File > Export…, so only that menu is read, or use press with an element number from get_window_state with menu_bar.")
+    throw HelperError(code: "timeout", message: "\(app.name)'s menus could not be read in full, because the app was slow or did not answer, so the command did not run. Give the whole path from its menu, such as File > Export…, so only that menu is read, or use press with an element number from get_window_state with menu_bar.")
   }
   let all = read.commands
   let command = try resolveCommand(all, params: params)

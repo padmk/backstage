@@ -100,4 +100,20 @@ private final class Home {
       #expect(isReachablePath(path, home: home), "\(path)")
     }
   }
+
+  // Pages and Numbers report a document's file as the app gives it; the rule above decides on it, in any letter case
+  // and through links, and a place the app did not give is refused rather than taken for a document without a file.
+  @Test func anOpenDocumentIsCheckedByTheSameRule() throws {
+    let home = try Home()
+    let check = { (value: Any?) in try reachableDocumentPath(value, home: home.path) }
+    #expect(try check(home.path + "/Documents/report.txt") == home.path + "/Documents/report.txt")
+    #expect(try check(home.path + "/Library/Mobile Documents/com~apple~CloudDocs/notes.txt") != "")
+    #expect(try check("") == "")
+    for path in [home.path + "/LIBRARY/Messages/chat.db", home.path + "/library/Messages", home.path + "/Library/Messages/chat.db",
+                 home.path + "/ToLibrary/Messages/chat.db", "/tmp/budget.numbers", "/etc/hosts", "budget.numbers"] {
+      helperError("not_allowed") { try check(path) }
+    }
+    helperError("action_failed") { try check(nil) }
+    helperError("action_failed") { try check(NSNull()) }
+  }
 }

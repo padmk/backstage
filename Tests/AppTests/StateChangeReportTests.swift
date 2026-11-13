@@ -2,6 +2,7 @@
 // the cut.
 
 @testable import App
+import ApplicationServices
 import Foundation
 import Testing
 
@@ -67,5 +68,65 @@ import Testing
     let cut = quoted(first, lengthKey: "label_length")
     #expect(cut.hasPrefix("\"" + String(repeating: "a", count: maxTextLength) + "…\""))
     #expect(cut.contains(" label_length=355 digest="))
+  }
+}
+
+// A tree read that stops short of its elements says so, since wait_for with gone and change reports take a tree
+// without a partial reason as all there is. Elements are application elements of process ids no process has, read
+// through a stand-in.
+@Suite struct PartialTreeTests {
+  private func render(_ attributes: [pid_t: ElementAttributes], root: pid_t, table: ElementTable = ElementTable()) -> RenderedTree {
+    renderTree(roots: [AXUIElementCreateApplication(root)], pid: 1, table: table, maxElements: 10_000, shownToAgent: false) { element in
+      var pid: pid_t = 0
+      AXUIElementGetPid(element, &pid)
+      return attributes[pid] ?? ElementAttributes(values: [:])
+    }
+  }
+
+  // A chain of buttons, each the only child of the one before, with the text at its end.
+  private func chain(_ length: Int, from first: pid_t = 800_000) -> [pid_t: ElementAttributes] {
+    var attributes: [pid_t: ElementAttributes] = [:]
+    for index in 0..<length {
+      let pid = first + pid_t(index)
+      var values: [String: AnyObject] = [kAXRoleAttribute: kAXButtonRole as NSString, kAXTitleAttribute: "level \(index)" as NSString]
+      if index < length - 1 { values[kAXChildrenAttribute] = [AXUIElementCreateApplication(pid + 1)] as NSArray }
+      attributes[pid] = ElementAttributes(values: values)
+    }
+    return attributes
+  }
+
+  @Test func aTreeDeeperThanTheDepthLimitIsPartial() {
+    let shallow = render(chain(20), root: 800_000)
+    #expect(shallow.partialReason == nil)
+    #expect(shallow.lines.count == 20)
+    let deep = render(chain(80), root: 800_000)
+    #expect(deep.partialReason != nil)
+    #expect(!deep.lines.contains { $0.contains("level 79") })
+  }
+
+  @Test func anElementWhoseChildrenTheAppDidNotGiveMakesThePartPartial() {
+    var attributes = chain(3)
+    attributes[800_001] = ElementAttributes(values: [kAXRoleAttribute: kAXButtonRole as NSString], childrenUnreadable: true)
+    #expect(render(attributes, root: 800_000).partialReason != nil)
+    attributes[800_001] = ElementAttributes(values: [kAXRoleAttribute: "AXGroup" as NSString], childrenUnreadable: true)
+    #expect(render(attributes, root: 800_000).partialReason != nil)
+  }
+
+  // Numbers past the range the command gave this connection could be another connection's after a helper restart,
+  // so the table stops at its end, and a read that needed one more says it is partial.
+  @Test func aSessionStopsNumberingAtTheEndOfItsRange() {
+    let table = ElementTable()
+    table.startNumbering(at: 1_000_001, limit: 1_000_003)
+    let attributes = ElementAttributes(values: [kAXRoleAttribute: kAXButtonRole as NSString])
+    let numbers = (0..<3).map { table.number(for: AXUIElementCreateApplication(810_000 + $0), pid: 1, shownToAgent: false, attributes: attributes) }
+    #expect(numbers == [1_000_001, 1_000_002, nil])
+    // An element numbered before keeps its number.
+    #expect(table.number(for: AXUIElementCreateApplication(810_000), pid: 1, shownToAgent: false, attributes: attributes) == 1_000_001)
+    // A later connection's range goes on from its own start.
+    table.startNumbering(at: 2_000_001, limit: 3_000_001)
+    #expect(table.number(for: AXUIElementCreateApplication(810_002), pid: 1, shownToAgent: false, attributes: attributes) == 2_000_001)
+    let full = ElementTable()
+    full.startNumbering(at: 1, limit: 2)
+    #expect(render(chain(3), root: 800_000, table: full).partialReason == usedUpNumbers)
   }
 }
