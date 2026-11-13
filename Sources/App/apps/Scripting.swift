@@ -4,6 +4,8 @@
 // list of processes.
 
 import Foundation
+import HelperLink
+import Synchronization
 
 private let osascript = "/usr/bin/osascript"
 private let defaultScriptSeconds: TimeInterval = 30
@@ -80,6 +82,7 @@ private func reportingChange<Value>(_ child: ChildRun, target: String, details g
     switch child.end {
     case .timedOut: throw HelperError(code: "timeout", message: "\(target) did not answer within \(Int(child.timeout)) seconds.")
     case .interrupted: throw HelperError(code: "interrupted", message: "The request was cancelled while \(target) was working, so it was stopped.")
+    case .outputHeldOpen: throw outputHeldOpen(target)
     case .exited:
       guard child.status == 0 else { throw scriptFailure(errors, target: target) }
       return try result()
@@ -97,7 +100,8 @@ private func reportingChange<Value>(_ child: ChildRun, target: String, details g
 
 // How a child of the helper ended, with what it wrote.
 struct ChildRun {
-  enum End { case exited, timedOut, interrupted }
+  // outputHeldOpen: it exited, but a process it started kept its output open, so what it wrote is not known.
+  enum End { case exited, timedOut, interrupted, outputHeldOpen }
   let end: End
   let status: Int32
   let output: String
@@ -111,6 +115,7 @@ func runProcess(_ path: String, _ arguments: [String], input: Data? = nil, targe
   switch child.end {
   case .timedOut: throw HelperError(code: "timeout", message: "\(target) did not answer within \(Int(timeout)) seconds.")
   case .interrupted: throw HelperError(code: "interrupted", message: "The request was cancelled while \(target) was working, so it was stopped.")
+  case .outputHeldOpen: throw outputHeldOpen(target)
   case .exited: return (child.status, child.output, child.errors)
   }
 }
@@ -134,15 +139,8 @@ func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target:
   try process.run()
   // A cancelled request ends its child, so a long script or shortcut does not hold the connection. Only a child
   // that the cancel actually stopped counts as interrupted; one that finished first keeps its result.
-  let stopped = NSLock()
-  var interrupted = false
-  let stopWatching = connection?.onCancel {
-    stopped.withLock {
-      guard process.isRunning else { return }
-      interrupted = true
-      process.terminate()
-    }
-  }
+  let interruption = ChildInterruption()
+  let stopWatching = connection?.onCancel { interruption.interrupt(process) }
   defer { stopWatching?() }
   // Written while the child runs, as a large input would fill the pipe; a child that ends first only fails the write.
   if let input, let inputPipe {
@@ -154,29 +152,42 @@ func runChild(_ path: String, _ arguments: [String], input: Data? = nil, target:
   }
 
   // Read while it runs, because a large result would fill the pipe and stall the child.
-  let collected = NSLock()
-  var outputData = Data()
-  var errorData = Data()
-  let readers = DispatchGroup()
-  for (pipe, isOutput) in [(output, true), (errors, false)] {
-    readers.enter()
-    DispatchQueue.global().async {
-      let data = pipe.fileHandleForReading.readDataToEndOfFile()
-      collected.withLock { if isOutput { outputData = data } else { errorData = data } }
-      readers.leave()
-    }
-  }
+  let outputReader = PipeReader(output.fileHandleForReading)
+  let errorReader = PipeReader(errors.fileHandleForReading)
   var end = ChildRun.End.exited
   if finished.wait(timeout: .now() + timeout) == .timedOut {
     process.terminate()
     _ = finished.wait(timeout: .now() + 1)
     end = .timedOut
   }
-  _ = readers.wait(timeout: .now() + 2)
-  if end == .exited, stopped.withLock({ interrupted }), process.terminationReason == .uncaughtSignal { end = .interrupted }
-  let (out, err) = collected.withLock { (outputData, errorData) }
+  if end == .exited, interruption.happened, process.terminationReason == .uncaughtSignal { end = .interrupted }
+  // A process the child started can keep the output open after the child ends; what was read is then incomplete.
+  let outputDeadline = DispatchTime.now() + 2
+  let out = outputReader.data(by: outputDeadline)
+  let err = errorReader.data(by: outputDeadline)
+  if end == .exited, out == nil || err == nil { end = .outputHeldOpen }
   return ChildRun(end: end, status: process.isRunning ? -1 : process.terminationStatus,
-                  output: String(data: out, encoding: .utf8) ?? "", errors: String(data: err, encoding: .utf8) ?? "", timeout: timeout)
+                  output: out.map { String(decoding: $0, as: UTF8.self) } ?? "", errors: err.map { String(decoding: $0, as: UTF8.self) } ?? "",
+                  timeout: timeout)
+}
+
+private func outputHeldOpen(_ target: String) -> HelperError {
+  HelperError(code: "outcome_unknown", message: "\(target) finished, but a process it started kept its output open, so its result could not be read. Read the state before trying again.")
+}
+
+// Whether a cancel stopped the child: it ends the child only while it runs, and only then counts.
+private final class ChildInterruption: Sendable {
+  private let interrupted = Mutex(false)
+
+  func interrupt(_ process: Process) {
+    interrupted.withLock { interrupted in
+      guard process.isRunning else { return }
+      interrupted = true
+      process.terminate()
+    }
+  }
+
+  var happened: Bool { interrupted.withLock { $0 } }
 }
 
 private func scriptFailure(_ text: String, target: String) -> HelperError {

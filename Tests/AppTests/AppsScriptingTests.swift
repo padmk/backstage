@@ -90,3 +90,15 @@ private let awkward = "quote \" apostrophe ' newline \n backslash \\ dash -- dol
     helperError("action_failed") { try reachableDocumentPath(found[0]) }
   }
 }
+
+@Suite struct ChildOutputTests {
+  // A child that exits while a process it started still holds its output has not given its whole result, so what was
+  // read so far never counts as one.
+  @Test func outputKeptOpenByAGrandchildIsNotTakenAsTheResult() {
+    #expect {
+      try runProcess("/bin/sh", ["-c", "echo started; sleep 4 &"], target: "sh", timeout: 10)
+    } throws: { error in
+      (error as? HelperError)?.code == "outcome_unknown"
+    }
+  }
+}
