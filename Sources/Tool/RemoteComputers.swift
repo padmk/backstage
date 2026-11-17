@@ -23,8 +23,9 @@ private let sshPath: String = {
 }()
 // Covers the SSH login and the first start of the app on that Mac.
 private let connectSeconds: TimeInterval = 30
-// That Mac's server keeps its own deadlines; this only ends a wait on a connection that stopped answering.
-private let callSeconds: TimeInterval = requestTimeout + 30
+// That Mac's server keeps its own deadlines; this only ends a wait on a connection that stopped answering, which is
+// then closed. The margin is 30 s, less only when tests shorten the deadline.
+private let callSeconds: TimeInterval = requestTimeout + min(30, requestTimeout)
 private let keptErrorBytes = 2000
 // A write that ssh does not take in this time, as when that Mac's server stopped reading, ends the connection.
 private let writeSeconds: TimeInterval = 10
@@ -257,6 +258,8 @@ final class RemoteLink: @unchecked Sendable {
     cancellation?.requestSent(self, id)
     if done.wait(timeout: .now() + seconds) == .timedOut {
       lock.withLock { _ = waiting.removeValue(forKey: id) }
+      // A connection that missed the other Mac's own deadline is not used again; closing it ends that session there.
+      close()
       throw HelperFailure(code: "timeout", message: "\(computer) did not answer in \(Int(seconds)) s. Read the state there before trying again.")
     }
     guard let reply else { throw lost(lostMessage) }

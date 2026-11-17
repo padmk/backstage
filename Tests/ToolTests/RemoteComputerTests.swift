@@ -18,7 +18,7 @@ private final class RemoteSetup {
   let sshLog: String
   let remotePidFile: String
 
-  init(allowed: Bool = true, remote respond: @escaping @Sendable (Object) -> Object? = { _ in ["result": ["apps": [] as [Any]] as Object] }) throws {
+  init(allowed: Bool = true, timeout: String = "", remote respond: @escaping @Sendable (Object) -> Object? = { _ in ["result": ["apps": [] as [Any]] as Object] }) throws {
     let home = self.home
     helper = try FakeHelper(home: home) { request in
       guard request["method"] as? String == "require_computer" else { return ["result": [:] as Object] }
@@ -34,12 +34,13 @@ private final class RemoteSetup {
       while [ "$1" != "--" ]; do shift; done
       if [ "$2" = "down" ]; then echo "ssh: connect to host down port 22: Connection refused" >&2; exit 255; fi
       echo $$ > '\(remotePidFile)'
-      HOME='\(remoteHome.path)' HELPER_TEST_HOME='\(remoteHome.path)' exec '\(commandBinary)' mcp
+      HOME='\(remoteHome.path)' HELPER_TEST_HOME='\(remoteHome.path)' HELPER_TEST_TIMEOUT= exec '\(commandBinary)' mcp
       """
     let ssh = home.path + "/ssh"
     try script.write(toFile: ssh, atomically: true, encoding: .utf8)
     chmod(ssh, 0o755)
-    server = try ServerProcess(home: home, environment: ["HELPER_TEST_SSH": ssh])
+    // An empty timeout keeps the default; the other Mac's server always keeps it.
+    server = try ServerProcess(home: home, environment: ["HELPER_TEST_SSH": ssh, "HELPER_TEST_TIMEOUT": timeout])
     _ = try server.initialize()
   }
 
@@ -132,6 +133,17 @@ private final class RemoteSetup {
     let result = reply["result"] as? Object ?? [:]
     #expect(result["isError"] as? Bool == true)
     #expect(textOf(result).contains("outcome_unknown"))
+  }
+
+  @Test func closesAConnectionThatDidNotAnswerInTime() throws {
+    // The other Mac's helper never answers the press, and this command waits 1 s plus its margin for it.
+    let setup = try RemoteSetup(timeout: "1") { $0["method"] as? String == "press" ? nil : ["result": ["apps": [] as [Any]] as Object] }
+    let late = try setup.server.call("press", ["app": "Notes", "element": 1, "computer": "mbp"])
+    #expect(textOf(late).contains("did not answer"))
+    let next = try setup.server.call("list_apps", ["computer": "mbp"])
+    #expect(next["isError"] as? Bool != true)
+    #expect(textOf(next).contains("opened again"))
+    #expect(setup.sshRuns.count == 2)
   }
 
   @Test func passesACancellationOnToTheOtherMac() throws {
