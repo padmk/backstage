@@ -71,12 +71,7 @@ private func descends(_ pid: pid_t, from ancestor: pid_t) -> Bool {
 // Whether the process runs from inside the app's bundle, as its helpers do. A bundle id is no proof: another app's
 // id can start with this one's, as a browser's other release channels do.
 private func runsInsideBundle(_ pid: pid_t, of app: AppIdentity) -> Bool {
-  guard let bundle = app.path, !bundle.isEmpty else { return false }
-  var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
-  let length = Int(proc_pidpath(pid, &buffer, UInt32(buffer.count)))
-  guard length > 0 else { return false }
-  let path = String(decoding: buffer.prefix(length).map { UInt8(bitPattern: $0) }, as: UTF8.self)
-  let executable = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+  guard let bundle = app.path, !bundle.isEmpty, let executable = executablePath(of: pid) else { return false }
   return executable.hasPrefix(URL(fileURLWithPath: bundle).resolvingSymlinksInPath().path + "/")
 }
 

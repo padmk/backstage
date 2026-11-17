@@ -253,7 +253,7 @@ let accessibilityId = "accessibility"
       return
     }
     do {
-      try addToList(AppIdentity(pid: 0, bundleId: bundleId, name: url.deletingPathExtension().lastPathComponent, launchDate: nil, path: url.path), by: settingsClient)
+      try addToList(AppIdentity(pid: 0, bundleId: bundleId, name: url.deletingPathExtension().lastPathComponent, processStart: nil, path: url.path), by: settingsClient)
       problem = nil
       // The user is here now, so macOS asks now for what the app's operations need, not in the middle of a task.
       request(appGrants.filter { $0.asksWhenAdded && $0.listedApps.contains(bundleId) && [.notAsked, .unknown].contains(grantState($0)) })

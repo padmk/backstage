@@ -124,7 +124,8 @@ func listWindows(params: JSON) throws -> JSON {
       "app_hidden": running.isHidden,
     ]
     if let display = displayContaining(window.frame, in: allDisplays) { entry["display"] = Int(display.id) }
-    if access == .allowed, trusted, !locked {
+    // Window details only for the process the access was decided for.
+    if access == .allowed, app.processStart != nil, trusted, !locked {
       if enriched[window.pid] == nil { enriched[window.pid] = axWindowsById(window.pid) }
       if let element = enriched[window.pid]?[window.id] {
         entry["title"] = clamped(stringAttribute(element, kAXTitleAttribute) ?? "")
@@ -342,7 +343,7 @@ func setWindow(app: AppIdentity, params: JSON) throws -> JSON {
 // Hiding and showing go through the app, so they work without its windows; showing never brings it forward.
 func setAppState(app: AppIdentity, params: JSON) throws -> JSON {
   let state = try string(params, "state")
-  guard let running = onMain({ NSRunningApplication(processIdentifier: app.pid) }) else {
+  guard let running = try runningApplication(app) else {
     throw HelperError(code: "app_not_found", message: "\(app.name) is no longer running.")
   }
   let hide: Bool
@@ -391,7 +392,7 @@ func closeWindowOrApp(app: AppIdentity, params: JSON) throws -> JSON {
     guard params["window"] == nil, params["id"] == nil else {
       throw HelperError(code: "invalid_request", message: "Give a window, or quit: true, not both.")
     }
-    guard let running = onMain({ NSRunningApplication(processIdentifier: app.pid) }) else {
+    guard let running = try runningApplication(app) else {
       return ["delivery": "app", "quit": true, "verified": true]
     }
     try beginEffect()

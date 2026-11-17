@@ -272,7 +272,7 @@ func postAllowedClick(at point: CGPoint, app: AppIdentity, target: PointerTarget
 
 func postAllowedForegroundClick(at point: CGPoint, app: AppIdentity, window: AXUIElement, count: Int, style: ClickStyle) throws {
   try requireAllowedPoint(point, app: app)
-  try postForegroundClick(at: point, window: window, pid: app.pid, count: count, style: style)
+  try postForegroundClick(at: point, window: window, app: app, count: count, style: style)
 }
 
 func postAllowedDrag(from start: CGPoint, to end: CGPoint, app: AppIdentity, target: PointerTarget) throws {

@@ -13,7 +13,7 @@ struct AppIdentity {
   let pid: pid_t
   let bundleId: String
   let name: String
-  let launchDate: Date?
+  let processStart: ProcessStart?
   let path: String?
 }
 
@@ -357,7 +357,7 @@ private func signerToList(_ app: AppIdentity) throws -> String? {
   guard let path = app.path, bundleId == app.bundleId else {
     throw HelperError(code: "app_not_found", message: "\(app.name) is no longer installed where it was.")
   }
-  return signingIdentity(of: AppIdentity(pid: 0, bundleId: app.bundleId, name: app.name, launchDate: nil, path: path))
+  return signingIdentity(of: AppIdentity(pid: 0, bundleId: app.bundleId, name: app.name, processStart: nil, path: path))
 }
 
 // Whether agents may use an app right now. list_apps reports it, so an agent can check before any other route.

@@ -293,9 +293,10 @@ func bringForward(_ app: NSRunningApplication, waiting seconds: TimeInterval = 0
   return isFront()
 }
 
-func postForegroundClick(at point: CGPoint, window: AXUIElement, pid: pid_t, count: Int, style: ClickStyle = ClickStyle()) throws {
-  guard let app = NSRunningApplication(processIdentifier: pid) else {
-    throw HelperError(code: "app_not_found", message: "The app is no longer running.")
+func postForegroundClick(at point: CGPoint, window: AXUIElement, app identity: AppIdentity, count: Int, style: ClickStyle = ClickStyle()) throws {
+  let pid = identity.pid
+  guard let app = try runningApplication(identity) else {
+    throw HelperError(code: "app_not_found", message: "\(identity.name) is no longer running.")
   }
   let start = try beginEffect()
   AXUIElementPerformAction(window, kAXRaiseAction as CFString)

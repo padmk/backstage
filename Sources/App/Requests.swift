@@ -142,7 +142,7 @@ private func requestedApp(_ query: String) throws -> AppIdentity {
   do {
     return try installedIdentity(try installedApp(query))
   } catch where isNeverApproved(query) {
-    return AppIdentity(pid: 0, bundleId: query, name: query, launchDate: nil, path: nil)
+    return AppIdentity(pid: 0, bundleId: query, name: query, processStart: nil, path: nil)
   }
 }
 

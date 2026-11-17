@@ -242,13 +242,11 @@ private func operationTarget(_ app: AppKnowledge) throws -> AppIdentity {
   let running = onMain {
     app.bundleIds.lazy.compactMap { id in NSRunningApplication.runningApplications(withBundleIdentifier: id).first { !$0.isTerminated } }.first
   }
-  if let running, let bundleId = running.bundleIdentifier {
-    return AppIdentity(pid: running.processIdentifier, bundleId: bundleId, name: running.localizedName ?? app.name, launchDate: running.launchDate, path: running.bundleURL?.path)
-  }
+  if let running, running.bundleIdentifier != nil { return identity(of: running, name: app.name) }
   guard let bundleId = installedBundleId(app), let url = onMain({ NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) }) else {
     throw HelperError(code: "app_not_found", message: "\(app.name) is not installed.")
   }
-  return AppIdentity(pid: 0, bundleId: bundleId, name: app.name, launchDate: nil, path: url.path)
+  return AppIdentity(pid: 0, bundleId: bundleId, name: app.name, processStart: nil, path: url.path)
 }
 
 func installedBundleId(_ app: AppKnowledge) -> String? {

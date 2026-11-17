@@ -133,7 +133,7 @@ private func code(of call: () throws -> Any) -> String? {
 @Suite struct RunActionsTests {
   // A first step that would fail and be reported, so a list checked step by step would answer instead of refusing.
   @Test func refusesAnUnknownStepBeforeRunningAny() {
-    let app = AppIdentity(pid: 0, bundleId: "app.example.none", name: "None", launchDate: nil, path: nil)
+    let app = AppIdentity(pid: 0, bundleId: "app.example.none", name: "None", processStart: nil, path: nil)
     let steps: [JSON] = [["tool": "press", "element": 999_999], ["tool": "launch_rockets"]]
     do {
       _ = try runActions(app: app, params: ["steps": steps], session: ApprovalSession())
