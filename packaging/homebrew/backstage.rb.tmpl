@@ -33,7 +33,8 @@ class Backstage < Formula
 
       #{Tty.bold}Run it again after every `brew upgrade backstage`; until then
       agents keep the previous version.#{Tty.reset} Running agent sessions
-      then move to the new version on their next request by themselves.
+      then move to the new version on their next request by themselves,
+      unless the release notes say that sessions need a restart.
 
       Before `brew uninstall backstage`, which leaves the copy in
       Applications, run:

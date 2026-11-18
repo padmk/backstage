@@ -84,6 +84,18 @@ import Testing
     #expect(changeReport(before: before, after: ["1 List", "  12 Row \"A\"", "  13 Row \"B\"", "  14 Row \"A\""])["changed"] as? Bool == false)
   }
 
+  // Repeated rows that get new numbers and another order next to an inserted row.
+  @Test func renumberedRepeatedRowsInAnotherOrderNextToAnInsertionAreAReorder() {
+    let before = ["1 List", "  2 Row \"A\"", "  3 Row \"B\"", "  4 Row \"A\"", "  5 Row \"C\""]
+    let after = ["1 List", "  12 Row \"A\"", "  14 Row \"A\"", "  13 Row \"B\"", "  15 Row \"C\"", "  16 Row \"X\""]
+    let report = changeReport(before: before, after: after)
+    #expect(report["reordered"] as? Bool == true)
+    #expect(treeDifference(before: before, after: after) == .whole)
+    // In their own order, with the insertion, they are no reorder.
+    let inOrder = ["1 List", "  12 Row \"A\"", "  13 Row \"B\"", "  14 Row \"A\"", "  15 Row \"C\"", "  16 Row \"X\""]
+    #expect(!linesReordered(before: before, after: inOrder))
+  }
+
   // Rows that swap places and get new numbers next to an inserted one, among unchanged siblings.
   @Test func aSwapOfRenumberedRowsNextToAnInsertionIsAReorder() {
     let siblings = (0..<5).map { "  \(20 + $0) Row \"Sibling \($0)\"" }

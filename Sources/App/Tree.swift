@@ -238,41 +238,34 @@ func content(of lines: [String]) -> [String] {
 // The element number a line starts with.
 func number(ofLine line: String) -> Int? { parse(line)?.number }
 
-// Whether two reads hold lines in another order, such as rows sorted anew, whatever else was added or removed. The
-// rows both reads hold are matched by their exact line first, then by what they say where that names one row on each
-// side, as for a row that got a new number; the rest are added or removed and do not count. A reorder is a matched
-// pair whose order differs between the reads, so rows that only got new numbers, in the same order, are none. Rows
-// that say the same as others match no row by what they say, so the same rows by what they say, all of them, in
-// another order are a reorder too.
+// Whether two reads hold lines in another order, such as rows sorted anew, whatever else was added or removed. Two
+// orders count. The rows that kept their exact line (number and all) must keep their order. And what the rows say,
+// read in order, must keep every row the two reads have in common by what it says: when the longest run both reads
+// share in order is shorter than that, rows moved, also rows that got new numbers or say the same as others. Rows that
+// only got new numbers, in the same order, are no reorder.
 func linesReordered(before: [String], after: [String]) -> Bool {
   var exact: [String: [Int]] = [:]
   for (index, line) in before.enumerated() { exact[line, default: []].append(index) }
-  // The position in `before` of each row of `after` that matched, by its position in `after`.
-  var matched: [Int: Int] = [:]
-  var usedBefore = Set<Int>()
-  for (index, line) in after.enumerated() {
+  var order: [Int] = []
+  for line in after {
     guard var indices = exact[line], !indices.isEmpty else { continue }
-    let first = indices.removeFirst()
+    order.append(indices.removeFirst())
     exact[line] = indices
-    matched[index] = first
-    usedBefore.insert(first)
   }
+  if zip(order, order.dropFirst()).contains(where: { $0 > $1 }) { return true }
   let beforeContent = content(of: before)
   let afterContent = content(of: after)
-  if beforeContent != afterContent, beforeContent.sorted() == afterContent.sorted() { return true }
-  // What the rows left over say, with where they are, kept only when it names one row.
-  func unique(_ texts: [String], skipping used: (Int) -> Bool) -> [String: Int] {
-    var found: [String: Int?] = [:]
-    for (index, text) in texts.enumerated() where !used(index) {
-      found[text] = found[text] == nil ? .some(index) : .some(nil)
-    }
-    return found.compactMapValues { $0 }
+  var counts: [String: Int] = [:]
+  for text in beforeContent { counts[text, default: 0] += 1 }
+  var common = 0
+  for text in afterContent {
+    guard let left = counts[text], left > 0 else { continue }
+    counts[text] = left - 1
+    common += 1
   }
-  let leftBefore = unique(beforeContent) { usedBefore.contains($0) }
-  let leftAfter = unique(afterContent) { matched[$0] != nil }
-  for (text, index) in leftAfter { if let other = leftBefore[text] { matched[index] = other } }
-  let order = matched.sorted { $0.key < $1.key }.map(\.value)
-  return zip(order, order.dropFirst()).contains { $0 > $1 }
+  // The difference keeps the longest run in order; everything else of `before` it removes.
+  let kept = beforeContent.count - afterContent.difference(from: beforeContent).removals.count
+  return kept < common
 }
 
 // What changed between two reads, by what the lines say. Apps such as System Settings hand out new elements for

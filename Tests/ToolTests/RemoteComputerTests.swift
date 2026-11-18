@@ -67,11 +67,25 @@ private final class RemoteSetup {
     var otherAnswer: JSON?? = .none
     let timedOut = try #require(calls.register { _ in timedOutAnswered = true })
     _ = try #require(calls.register { otherAnswer = .some($0) })
-    calls.end(except: timedOut)
+    #expect(calls.claimTimeout(timedOut))
     #expect(!calls.isOpen)
     #expect(!timedOutAnswered)
     #expect(otherAnswer.map { $0 == nil } == true)
     #expect(calls.register { _ in } == nil)
+  }
+
+  // Only one waiter owns a timeout: one whose request a reply or the link's end already took does not claim it, and
+  // a reply taken just as the time ran out leaves the link open.
+  @Test func aTimeoutGoesToTheRequestStillWaitingOnly() throws {
+    let calls = LinkCalls()
+    let answered = try #require(calls.register { _ in })
+    #expect(calls.take(answered) != nil)
+    #expect(!calls.claimTimeout(answered))
+    #expect(calls.isOpen)
+    let first = try #require(calls.register { _ in })
+    let second = try #require(calls.register { _ in })
+    #expect(calls.claimTimeout(first))
+    #expect(!calls.claimTimeout(second))
   }
 
   // A write in progress when its link ends writes nothing more. The stand-in answers the handshake, ignores SIGTERM

@@ -334,6 +334,8 @@ private let export = Operation(
       try? FileManager.default.removeItem(at: folder)
       throw HelperError(code: "action_failed", message: "The JPEG could not be written.")
     }
+    // A conversion takes a while; a request that stopped meanwhile gets no result and leaves no copy.
+    try stopIfWanted()
     result["width"] = image.width
     result["height"] = image.height
   } else {

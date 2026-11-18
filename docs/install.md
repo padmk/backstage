@@ -81,7 +81,7 @@ backstage approvals revoke com.apple.Notes
 
 macOS ties permissions to the app's signature. The first setup creates a certificate of this Mac in a keychain of its own and signs the installed app with it, so the permissions survive updates without a paid Apple developer account, as long as the certificate stays. Any process running as you can use that certificate; [SECURITY.md](../SECURITY.md#signing) explains what that means.
 
-To update, run `brew upgrade backstage` (or pull and `make install`), then `backstage setup`. Setup copies the new bundle next to the installed one, signs the copy and swaps the two in one step, so the registered path never disappears. Running client sessions move to the new version on their next request, without a restart; element numbers from before then need a new read. Nothing changes the installed app but an explicit setup. How the handoff works is in [Builds and updates](architecture.md#builds-and-updates).
+To update, run `brew upgrade backstage` (or pull and `make install`), then `backstage setup`. Setup copies the new bundle next to the installed one, signs the copy and swaps the two in one step, so the registered path never disappears. Running client sessions move to the new version on their next request, without a restart, when both versions hand sessions over the same way; element numbers from before then need a new read. When an update changes that (the CHANGELOG says so), running sessions keep the earlier version and agents need a new session to use the new one. Nothing changes the installed app but an explicit setup. How the handoff works is in [Builds and updates](architecture.md#builds-and-updates).
 
 ## Uninstall
 

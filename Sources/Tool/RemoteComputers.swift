@@ -261,14 +261,27 @@ final class LinkCalls: @unchecked Sendable {
   }
 
   // Ends the link and fails every request waiting, except `id`, which reports its own failure.
-  func end(except id: Int? = nil) {
+  func end() {
     let pending: [(JSON?) -> Void] = lock.withLock {
       ended = true
-      if let id { waiting.removeValue(forKey: id) }
       defer { waiting.removeAll() }
       return Array(waiting.values)
     }
     for finish in pending { finish(nil) }
+  }
+
+  // Claims the timeout of request `id` and ends the link, failing every other request waiting, in one step. False
+  // when the request no longer waits: a reply or the end of the link took it first, and its callback reports that.
+  func claimTimeout(_ id: Int) -> Bool {
+    let pending: [(JSON?) -> Void]? = lock.withLock {
+      guard waiting.removeValue(forKey: id) != nil else { return nil }
+      ended = true
+      defer { waiting.removeAll() }
+      return Array(waiting.values)
+    }
+    guard let pending else { return false }
+    for finish in pending { finish(nil) }
+    return true
   }
 }
 
@@ -384,9 +397,12 @@ final class RemoteLink: @unchecked Sendable {
     if done.wait(timeout: .now() + seconds) == .timedOut {
       // A connection that missed the other Mac's own deadline is not used again: it ends in the same step that claims
       // the timeout, so no later request registers on it, and closing it ends that session there.
-      calls.end(except: id)
-      close()
-      throw HelperFailure(code: "timeout", message: "\(computer) did not answer in \(Int(seconds)) s. Read the state there before trying again.")
+      if calls.claimTimeout(id) {
+        close()
+        throw HelperFailure(code: "timeout", message: "\(computer) did not answer in \(Int(seconds)) s. Read the state there before trying again.")
+      }
+      // A reply or the end of the link took the request just as its time ran out; its callback is about to report it.
+      guard done.wait(timeout: .now() + 2) == .success else { throw lost(lostMessage) }
     }
     guard let reply else { throw lost(lostMessage) }
     return reply
