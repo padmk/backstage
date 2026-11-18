@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0
+
+Sessions running an earlier version keep it after the update and ask for a new session; start new agent sessions to use 0.4.0.
+
+- **Input reaches only the app it was meant for.** Keys, typed text, clicks, drags and scrolls check before each event that the app's process is still the one the call was decided for; the input stops with `app_changed` when nothing went out yet, and with `outcome_unknown` (saying how many characters were typed) when some did. Whether a process is still the same is decided by the kernel's process start time for the executable LaunchServices names for the app, so a stopped process or a reused process id is refused, and a moment when LaunchServices does not list a running app no longer reports `app_changed`.
+- **One lifecycle for the command.** The command's start, serving, update handoff and stop are one state with one owner. A stop that begins during start handles no input; a call already on its way when the command stops answers `stopping`; a signal during a move to an updated command ends the process instead of being lost; and a session moves to an updated command only while no setup is replacing the installed app.
+- **Other Macs.** A call to another Mac that gets no answer 30 s past that Mac's own deadline closes the connection, and the next call opens a new one, so a Mac that stopped answering no longer holds up every later call. Writes check their deadline before every chunk, and a reply that arrives just as a call's time runs out is returned.
+- **Each tool call runs on a thread of its own**, so a busy Mac cannot start a call late while other work holds the shared pool.
+- **`click_at` with `foreground: true`** clicks only when the window on top at the point is the window asked for, checks the point against the Apple, Services and Share menus after the app comes forward, and always lifts a press that went down.
+- **Photos `export`** stops at a cancel or the deadline instead of holding the app for up to 120 s, and leaves no copy behind when it stops.
+- **Reordered rows.** A read or a change report where the same lines came back in another order, such as a list sorted anew, shows `changed: true` with `reordered: true`, also when rows got new numbers next to an added or removed row.
+- **Setup** takes a lock on the file `setup-lock`, which the system frees when its holder ends, so two runs after a killed setup no longer both go ahead.
+- The update guide and the Homebrew note say when running sessions need a restart after an update.
+- A script or shortcut that finishes while a process it started in its process group still runs no longer frees the app while that process goes on working: what is left of the group is stopped before the call returns, and the call answers `outcome_unknown`.
+- `set_window` refuses a `frame` with a value beyond 1,000,000 points, and a window frame an app reports that far out counts as no frame.
+
 ## 0.3.0
 
 This release makes Backstage's answers exact about what happened: an action either did nothing and says so, did what it reports, or answers `outcome_unknown` when it may have done part of its work.
