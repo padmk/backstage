@@ -30,6 +30,47 @@ func setAXAttribute(_ element: AXUIElement, _ name: String, _ value: CFTypeRef) 
   return AXUIElementSetAttributeValue(element, name as CFString, value)
 }
 
+// The key, pointer and window server events of one effect, for the process a request was decided for. Each event goes to the pid only
+// while the kernel shows the pid still runs that process, checked right before it, so input stops when the app quits
+// midway and a process that takes the pid over is sent nothing more. The check and the post are two calls, so a pid
+// that changes hands between them can still get that one event.
+final class ProcessInput {
+  let app: AppIdentity
+  private var posted = false
+
+  init(_ app: AppIdentity) { self.app = app }
+
+  // Through the public call, as keys go.
+  func postKey(_ event: CGEvent, _ start: EffectStart, progress: String? = nil) throws {
+    try requireSameProcess(progress: progress)
+    postToProcess(event, pid: app.pid, start)
+    posted = true
+  }
+
+  // Through the private call when there is one, which lets a pointer event name its window.
+  func postPointer(_ event: CGEvent, _ start: EffectStart) throws {
+    try requireSameProcess(progress: nil)
+    post(event, to: app.pid, start)
+    posted = true
+  }
+
+  // A window server record, which `send` posts and reports as posted.
+  func postRecord(_ start: EffectStart, _ send: () -> Bool) throws -> Bool {
+    try requireSameProcess(progress: nil)
+    posted = true
+    return send()
+  }
+
+  // Before the first event nothing was done; after it, what went out stays, so the outcome is unknown.
+  private func requireSameProcess(progress: String?) throws {
+    guard posted else { return try App.requireSameProcess(app) }
+    guard let expected = app.processStart, processStart(of: app.pid) == expected else {
+      let done = progress ?? "the input had begun"
+      throw HelperError(code: "outcome_unknown", message: "\(app.name) stopped (app_changed) after \(done). Read the state before trying again.")
+    }
+  }
+}
+
 // Through the public call, which addresses the process without the window server's live-input flag.
 func postToProcess(_ event: CGEvent, pid: pid_t, _: EffectStart) {
   event.postToPid(pid)

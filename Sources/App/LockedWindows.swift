@@ -62,18 +62,18 @@ func lockedWindowRequest(_ method: String, app: AppIdentity, params: JSON) throw
     }
     try makeKey(window, app: app)
     try postClick(at: CGPoint(x: window.bounds.minX + x, y: window.bounds.minY + y),
-                  target: PointerTarget(window: window.number, origin: window.bounds.origin), pid: app.pid,
+                  target: PointerTarget(window: window.number, origin: window.bounds.origin), app: app,
                   count: params["count"] as? Int ?? 1, style: style)
     return lockedReply(["delivery": "pointer_event", "window": window.title])
   case "press_key":
     let key = try KeyCombination.parse(try string(params, "key"))
     try requireAllowedKey(key, app: app)
-    try postKey(key, pid: app.pid)
+    try postKey(key, app: app)
     return lockedReply(["delivery": "key_events"])
   case "type_text":
     let text = try nonEmptyString(params, "text")
     try requireTextForKeys(text)
-    try postText(text, pid: app.pid)
+    try postText(text, app: app)
     return lockedReply(["delivery": "key_events"])
   default:
     throw HelperError(code: "screen_locked", message: "\(method) does not work while the screen is locked.")
@@ -91,7 +91,7 @@ private func lockedReply(_ reply: JSON) -> JSON {
 // go to that window.
 private func makeKey(_ window: LockedWindow, app: AppIdentity) throws {
   guard isChromiumApp(path: app.path) else { return }
-  _ = makeKeyInApp(window: window.number, pid: app.pid, try beginEffect())
+  _ = try makeKeyInApp(window: window.number, app: app, try beginEffect())
 }
 
 private func lockedWindow(app: AppIdentity, params: JSON) throws -> LockedWindow {

@@ -69,24 +69,30 @@ private func code(of error: any Error) -> String? { (error as? HelperError)?.cod
     let pid = try noProcess()
     pair.connection.begin(generation: 0, id: "1", deadline: Date().addingTimeInterval(-1))
     let key = try KeyCombination.parse("return")
-    #expect { try withCurrentConnection(pair.connection) { try postKey(key, pid: pid) } } throws: { code(of: $0) == "expired" }
+    try withChild { process, _ in
+      let app = try childIdentity(process)
+      #expect { try withCurrentConnection(pair.connection) { try postKey(key, app: app) } } throws: { code(of: $0) == "expired" }
+    }
     let target = PointerTarget(window: nil, origin: .zero)
+    let gone = AppIdentity(pid: pid, bundleId: "test.process", name: "Gone", processStart: ProcessStart(seconds: 1, microseconds: 0), path: nil)
     #expect {
-      try withCurrentConnection(pair.connection) { try postClick(at: .zero, target: target, pid: pid, count: 1) }
+      try withCurrentConnection(pair.connection) { try postClick(at: .zero, target: target, app: gone, count: 1) }
     } throws: { code(of: $0) == "expired" }
   }
 
   // Once one effect may have begun, a cancel can no longer report that nothing was done.
   @Test func aStopAfterAnEffectBeganLeavesTheOutcomeUnknown() throws {
     let pair = try SocketPair()
-    let pid = try noProcess()
     #expect(pair.connection.enqueue(id: "1"))
     pair.connection.begin(generation: 0, id: "1", deadline: nil)
-    try withCurrentConnection(pair.connection) {
-      try postKey(try KeyCombination.parse("tab"), pid: pid)
-      pair.connection.cancel(requestId: "1")
-      #expect { try postText("a", pid: pid) } throws: { code(of: $0) == "outcome_unknown" }
-      #expect { try pair.connection.throwIfStopped() } throws: { code(of: $0) == "outcome_unknown" }
+    try withChild { process, _ in
+      let app = try childIdentity(process)
+      try withCurrentConnection(pair.connection) {
+        try postKey(try KeyCombination.parse("tab"), app: app)
+        pair.connection.cancel(requestId: "1")
+        #expect { try postText("a", app: app) } throws: { code(of: $0) == "outcome_unknown" }
+        #expect { try pair.connection.throwIfStopped() } throws: { code(of: $0) == "outcome_unknown" }
+      }
     }
     // The next request starts with nothing done.
     pair.connection.finish(id: "1")

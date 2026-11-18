@@ -111,24 +111,28 @@ func keyCode(named name: String) -> CGKeyCode? {
   namedKeys[name] ?? onMain { characterKeys() }[name]
 }
 
-func postKey(_ combination: KeyCombination, pid: pid_t) throws {
+func postKey(_ combination: KeyCombination, app: AppIdentity) throws {
   guard let code = keyCode(named: combination.key) else {
     throw HelperError(code: "invalid_key", message: "Unknown key \(combination.key).")
   }
+  let input = ProcessInput(app)
   let start = try beginEffect()
   for down in [true, false] {
     guard let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down) else {
       throw HelperError(code: "action_failed", message: "Could not create a key event.")
     }
     event.flags = combination.flags
-    postToProcess(event, pid: pid, start)
+    try input.postKey(event, start)
   }
 }
 
-func postText(_ text: String, pid: pid_t) throws {
+func postText(_ text: String, app: AppIdentity) throws {
+  let input = ProcessInput(app)
   for (sent, character) in text.enumerated() {
-    // A cancel or the deadline stops the typing between characters; what was typed stays, so the outcome is unknown.
-    let start = try beginEffect(progress: sent == 0 ? nil : "\(sent) characters were typed")
+    // A cancel, the deadline or the app quitting stops the typing between characters; what was typed stays, so the
+    // outcome is unknown.
+    let progress = sent == 0 ? nil : "\(sent) characters were typed"
+    let start = try beginEffect(progress: progress)
     let units = Array(String(character).utf16)
     for down in [true, false] {
       guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: down) else {
@@ -138,7 +142,7 @@ func postText(_ text: String, pid: pid_t) throws {
       // Otherwise the event carries the keys the user is holding, and a letter typed while they hold Cmd
       // reaches the app as a shortcut.
       event.flags = []
-      postToProcess(event, pid: pid, start)
+      try input.postKey(event, start, progress: progress)
     }
   }
 }
@@ -198,28 +202,29 @@ private func clickFields(state: Int64, gesture: Int64) -> [(UInt32, Int64)] {
 }
 
 // A window that never saw a move has stale tracking state and ignores the event that follows.
-private func postMove(to point: CGPoint, source: CGEventSource?, target: PointerTarget, pid: pid_t, gesture: Int64, _ start: EffectStart) throws {
+private func postMove(to point: CGPoint, source: CGEventSource?, target: PointerTarget, input: ProcessInput, gesture: Int64, _ start: EffectStart) throws {
   guard let moved = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else {
     throw HelperError(code: "action_failed", message: "Could not create a mouse event.")
   }
-  route(moved, point: point, target: target, pid: pid, extra: clickFields(state: 0, gesture: gesture))
-  post(moved, to: pid, start)
+  route(moved, point: point, target: target, pid: input.app.pid, extra: clickFields(state: 0, gesture: gesture))
+  try input.postPointer(moved, start)
   sleep(seconds: pointerEventGap)
 }
 
-func postClick(at point: CGPoint, target: PointerTarget, pid: pid_t, count: Int, style: ClickStyle = ClickStyle()) throws {
+func postClick(at point: CGPoint, target: PointerTarget, app: AppIdentity, count: Int, style: ClickStyle = ClickStyle()) throws {
+  let input = ProcessInput(app)
   let source = CGEventSource(stateID: .hidSystemState)
   let gesture = Int64.random(in: 1...Int64(Int32.max))
   // Checked once for the whole gesture, so a press is never left without its release.
   let start = try beginEffect()
-  try postMove(to: point, source: source, target: target, pid: pid, gesture: gesture, start)
+  try postMove(to: point, source: source, target: target, input: input, gesture: gesture, start)
   for click in 1...min(max(1, count), 3) {
     for type in [style.types.down, style.types.up] {
       guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: style.button) else {
         throw HelperError(code: "action_failed", message: "Could not create a mouse event.")
       }
-      route(event, point: point, target: target, pid: pid, extra: clickFields(state: Int64(click), gesture: gesture), flags: style.flags)
-      post(event, to: pid, start)
+      route(event, point: point, target: target, pid: app.pid, extra: clickFields(state: Int64(click), gesture: gesture), flags: style.flags)
+      try input.postPointer(event, start)
       sleep(seconds: pointerEventGap)
     }
   }
@@ -229,11 +234,12 @@ private let dragSteps = 12
 
 // A press, a path of drag events and a release, all addressed to the window like a click, so a background
 // window takes it without the cursor moving.
-func postDrag(from start: CGPoint, to end: CGPoint, target: PointerTarget, pid: pid_t) throws {
+func postDrag(from start: CGPoint, to end: CGPoint, target: PointerTarget, app: AppIdentity) throws {
+  let input = ProcessInput(app)
   let source = CGEventSource(stateID: .hidSystemState)
   let gesture = Int64.random(in: 1...Int64(Int32.max))
   let effect = try beginEffect()
-  try postMove(to: start, source: source, target: target, pid: pid, gesture: gesture, effect)
+  try postMove(to: start, source: source, target: target, input: input, gesture: gesture, effect)
   let path = (0...dragSteps).map { step -> CGPoint in
     let progress = CGFloat(step) / CGFloat(dragSteps)
     return CGPoint(x: start.x + (end.x - start.x) * progress, y: start.y + (end.y - start.y) * progress)
@@ -243,22 +249,23 @@ func postDrag(from start: CGPoint, to end: CGPoint, target: PointerTarget, pid: 
     guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
       throw HelperError(code: "action_failed", message: "Could not create a mouse event.")
     }
-    route(event, point: point, target: target, pid: pid, extra: clickFields(state: 1, gesture: gesture))
-    post(event, to: pid, effect)
+    route(event, point: point, target: target, pid: app.pid, extra: clickFields(state: 1, gesture: gesture))
+    try input.postPointer(event, effect)
     sleep(seconds: pointerEventGap)
   }
 }
 
-func postScroll(at point: CGPoint, target: PointerTarget, pid: pid_t, lines: Int32) throws {
+func postScroll(at point: CGPoint, target: PointerTarget, app: AppIdentity, lines: Int32) throws {
+  let input = ProcessInput(app)
   let source = CGEventSource(stateID: .hidSystemState)
   let start = try beginEffect()
-  try postMove(to: point, source: source, target: target, pid: pid, gesture: Int64.random(in: 1...Int64(Int32.max)), start)
+  try postMove(to: point, source: source, target: target, input: input, gesture: Int64.random(in: 1...Int64(Int32.max)), start)
   guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0) else {
     throw HelperError(code: "action_failed", message: "Could not create a scroll event.")
   }
   event.location = point
-  route(event, point: point, target: target, pid: pid, extra: [])
-  post(event, to: pid, start)
+  route(event, point: point, target: target, pid: app.pid, extra: [])
+  try input.postPointer(event, start)
 }
 
 // The last resort for a window that ignores background input: the app comes forward, the click goes through

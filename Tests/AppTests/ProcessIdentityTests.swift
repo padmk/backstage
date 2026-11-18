@@ -1,26 +1,10 @@
+import CoreGraphics
 import Foundation
 import Testing
 
 @testable import App
 
 @Suite struct ProcessIdentityTests {
-  // A child that runs until its input closes, and is stopped at the end of the test either way.
-  private func withChild(_ body: (Process, Pipe) throws -> Void) throws {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/cat")
-    let input = Pipe()
-    process.standardInput = input
-    process.standardOutput = FileHandle.nullDevice
-    try process.run()
-    defer {
-      if process.isRunning {
-        process.terminate()
-        process.waitUntilExit()
-      }
-    }
-    try body(process, input)
-  }
-
   @Test func aRunningProcessDoesNotNeedALaunchServicesRecord() throws {
     try withChild { process, input in
       let start = try #require(processStart(of: process.processIdentifier))
@@ -65,6 +49,33 @@ import Testing
       process.waitUntilExit()
       #expect(processState(of: app.pid) == .exited)
       #expect(try runningApplication(app) == nil)
+    }
+  }
+
+  // Input reaches a pid only while it runs the process the request was decided for: refused before anything went out,
+  // and once some of it went out, stopped with the outcome unknown.
+  @Test func inputGoesOnlyToTheSameProcess() throws {
+    try withChild { process, input in
+      let app = try childIdentity(process)
+      let tab = try KeyCombination.parse("tab")
+      try postKey(tab, app: app)
+      try postText("ab", app: app)
+      let other = AppIdentity(pid: app.pid, bundleId: app.bundleId, name: app.name,
+        processStart: ProcessStart(seconds: try #require(app.processStart).seconds + 1, microseconds: 0), path: nil)
+      #expect { try postKey(tab, app: other) } throws: { ($0 as? HelperError)?.code == "app_changed" }
+      #expect { try postText("ab", app: other) } throws: { ($0 as? HelperError)?.code == "app_changed" }
+      let target = PointerTarget(window: nil, origin: .zero)
+      #expect { try postClick(at: .zero, target: target, app: other, count: 1) } throws: { ($0 as? HelperError)?.code == "app_changed" }
+
+      let typing = ProcessInput(app)
+      let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true))
+      try typing.postKey(event, try beginEffect())
+      try input.fileHandleForWriting.close()
+      process.waitUntilExit()
+      #expect { try typing.postKey(event, try beginEffect(), progress: "1 characters were typed") } throws: {
+        ($0 as? HelperError)?.code == "outcome_unknown" && ($0 as? HelperError)?.message.contains("1 characters were typed") == true
+      }
+      #expect { try postText("ab", app: app) } throws: { ($0 as? HelperError)?.code == "app_changed" }
     }
   }
 }

@@ -110,7 +110,7 @@ func performAction(_ method: String, app: AppIdentity, params: JSON, session: Ap
     let key = try KeyCombination.parse(try string(params, "key"))
     try requireAllowedKey(key, app: app)
     try prepareInput(app: app, window: nil)
-    try postKey(key, pid: app.pid)
+    try postKey(key, app: app)
     return ["delivery": "key_events", "verified": false]
   case "scroll": return try scroll(app: app, params: params, session: session)
   case "drag": return try drag(app: app, params: params, session: session)
@@ -389,7 +389,7 @@ func scroll(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> 
   guard vertical, let box = frame(of: element) else {
     throw HelperError(code: "action_failed", message: "No scroll bar or scroll action was found for this element.")
   }
-  try postScroll(at: CGPoint(x: box.midX, y: box.midY), target: pointerTarget(for: element), pid: app.pid, lines: Int32((forward ? -10 : 10) * pages))
+  try postScroll(at: CGPoint(x: box.midX, y: box.midY), target: pointerTarget(for: element), app: app, lines: Int32((forward ? -10 : 10) * pages))
   return ["delivery": "pointer_event", "verified": false]
 }
 
@@ -436,7 +436,7 @@ func prepareInput(app: AppIdentity, window: AXUIElement?) throws {
   let application = AXUIElementCreateApplication(app.pid)
   let target = window ?? elementAttribute(application, kAXMainWindowAttribute) ?? windows(of: application).first
   guard let target, let number = windowNumber(of: target) else { return }
-  _ = makeKeyInApp(window: number, pid: app.pid, try beginEffect())
+  _ = try makeKeyInApp(window: number, app: app, try beginEffect())
 }
 
 // The window a click on an element goes to: its own, which the element is or is in. A click through the system needs

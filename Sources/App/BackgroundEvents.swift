@@ -75,19 +75,23 @@ private func windowRecord(kind: UInt8, window: CGWindowID) -> [UInt8] {
 // Chromium takes pointer and key input only in its key window, and a window in an app the user is not using
 // is not key. These records make `window` key inside the app, without activating the app or raising the
 // window, so the user's front app keeps its focus. Returns whether every record was posted.
-func makeKeyInApp(window: CGWindowID, pid: pid_t, _: EffectStart) -> Bool {
+// The serial number is taken while the pid still runs the app's process, and each record checks that again. Records
+// that went out reached only that process, so input that then stops with app_changed changed nothing that stays.
+func makeKeyInApp(window: CGWindowID, app: AppIdentity, _ start: EffectStart) throws -> Bool {
   guard let postEventRecord, let processForPid else { return false }
+  try requireSameProcess(app)
   var serial = [UInt8](repeating: 0, count: 8)
-  guard processForPid(pid, &serial) == 0 else { return false }
+  guard processForPid(app.pid, &serial) == 0 else { return false }
+  let input = ProcessInput(app)
   var focus = windowRecord(kind: 0x0D, window: window)
   focus[0x8A] = 0x01
-  var posted = postEventRecord(serial, focus) == 0
+  var posted = try input.postRecord(start) { postEventRecord(serial, focus) == 0 }
   sleep(seconds: keyRecordSettleSeconds)
   for kind: UInt8 in [0x01, 0x02] {
     var makeKey = windowRecord(kind: kind, window: window)
     makeKey[0x3A] = 0x10
     for index in 0x20..<0x30 { makeKey[index] = 0xFF }
-    posted = postEventRecord(serial, makeKey) == 0 && posted
+    posted = try input.postRecord(start) { postEventRecord(serial, makeKey) == 0 } && posted
   }
   sleep(seconds: keyRecordSettleSeconds)
   return posted

@@ -267,7 +267,7 @@ private func requireNoMenuUnder(_ point: CGPoint, app: AppIdentity, application:
 // center), so what lies under each point is checked right before the events are posted.
 func postAllowedClick(at point: CGPoint, app: AppIdentity, target: PointerTarget, count: Int, style: ClickStyle = ClickStyle()) throws {
   try requireAllowedPoint(point, app: app)
-  try postClick(at: point, target: target, pid: app.pid, count: count, style: style)
+  try postClick(at: point, target: target, app: app, count: count, style: style)
 }
 
 func postAllowedForegroundClick(at point: CGPoint, app: AppIdentity, window: AXUIElement, count: Int, style: ClickStyle) throws {
@@ -278,7 +278,7 @@ func postAllowedForegroundClick(at point: CGPoint, app: AppIdentity, window: AXU
 func postAllowedDrag(from start: CGPoint, to end: CGPoint, app: AppIdentity, target: PointerTarget) throws {
   try requireAllowedPoint(start, app: app)
   try requireAllowedPoint(end, app: app)
-  try postDrag(from: start, to: end, target: target, pid: app.pid)
+  try postDrag(from: start, to: end, target: target, app: app)
 }
 
 // The Apple menu's shortcuts as macOS defines them: Log Out, Log Out without asking, Lock Screen, Force Quit, and
@@ -366,7 +366,7 @@ func postAllowedText(_ text: String, app: AppIdentity) throws {
   if text.contains(" ") {
     try requireNoMenuShown(by: AXUIElementCreateApplication(app.pid), appName: app.name)
   }
-  try postText(text, pid: app.pid)
+  try postText(text, app: app)
 }
 
 func requireNoMenuShown(by application: AXUIElement, appName: String, copy: @escaping MenuReader.Copy = readAttribute) throws {
