@@ -74,6 +74,53 @@ private func readLines(_ descriptor: Int32, _ onLine: @escaping @Sendable (Strin
   }.start()
 }
 
+// FIONREAD, _IOR('f', 127, int), a macro Swift does not import: how many bytes wait unread in a pipe.
+let bytesWaitingRequest: UInt = 0x4004_667F
+
+// A descriptor its reader thread closes once the reads end, and that is used only while open, holding one lock, so no
+// write, read or shutdown reaches a number another test in this process has since opened.
+final class OwnedDescriptor: @unchecked Sendable {
+  // Unchecked: `isOpen` is read and written holding `lock`; `value` is a constant.
+  let value: Int32
+  private let lock = NSLock()
+  private var isOpen = true
+
+  init(_ value: Int32) { self.value = value }
+
+  // Runs `body` with the descriptor while it is open; false once closed.
+  @discardableResult
+  func ifOpen(_ body: (Int32) -> Void) -> Bool {
+    lock.withLock {
+      guard isOpen else { return false }
+      body(value)
+      return true
+    }
+  }
+
+  func close() {
+    lock.withLock {
+      guard isOpen else { return }
+      isOpen = false
+      Darwin.close(value)
+    }
+  }
+}
+
+// One JSON line read from `descriptor` a byte at a time, so nothing after it is taken; nil after `timeout`.
+func readLine(_ descriptor: Int32, timeout: TimeInterval) -> Object? {
+  let deadline = Date().addingTimeInterval(timeout)
+  var bytes: [UInt8] = []
+  while Date() < deadline {
+    var ready = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+    guard poll(&ready, 1, Int32(max(1, deadline.timeIntervalSinceNow * 1000))) > 0 else { continue }
+    var byte: UInt8 = 0
+    guard Darwin.read(descriptor, &byte, 1) == 1 else { return nil }
+    if byte == 0x0A { return parseLine(String(decoding: bytes, as: UTF8.self)) }
+    bytes.append(byte)
+  }
+  return nil
+}
+
 private func write(_ descriptor: Int32, _ text: String) {
   let data = Array((text + "\n").utf8)
   var offset = 0
@@ -85,15 +132,18 @@ private func write(_ descriptor: Int32, _ text: String) {
 }
 
 // A helper that answers on the socket as the test says: a reply object, or nil for no answer. A reply gets the
-// request's id unless it names one itself; one with only `raw` is sent as that text instead, as a line. Each hello reports the next of `builds`, the last one from then on.
+// request's id unless it names one itself; one with only `raw` is sent as that text instead, as a line. Each hello reports the next of `builds`, the last one from then on,
+// or answers with `helloError` when one is given, after `helloDelay` seconds.
 final class FakeHelper: @unchecked Sendable {
   private let lock = NSLock()
   private var received: [Object] = []
   private var clients: [Int32] = []
+  private var ended = 0
+  private var accepted = 0
   private var builds: [String]
   private let listener: Int32
 
-  init(home: TemporaryHome, builds: [String] = [], respond: @escaping @Sendable (Object) -> Object? = { _ in ["result": [:] as Object] }) throws {
+  init(home: TemporaryHome, builds: [String] = [], helloError: Object? = nil, helloDelay: TimeInterval = 0, respond: @escaping @Sendable (Object) -> Object? = { _ in ["result": [:] as Object] }) throws {
     self.builds = builds
     listener = socket(AF_UNIX, SOCK_STREAM, 0)
     var address = sockaddr_un()
@@ -106,22 +156,45 @@ final class FakeHelper: @unchecked Sendable {
     }
     guard bound == 0, listen(listener, 8) == 0 else { throw TestFailure("Could not listen on \(home.socketPath)") }
     let listening = self.listener
+    let helloError = helloError.map(SharedJSON.init)
     Thread { [weak self] in
       while true {
         let client = accept(listening, nil, nil)
         guard client >= 0, let self else { return }
-        self.lock.withLock { self.clients.append(client) }
-        readLines(client) { text in
+        // A reply to a command that has gone away fails rather than end the test process with SIGPIPE.
+        var noSignal: Int32 = 1
+        setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
+        self.lock.withLock {
+          self.clients.append(client)
+          self.accepted += 1
+        }
+        // The reader owns the descriptor: it closes it once the connection has ended, holding the lock under which
+        // replies are written, so nothing is ever written to or read from a number another test has since opened.
+        readLines(client, { text in
           guard let request = parseLine(text) else { return }
           self.lock.withLock { self.received.append(request) }
           guard let id = request["id"] else { return }
           if request["method"] as? String == "hello" {
-            var result: Object = ["version": "fake"]
-            self.lock.withLock {
-              if let build = self.builds.first { result["build"] = build }
-              if self.builds.count > 1 { self.builds.removeFirst() }
+            let reply: String
+            if let helloError {
+              reply = line(["id": id, "error": helloError.value])
+            } else {
+              var result: Object = ["version": "fake"]
+              self.lock.withLock {
+                if let build = self.builds.first { result["build"] = build }
+                if self.builds.count > 1 { self.builds.removeFirst() }
+              }
+              reply = line(["id": id, "result": result])
             }
-            write(client, line(["id": id, "result": result]))
+            guard helloDelay > 0 else { return write(client, reply) }
+            // Answered from a thread of its own, so this one goes on reading and sees the connection end meanwhile;
+            // written holding the lock, and only while the connection is still listed, so never to a closed one.
+            let delayed = reply
+            let helper = self
+            Thread.detachNewThread {
+              Thread.sleep(forTimeInterval: helloDelay)
+              helper.lock.withLock { if helper.clients.contains(client) { write(client, delayed) } }
+            }
             return
           }
           guard var reply = respond(request) else { return }
@@ -131,27 +204,32 @@ final class FakeHelper: @unchecked Sendable {
           }
           if reply["id"] == nil { reply["id"] = id }
           write(client, line(reply))
-        }
+        }, onEnd: {
+          self.lock.withLock {
+            self.clients.removeAll { $0 == client }
+            self.ended += 1
+            close(client)
+          }
+        })
       }
     }.start()
   }
 
   var requests: [Object] { lock.withLock { received } }
 
+  // How many connections the command has opened.
+  var connectionsMade: Int { lock.withLock { accepted } }
+
+  // How many connections the command has ended, or this helper with disconnectAll.
+  var connectionsEnded: Int { lock.withLock { ended } }
+
   func first(_ method: String) -> Object? { requests.first { $0["method"] as? String == method } }
 
   func all(_ method: String) -> [Object] { requests.filter { $0["method"] as? String == method } }
 
-  // Drops every connection, as a helper that quits would.
+  // Drops every connection, as a helper that quits would. Each reader then sees the end and closes its descriptor.
   func disconnectAll() {
-    let current = lock.withLock { () -> [Int32] in
-      defer { clients.removeAll() }
-      return clients
-    }
-    for client in current {
-      shutdown(client, SHUT_RDWR)
-      close(client)
-    }
+    lock.withLock { for client in clients { shutdown(client, SHUT_RDWR) } }
   }
 
   deinit {
@@ -165,14 +243,15 @@ final class FakeHelper: @unchecked Sendable {
 final class ServerProcess: @unchecked Sendable {
   let process = Process()
   private let input = Pipe()
+  private let output = Pipe()
   private let lock = NSLock()
   private var messages: [Object] = []
   private var nextId = 1
   private let ended = DispatchSemaphore(value: 0)
 
   // An empty value in `environment` removes that variable, such as HELPER_NO_START for a command that manages its
-  // helper.
-  init(home: TemporaryHome, executable: String = commandBinary, environment: [String: String] = [:]) throws {
+  // helper. With `readsOutput` false, nothing reads the command's output, as from a client that stopped reading.
+  init(home: TemporaryHome, executable: String = commandBinary, environment: [String: String] = [:], readsOutput: Bool = true) throws {
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = ["mcp"]
     var env = ProcessInfo.processInfo.environment
@@ -181,16 +260,48 @@ final class ServerProcess: @unchecked Sendable {
     env["HELPER_NO_START"] = "1"
     env.merge(environment) { $1 }
     process.environment = env.filter { !$0.value.isEmpty }
-    let output = Pipe()
     process.standardInput = input
     process.standardOutput = output
     process.standardError = FileHandle.nullDevice
     process.terminationHandler = { [ended] _ in ended.signal() }
     try process.run()
+    if readsOutput { startReading() }
+  }
+
+  // Reads the command's output from here on; once, for a server made with `readsOutput` false.
+  func startReading() {
     readLines(output.fileHandleForReading.fileDescriptor) { [weak self] text in
       guard let self, let message = parseLine(text) else { return }
       self.lock.withLock { self.messages.append(message) }
     }
+  }
+
+  // For a server made with `readsOutput` false: one line of its output, read directly, or nil after `timeout`.
+  func readOneLine(timeout: TimeInterval = 10) -> Object? {
+    readLine(output.fileHandleForReading.fileDescriptor, timeout: timeout)
+  }
+
+  // Waits until the pipe of its output is full, so its next write blocks: the bytes waiting have stopped growing,
+  // well past what one small reply takes.
+  func waitUntilOutputIsFull() throws {
+    var last = -1
+    var steadySince = Date()
+    try until { () -> Bool? in
+      let now = outputBytesWaiting
+      if now != last {
+        last = now
+        steadySince = Date()
+        return nil
+      }
+      return now >= 16384 && Date().timeIntervalSince(steadySince) >= 0.3 ? true : nil
+    }
+  }
+
+  // How many bytes of output wait in the pipe unread.
+  var outputBytesWaiting: Int {
+    var count: Int32 = 0
+    _ = ioctl(output.fileHandleForReading.fileDescriptor, bytesWaitingRequest, &count)
+    return Int(count)
   }
 
   deinit { if process.isRunning { process.terminate() } }
@@ -255,3 +366,4 @@ struct FakeBundle {
     }
   }
 }
+

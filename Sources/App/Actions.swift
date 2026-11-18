@@ -439,6 +439,19 @@ func prepareInput(app: AppIdentity, window: AXUIElement?) throws {
   _ = makeKeyInApp(window: number, pid: app.pid, try beginEffect())
 }
 
+// The window a click on an element goes to: its own, which the element is or is in. A click through the system needs
+// it, since it checks that this window is on top at the point, and another window of the app could be there; a
+// background click falls back to the chosen window (nil), which only places its events.
+func clickWindow<Window>(own: Window?, foreground: Bool) throws -> Window? {
+  guard let own else {
+    guard !foreground else {
+      throw HelperError(code: "action_failed", message: "The element's window cannot be read, so it is unknown which window a click through the system would reach; nothing was clicked. Click without foreground, or at x and y in the window.")
+    }
+    return nil
+  }
+  return own
+}
+
 // A click at a point in window coordinates, or at an element's center.
 func clickAt(app: AppIdentity, params: JSON, session: ApprovalSession) throws -> JSON {
   let application = try applicationElement(app)
@@ -448,7 +461,8 @@ func clickAt(app: AppIdentity, params: JSON, session: ApprovalSession) throws ->
   if let number = params["element"] as? Int {
     let element = try session.table.element(number, pid: app.pid)
     guard let box = frame(of: element) else { throw HelperError(code: "action_failed", message: "The element has no position.") }
-    window = try elementAttribute(element, kAXWindowAttribute) ?? selectWindow(application, params: params)
+    let own = stringAttribute(element, kAXRoleAttribute) == kAXWindowRole ? element : elementAttribute(element, kAXWindowAttribute)
+    window = try clickWindow(own: own, foreground: params["foreground"] as? Bool == true) ?? selectWindow(application, params: params)
     point = CGPoint(x: box.midX, y: box.midY)
   } else {
     guard params["x"] != nil, params["y"] != nil else {

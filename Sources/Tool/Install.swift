@@ -6,9 +6,6 @@ import Darwin
 import Foundation
 import HelperLink
 
-private let lockStale: TimeInterval = 5
-private let lockTimeout: TimeInterval = 200
-
 struct Installer {
   let directories: Directories
 
@@ -193,36 +190,14 @@ struct Installer {
 
   // MARK: One setup at a time
 
-  // A setup killed midway leaves its lock behind, so a lock whose owner is gone is free.
-  private func withSetupLock<T>(_ action: () throws -> T) throws -> T {
-    let lock = directories.data + "/setup.lock"
-    let started = Date()
-    while mkdir(lock, 0o700) != 0 {
-      if lockIsAbandoned(lock) {
-        // A lock that cannot be removed makes the mkdir below fail, which waits or reports it as held.
-        try? FileManager.default.removeItem(atPath: lock)
-        continue
-      }
-      if Date().timeIntervalSince(started) > lockTimeout { throw HelperFailure(code: nil, message: "\(lock) is held by a running setup.") }
-      Thread.sleep(forTimeInterval: 0.2)
-    }
-    // Without an owner the lock's age decides when it counts as abandoned.
-    try? String(getpid()).write(toFile: lock + "/owner", atomically: true, encoding: .utf8)
-    // A lock left behind is taken over once its owner is gone.
-    defer { try? FileManager.default.removeItem(atPath: lock) }
-    return try action()
-  }
-
-  private func lockIsAbandoned(_ lock: String) -> Bool {
-    // Without a readable owner, the lock's age decides below.
-    if let text = try? String(contentsOfFile: lock + "/owner", encoding: .utf8), let owner = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), owner > 0 {
-      return kill(owner, 0) != 0 && errno == ESRCH
-    }
-    // No owner yet: the lock is either just taken or left from a crash at that very moment.
-    guard let modified = (try? FileManager.default.attributesOfItem(atPath: lock))?[.modificationDate] as? Date else { return false }
-    return Date().timeIntervalSince(modified) > lockStale
+  // A lock on a file, which the kernel releases when its holder ends, so a setup killed midway leaves none behind.
+  func withSetupLock<T>(_ action: () throws -> T) throws -> T {
+    try withFileLock(setupLockPath(directories), held: "A running setup holds", action)
   }
 }
+
+// The lock a setup holds while it replaces the installed app, and a handoff while it checks and execs that app's command.
+func setupLockPath(_ directories: Directories) -> String { directories.data + "/setup-lock" }
 
 // Why this Mac cannot run the app, or nil when it can.
 func platformProblem() -> String? {

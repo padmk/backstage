@@ -50,6 +50,8 @@ The app writes failures no request hears about, such as a write to the activity 
 | `HELPER_NO_START` | `backstage mcp`, `backstage approvals` | Never start the helper; fail when nothing listens on the socket. Tests only |
 | `HELPER_TEST_INSTALLED_APP` | the command, only with `HELPER_TEST_HOME` | The bundle the command treats as the installed app, for tests of builds and handoffs |
 | `HELPER_TEST_SSH` | the command, only with `HELPER_TEST_HOME` | The program run in place of `/usr/bin/ssh` for `computer`, for tests of calls to another Mac |
+| `HELPER_TEST_EXEC_DELAY` | the command, only with `HELPER_TEST_HOME` | Seconds a handoff waits right before its exec, holding the lock a stop takes, after writing `exec-hold` in the test home, for tests of a stop at that moment |
+| `HELPER_TEST_STOP_DELAY` | the command, only with `HELPER_TEST_HOME` | Seconds a stop waits after it began, before the process ends, after writing `stop-hold` in the test home, for tests of what may still happen then |
 | `HELPER_TEST_TIMEOUT` | the command, only with `HELPER_TEST_HOME` | Seconds the command waits for a reply from the helper instead of 200 |
 | `LIVE` | the live test | `LIVE=1` runs `LiveTests` (what `make live` sets) |
 | `LIVE_COMMAND` | the live test | The command the live test runs; default the test build's `backstage-tool` |
@@ -66,7 +68,7 @@ CI (`.github/workflows/ci.yml`) runs on `macos-26` on every push to `main` and e
 
 1. Set `Product.version` in `Sources/HelperLink/Product.swift`.
 2. Head the release's section of `CHANGELOG.md` with `## <version>`, exactly; its text becomes the release notes.
-3. Have GPT-6.1 Sol at `xhigh` review the whole difference since the previous `v<version>` tag, given only the code and the project's rules, not earlier findings; confirm each finding in the code and fix the confirmed ones first. Reviews of single changes miss what lies between them.
+3. Have GPT-6.2 Sol at `xhigh` review the whole difference since the previous `v<version>` tag, given only the code and the project's rules, not earlier findings; confirm each finding in the code and fix the confirmed ones first. Reviews of single changes miss what lies between them.
 4. Push `main` and wait until CI passes for that commit.
 5. Push the tag `v<version>` on that commit.
 
@@ -89,6 +91,7 @@ The tag starts `.github/workflows/release.yml`. It builds the app and runs the t
 | `Sources/Tool/ToolMain.swift`, `Commands.swift` | The command's entry; `setup`, `doctor`, `approvals`, `uninstall`, `version` |
 | `Sources/Tool/Install.swift` | Installing and signing the app for this Mac |
 | `Sources/Tool/MCPServer.swift`, `Tools.swift` | MCP over stdio, the tool definitions and their argument checks |
+| `Sources/Tool/ServerLifecycle.swift` | The phase of the `backstage mcp` process (starting, serving, handing off, stopping) and its one transition function |
 | `Sources/Tool/HelperClient.swift` | Starting the app and talking to it over its socket, with the build check |
 | `Sources/Tool/Handoff.swift` | Handing a running MCP session to the installed command after an update |
 | `Sources/Tool/RemoteComputers.swift` | Calls with `computer`: one SSH connection per Mac to its `backstage mcp` |
@@ -118,6 +121,6 @@ The tag starts `.github/workflows/release.yml`. It builds the app and runs the t
 | `Sources/App/apps/AppAccess.swift` | The macOS grants ready operations need, as the Setup tab shows them |
 | `Sources/App/apps/Scripting.swift`, `EventStore.swift`, `ReadOnlyDatabase.swift`, `Typedstream.swift`, `UserPaths.swift` | The routes operations share: the `osascript` runner, EventKit, read-only SQLite, the reader for Messages' archived text, and the rule for which files operations may touch |
 | `Sources/App/apps/` (the other files) | One file per app: Notes, Reminders, Calendar (`CalendarApp.swift`), Contacts, Mail, Messages and its history (`MessagesHistory.swift`), Music, Finder, Pages and Numbers (`IWork.swift`), Shortcuts, System Settings (`Settings.swift`), WhatsApp, Photos, Home, and the hint-only apps (`HintsOnly.swift`) |
-| `Tests/ToolTests/` | Protocol tests against a fake helper (`ServerTests`), app tests against a bare build (`HelperTests`), the app list as socket clients meet it (`AppListTests`), calls to another Mac through a stand-in for ssh (`RemoteComputerTests`), the live test and the benchmark |
+| `Tests/ToolTests/` | Protocol tests against a fake helper (`ServerTests`), app tests against a bare build (`HelperTests`), the app list as socket clients meet it (`AppListTests`), calls to another Mac through a stand-in for ssh (`RemoteComputerTests`), the command's socket, cancels and setup lock called directly (`ClientTests`), the live test and the benchmark |
 | `Tests/AppTests/` | The app's pure functions through `@testable import App`: ready operations' paths, values, scripts and databases, the app list's rules, menu safety and key combinations, change reports, recording and window rules, and text recognition (`TextRecognitionTests`) |
 | `Tests/Fixtures/target/` | The fixture app the live test and the benchmark operate |

@@ -104,3 +104,44 @@ import Testing
     #expect(closed(wasOnScreen: false, onScreen: false, inAccessibility: false))
   }
 }
+
+// A click through the system lands on whatever window is on top; only the window asked for may be there.
+@Suite struct ForegroundClickTests {
+  private func info(pid: Int, number: Int, owner: String) -> [String: Any] {
+    [kCGWindowOwnerPID as String: pid, kCGWindowNumber as String: number, kCGWindowOwnerName as String: owner,
+     kCGWindowBounds as String: ["X": 0, "Y": 0, "Width": 400, "Height": 300] as [String: CGFloat]]
+  }
+
+  @Test func anotherWindowOfTheSameAppOnTopIsRefused() {
+    let windows = [info(pid: 42, number: 7, owner: "Notes"), info(pid: 42, number: 9, owner: "Notes")]
+    let point = CGPoint(x: 100, y: 100)
+    #expect(coveringWindowProblem(windows, at: point, pid: 42, window: 7) == nil)
+    #expect(coveringWindowProblem(windows, at: point, pid: 42, window: 9) != nil)
+    // Without the window's number, what is on top cannot be told apart.
+    #expect(coveringWindowProblem(windows, at: point, pid: 42, window: nil) != nil)
+    #expect(coveringWindowProblem([info(pid: 43, number: 7, owner: "Mail")], at: point, pid: 42, window: 7)?.hasPrefix("Mail") == true)
+  }
+
+  // An element whose window cannot be read is refused for a click through the system, which would check another window.
+  @Test func anElementWithoutItsOwnWindowGetsNoForegroundClick() throws {
+    helperError("action_failed") { _ = try clickWindow(own: String?.none, foreground: true) }
+    #expect(try clickWindow(own: String?.none, foreground: false) == nil)
+    #expect(try clickWindow(own: "window 7", foreground: true) == "window 7")
+  }
+
+  // The menu check runs right before each button goes down, so a Share button the first press brought under the
+  // point stops the next one, and the press that went down comes up.
+  @Test func aMenuDenialAfterAPressStopsTheNextOne() {
+    var posted: [String] = []
+    var menuChecks = 0
+    var windowChecks = 0
+    helperError("not_allowed") {
+      try pressThroughSystem(count: 3, events: { ("down \($0)", "up \($0)") }, menuCheck: {
+        menuChecks += 1
+        if menuChecks == 2 { throw HelperError(code: "not_allowed", message: "A Share button is under the point now.") }
+      }, windowCheck: { windowChecks += 1 }, post: { event, _ in posted.append(event) })
+    }
+    #expect(posted == ["down 1", "up 1"])
+    #expect(menuChecks == 2 && windowChecks == 1)
+  }
+}

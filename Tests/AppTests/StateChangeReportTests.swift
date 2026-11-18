@@ -37,6 +37,68 @@ import Testing
     #expect(report["renumbered"] as? [String] == ["9 Row \"Inbox\""])
   }
 
+  // A list sorted anew holds the same lines in another order, which no added or removed line shows.
+  @Test func theSameLinesInAnotherOrderAreAChange() {
+    let before = ["1 List", "  2 Row \"Alpha\"", "  3 Row \"Beta\""]
+    let after = ["1 List", "  3 Row \"Beta\"", "  2 Row \"Alpha\""]
+    let report = changeReport(before: before, after: after)
+    #expect(report["changed"] as? Bool == true)
+    #expect(report["reordered"] as? Bool == true)
+    #expect(changeReport(before: before, after: before)["reordered"] == nil)
+    // Two rows that say the same swap places; only their numbers show it.
+    let same = ["1 List", "  2 Row \"Note\"", "  3 Row \"Note\""]
+    let swapped = ["1 List", "  3 Row \"Note\"", "  2 Row \"Note\""]
+    #expect(changeReport(before: same, after: swapped)["reordered"] as? Bool == true)
+    // A row that only got a new number is no reorder.
+    #expect(changeReport(before: same, after: ["1 List", "  2 Row \"Note\"", "  9 Row \"Note\""])["reordered"] == nil)
+    // A read of the same place returns the whole tree rather than no change.
+    #expect(treeDifference(before: before, after: after) == .whole)
+    #expect(treeDifference(before: before, after: before) == TreeDifference.none)
+    #expect(treeDifference(before: before + ["  4 Row \"Gamma\""], after: before) == .lines(["-   4 Row \"Gamma\""]))
+  }
+
+  // A swap next to an insertion: the +/- lines alone would hide the new order.
+  @Test func aReorderNextToAnInsertionIsReportedToo() {
+    let before = ["1 List", "  2 Row \"Alpha\"", "  3 Row \"Beta\"", "  4 Row \"Gamma\"", "  5 Row \"Delta\""]
+    let after = ["1 List", "  3 Row \"Beta\"", "  2 Row \"Alpha\"", "  4 Row \"Gamma\"", "  5 Row \"Delta\"", "  6 Row \"Epsilon\""]
+    let report = changeReport(before: before, after: after)
+    #expect(report["changed"] as? Bool == true)
+    #expect(report["added"] as? [String] == ["6 Row \"Epsilon\""])
+    #expect(report["reordered"] as? Bool == true)
+    #expect(treeDifference(before: before, after: after) == .whole)
+    // The insertion alone keeps the short reply.
+    let inserted = before + ["  6 Row \"Epsilon\""]
+    #expect(changeReport(before: before, after: inserted)["reordered"] == nil)
+    #expect(treeDifference(before: before, after: inserted) == .lines(["+   6 Row \"Epsilon\""]))
+    // Rows that only got new numbers, in the same order, are no reorder.
+    #expect(!linesReordered(before: before, after: ["1 List", "  12 Row \"Alpha\"", "  13 Row \"Beta\"", "  4 Row \"Gamma\"", "  5 Row \"Delta\""]))
+  }
+
+  // Rows that say the same as another one, all renumbered, in another order: none matches by what it says alone.
+  @Test func renumberedRowsThatRepeatInAnotherOrderAreAReorder() {
+    let before = ["1 List", "  2 Row \"A\"", "  3 Row \"B\"", "  4 Row \"A\""]
+    let after = ["1 List", "  12 Row \"A\"", "  14 Row \"A\"", "  13 Row \"B\""]
+    #expect(changeReport(before: before, after: after)["reordered"] as? Bool == true)
+    #expect(changeReport(before: before, after: after)["changed"] as? Bool == true)
+    // Renumbered in their own order, they are no change.
+    #expect(changeReport(before: before, after: ["1 List", "  12 Row \"A\"", "  13 Row \"B\"", "  14 Row \"A\""])["changed"] as? Bool == false)
+  }
+
+  // Rows that swap places and get new numbers next to an inserted one, among unchanged siblings.
+  @Test func aSwapOfRenumberedRowsNextToAnInsertionIsAReorder() {
+    let siblings = (0..<5).map { "  \(20 + $0) Row \"Sibling \($0)\"" }
+    let before = ["1 List", "  2 Row \"Alpha\"", "  3 Row \"Beta\""] + siblings
+    let after = ["1 List", "  31 Row \"Beta\"", "  30 Row \"Alpha\"", "  32 Row \"Gamma\""] + siblings
+    let report = changeReport(before: before, after: after)
+    #expect(report["reordered"] as? Bool == true)
+    #expect(report["added"] as? [String] == ["32 Row \"Gamma\""])
+    #expect(treeDifference(before: before, after: after) == .whole)
+    // The same rows renumbered in their own order, with the insertion, are no reorder.
+    let renumbered = ["1 List", "  30 Row \"Alpha\"", "  31 Row \"Beta\"", "  32 Row \"Gamma\""] + siblings
+    #expect(changeReport(before: before, after: renumbered)["reordered"] == nil)
+    #expect(!linesReordered(before: before, after: renumbered))
+  }
+
   @Test func aGoneElementIsRemovedEvenWhenAnotherOneSaysTheSame() {
     let before = ["1 List", "  2 Row \"Note\"", "  3 Row \"Note\""]
     let after = ["1 List", "  2 Row \"Note\""]

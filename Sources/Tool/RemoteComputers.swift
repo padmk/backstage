@@ -85,10 +85,17 @@ final class RemoteComputers: @unchecked Sendable {
   // Connections opened again in this process, for their element number ranges.
   private var reopened = 0
   private let generation: Int
+  // Set by `closeForGood`, as when the command stops: no connection opens after it.
+  private var closed = false
+  // Connections whose ssh runs and whose handshake has not finished, so `closeForGood` ends them too.
+  private var openingLinks: [ObjectIdentifier: RemoteLink] = [:]
+  private let ssh: String
 
-  init(reached: [String], generation: Int) {
+  // `ssh` is the program run in place of ssh; tests pass a stand-in.
+  init(reached: [String], generation: Int, ssh: String = sshPath) {
     self.reached = Set(reached)
     self.generation = generation
+    self.ssh = ssh
   }
 
   var reachedComputers: [String] { lock.withLock { reached.sorted() } }
@@ -115,8 +122,18 @@ final class RemoteComputers: @unchecked Sendable {
     return result
   }
 
+  // Closes the connections; the next call opens a new one, as after a handoff that did not happen.
   func closeAll() {
     for link in lock.withLock({ Array(links.values) }) { link.close() }
+  }
+
+  // Closes the connections for good: a call already on its way gets `stopping` rather than a new connection.
+  func closeForGood() {
+    let all = lock.withLock { () -> [RemoteLink] in
+      closed = true
+      return Array(links.values) + Array(openingLinks.values)
+    }
+    for link in all { link.close() }
   }
 
   private func link(_ computer: String, clientName: String?) throws -> RemoteLink {
@@ -137,18 +154,127 @@ final class RemoteComputers: @unchecked Sendable {
       reopened += 1
       return try ElementNumbers.remoteBase(generation: generation, reopened: reopened)
     }
-    let link = try RemoteLink(computer: computer, clientName: clientName, elementNumberBase: base)
-    lock.withLock {
+    // Started and registered in one step with the check, so a session closed for good starts no ssh, and one closed
+    // later ends the connection, whose handshake then fails before it writes more.
+    var registered: ObjectIdentifier?
+    defer { if let registered { lock.withLock { _ = openingLinks.removeValue(forKey: registered) } } }
+    let link: RemoteLink
+    do {
+      link = try RemoteLink(computer: computer, clientName: clientName, elementNumberBase: base, ssh: ssh, start: { started, run in
+        try lock.withLock {
+          if closed { throw stoppingFailure }
+          try run()
+          registered = ObjectIdentifier(started)
+          openingLinks[ObjectIdentifier(started)] = started
+        }
+      })
+    } catch {
+      // A handshake that failed because the session was closed for good sent no call.
+      if lock.withLock({ closed }) { throw stoppingFailure }
+      throw error
+    }
+    let published = lock.withLock { () -> Bool in
+      // A close while this connection opened ends it before any call goes over it.
+      guard !closed else { return false }
       links[computer] = link
       if !reached.insert(computer).inserted { link.owesReopenNote() }
+      return true
+    }
+    guard published else {
+      link.close()
+      throw stoppingFailure
     }
     return link
   }
 }
 
+// The requests waiting on one link and whether it has ended, changed together under one lock: once it has ended, by a
+// timeout or by its connection, no request registers on it and every one that waited has been failed.
+// Unchecked: every mutable property is read and written holding `lock`.
+final class LinkCalls: @unchecked Sendable {
+  private let lock = NSLock()
+  private var waiting: [Int: (JSON?) -> Void] = [:]
+  private var nextId = 0
+  private var ended = false
+  // Called each time a write finds the pipe full; tests wait on it.
+  private let onFullPipe: (@Sendable () -> Void)?
+
+  init(onFullPipe: (@Sendable () -> Void)? = nil) { self.onFullPipe = onFullPipe }
+
+  var isOpen: Bool { lock.withLock { !ended } }
+
+  // The id for a request, or nil once the link has ended.
+  func register(_ finish: @escaping (JSON?) -> Void) -> Int? {
+    lock.withLock {
+      guard !ended else { return nil }
+      nextId += 1
+      waiting[nextId] = finish
+      return nextId
+    }
+  }
+
+  func remove(_ id: Int) { lock.withLock { _ = waiting.removeValue(forKey: id) } }
+
+  // The request a reply answers, taken so only one answer counts.
+  func take(_ id: Int) -> ((JSON?) -> Void)? { lock.withLock { waiting.removeValue(forKey: id) } }
+
+  // Writes `data` to `descriptor`, nonblocking, before `deadline`. Each chunk is written holding the lock, after the
+  // checks that the link has not ended and the deadline has not passed, and the wait for room happens outside it, so
+  // nothing is written once the link has ended or its time is up, also by a write that began before. False when not
+  // all of it was written.
+  func write(_ descriptor: Int32, _ data: Data, deadline: Date) -> Bool {
+    enum Attempt {
+      case wrote(Int)
+      case full
+      case stopped
+    }
+    return data.withUnsafeBytes { buffer in
+      guard var base = buffer.baseAddress else { return true }
+      var left = buffer.count
+      while left > 0 {
+        let attempt: Attempt = lock.withLock {
+          guard !ended, Date() < deadline else { return .stopped }
+          let written = Darwin.write(descriptor, base, left)
+          if written >= 0 { return .wrote(written) }
+          if errno == EINTR { return .wrote(0) }
+          return errno == EAGAIN || errno == EWOULDBLOCK ? .full : .stopped
+        }
+        switch attempt {
+        case .stopped:
+          return false
+        case .wrote(let count):
+          left -= count
+          base = base.advanced(by: count)
+        case .full:
+          onFullPipe?()
+          let remaining = deadline.timeIntervalSinceNow
+          guard remaining > 0 else { return false }
+          var ready = pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)
+          let polled = poll(&ready, 1, Int32(min(remaining * 1000, Double(Int32.max)).rounded(.up)))
+          // No room by the deadline, or a poll that failed: the write ends here. An error on the descriptor itself
+          // shows in the next write.
+          if polled == 0 || (polled < 0 && errno != EINTR) { return false }
+        }
+      }
+      return true
+    }
+  }
+
+  // Ends the link and fails every request waiting, except `id`, which reports its own failure.
+  func end(except id: Int? = nil) {
+    let pending: [(JSON?) -> Void] = lock.withLock {
+      ended = true
+      if let id { waiting.removeValue(forKey: id) }
+      defer { waiting.removeAll() }
+      return Array(waiting.values)
+    }
+    for finish in pending { finish(nil) }
+  }
+}
+
 // The SSH connection to one Mac, running its MCP server, with requests matched to replies by id.
-// Unchecked: the requests waiting, the ids, the end, the error output and the note are read and written holding
-// `lock`, writes to ssh hold `writeLock`, and the other properties are constants.
+// Unchecked: the error output and the note are read and written holding `lock`, the requests waiting are in `calls`,
+// writes to ssh hold `writeLock`, and the other properties are constants.
 final class RemoteLink: @unchecked Sendable {
   let computer: String
   private let process = Process()
@@ -156,15 +282,18 @@ final class RemoteLink: @unchecked Sendable {
   private let lock = NSLock()
   // Writes only, apart from `lock`, so a write that waits on ssh holds up no reply and no other state.
   private let writeLock = NSLock()
-  private var waiting: [Int: (JSON?) -> Void] = [:]
-  private var nextId = 0
-  private var ended = false
+  private let calls: LinkCalls
   private var errors = Data()
   // Set on a connection to a Mac this session reached before, until a reply to the client carries the note.
   private var reopenNoteDue = false
 
-  init(computer: String, clientName: String?, elementNumberBase: Int) throws {
+  // `ssh` is the program run in place of ssh; tests pass a stand-in, and may watch for a write that finds the pipe full.
+  // `start` runs ssh, given the link and the function that starts it, so a caller can decide in one step whether it
+  // starts and record it; a throw there leaves ssh unstarted, and nothing is written.
+  init(computer: String, clientName: String?, elementNumberBase: Int, ssh: String = sshPath, onFullPipe: (@Sendable () -> Void)? = nil,
+       start: (RemoteLink, () throws -> Void) throws -> Void = { try $1() }) throws {
     self.computer = computer
+    calls = LinkCalls(onFullPipe: onFullPipe)
     let toServer = Pipe()
     let fromServer = Pipe()
     let errorOutput = Pipe()
@@ -172,7 +301,7 @@ final class RemoteLink: @unchecked Sendable {
     for descriptor in [toServer.fileHandleForWriting.fileDescriptor, fromServer.fileHandleForReading.fileDescriptor, errorOutput.fileHandleForReading.fileDescriptor] {
       _ = fcntl(descriptor, F_SETFD, FD_CLOEXEC)
     }
-    process.executableURL = URL(fileURLWithPath: sshPath)
+    process.executableURL = URL(fileURLWithPath: ssh)
     process.arguments = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
                          "--", computer, remoteCommand]
     process.standardInput = toServer
@@ -182,10 +311,12 @@ final class RemoteLink: @unchecked Sendable {
     let flags = fcntl(input.fileDescriptor, F_GETFL)
     _ = fcntl(input.fileDescriptor, F_SETFL, flags | O_NONBLOCK)
     process.terminationHandler = { [weak self] _ in self?.end() }
-    do {
-      try process.run()
-    } catch {
-      throw unreachable(computer, "ssh did not start: \(error.localizedDescription)")
+    try start(self) {
+      do {
+        try process.run()
+      } catch {
+        throw unreachable(computer, "ssh did not start: \(error.localizedDescription)")
+      }
     }
     let output = fromServer.fileHandleForReading
     Thread { [weak self] in
@@ -226,7 +357,7 @@ final class RemoteLink: @unchecked Sendable {
     notify("notifications/initialized", nil)
   }
 
-  var isOpen: Bool { lock.withLock { !ended } }
+  var isOpen: Bool { calls.isOpen }
 
   func owesReopenNote() { lock.withLock { reopenNoteDue = true } }
 
@@ -243,22 +374,17 @@ final class RemoteLink: @unchecked Sendable {
   func request(_ method: String, _ params: JSON, seconds: TimeInterval, cancellation: RemoteCancellation? = nil, lostMessage: String?) throws -> JSON {
     let done = DispatchSemaphore(value: 0)
     var reply: JSON?
-    let id: Int? = lock.withLock {
-      guard !ended else { return nil }
-      nextId += 1
-      waiting[nextId] = { reply = $0; done.signal() }
-      return nextId
-    }
-    guard let id else { throw lost(lostMessage) }
+    guard let id = calls.register({ reply = $0; done.signal() }) else { throw lost(lostMessage) }
     if cancellation?.isCancelled == true {
-      lock.withLock { _ = waiting.removeValue(forKey: id) }
+      calls.remove(id)
       throw HelperFailure(code: "cancelled", message: "The request was cancelled.")
     }
     send(["id": id, "method": method, "params": params])
     cancellation?.requestSent(self, id)
     if done.wait(timeout: .now() + seconds) == .timedOut {
-      lock.withLock { _ = waiting.removeValue(forKey: id) }
-      // A connection that missed the other Mac's own deadline is not used again; closing it ends that session there.
+      // A connection that missed the other Mac's own deadline is not used again: it ends in the same step that claims
+      // the timeout, so no later request registers on it, and closing it ends that session there.
+      calls.end(except: id)
       close()
       throw HelperFailure(code: "timeout", message: "\(computer) did not answer in \(Int(seconds)) s. Read the state there before trying again.")
     }
@@ -272,9 +398,10 @@ final class RemoteLink: @unchecked Sendable {
     send(message)
   }
 
+  // Ended first, so no request registers or writes while ssh stops.
   func close() {
-    if process.isRunning { process.terminate() }
     end()
+    if process.isRunning { process.terminate() }
   }
 
   private func send(_ message: JSON) {
@@ -284,7 +411,8 @@ final class RemoteLink: @unchecked Sendable {
     guard isOpen else { return }
     let deadline = Date().addingTimeInterval(writeSeconds)
     guard writeLock.lock(before: deadline) else { return close() }
-    let written = writeAll(input.fileDescriptor, data, deadline: deadline)
+    // Checks the end before each chunk, so a link that ended meanwhile gets nothing more.
+    let written = calls.write(input.fileDescriptor, data, deadline: deadline)
     writeLock.unlock()
     if !written { close() }
   }
@@ -293,18 +421,11 @@ final class RemoteLink: @unchecked Sendable {
     // Lines that are no reply, such as a login banner, are skipped.
     guard let message = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? JSON,
       let id = (message["id"] as? NSNumber)?.intValue else { return }
-    lock.withLock { waiting.removeValue(forKey: id) }?(message)
+    calls.take(id)?(message)
   }
 
   // Every request still waiting fails, and later ones open a new connection.
-  private func end() {
-    let pending: [(JSON?) -> Void] = lock.withLock {
-      ended = true
-      defer { waiting.removeAll() }
-      return Array(waiting.values)
-    }
-    for finish in pending { finish(nil) }
-  }
+  private func end() { calls.end() }
 
   private func lost(_ message: String?) -> HelperFailure {
     if let message { return HelperFailure(code: "outcome_unknown", message: message) }
@@ -316,6 +437,8 @@ final class RemoteLink: @unchecked Sendable {
     return unreachable(computer, detail.isEmpty ? "the connection ended" : detail)
   }
 }
+
+private let stoppingFailure = HelperFailure(code: "stopping", message: "This command is stopping, so the call was not sent.")
 
 private func unreachable(_ computer: String, _ detail: String) -> HelperFailure {
   let reason = detail.hasSuffix(".") ? String(detail.dropLast()) : detail

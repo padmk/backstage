@@ -138,11 +138,42 @@ private enum Fetched {
   case failed(String)
   case tooLarge
   case timedOut
+  case cancelled
 }
 
-// Streams one resource into a file. The request is cancelled on a timeout or past the size limit, and a callback
+enum RequestWait {
+  case done
+  case cancelled
+  case timedOut
+}
+
+// Waits for `done` for `seconds` at most, less when the running request's deadline comes first, and stops at once
+// when the request is cancelled, so a wait under an app's lock never outlasts the request.
+func waitWithinRequest(_ done: DispatchSemaphore, atMost seconds: TimeInterval) -> RequestWait {
+  let connection = currentConnection()
+  let limit = min(seconds, connection?.timeLeftForWork ?? seconds)
+  let cancelled = AsyncOutcome<Bool>()
+  let stopWatching = connection?.onCancel {
+    cancelled.set(.success(true))
+    done.signal()
+  }
+  defer { stopWatching?() }
+  guard limit > 0, done.wait(timeout: .now() + limit) == .success else { return .timedOut }
+  return cancelled.wait(until: .now()) == nil ? .done : .cancelled
+}
+
+// Whether the running request must start no more work: cancelled, past its deadline, or without time left for it.
+func stopBeforeWork() -> RequestWait? {
+  guard let connection = currentConnection() else { return nil }
+  if let cause = connection.stopCause { return cause.code == "cancelled" ? .cancelled : .timedOut }
+  if let left = connection.timeLeftForWork, left <= 0 { return .timedOut }
+  return nil
+}
+
+// Streams one resource into a file. The request is cancelled on a timeout, a cancel or past the size limit, and a callback
 // that arrives after that changes nothing.
 private func fetch(_ resource: PHAssetResource, to url: URL, network: Bool) -> Fetched {
+  if let stop = stopBeforeWork() { return stop == .cancelled ? .cancelled : .timedOut }
   guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]),
     // The failure is reported; the reason adds nothing the agent can act on.
     let file = try? FileHandle(forWritingTo: url) else { return .failed("The copy could not be written.") }
@@ -196,12 +227,13 @@ private func fetch(_ resource: PHAssetResource, to url: URL, network: Bool) -> F
     }
   })
   if lock.withLock({ request = started; return stopWanted }) { manager.cancelDataRequest(started) }
-  if done.wait(timeout: .now() + exportSeconds) == .timedOut {
+  let waited = waitWithinRequest(done, atMost: exportSeconds)
+  if waited != .done {
+    // The stop the wait saw is the answer, also over a completion that came in just before this: the request has
+    // already given up on the copy.
     lock.withLock {
-      if !finished {
-        finished = true
-        outcome = .timedOut
-      }
+      finished = true
+      outcome = waited == .cancelled ? .cancelled : .timedOut
     }
     manager.cancelDataRequest(started)
   }
@@ -239,11 +271,20 @@ private let export = Operation(
   let original = folder.appendingPathComponent(jpeg ? ".source-" + name : name)
   // Without the network first, so an item that is only in iCloud is reported as downloaded.
   var downloaded = false
+  // A request cancelled or out of time starts no further download or conversion, and leaves no folder.
+  let stopIfWanted = {
+    do { try currentConnection()?.throwIfStopped() } catch {
+      // A folder left behind on failure holds no result and only takes space.
+      try? FileManager.default.removeItem(at: folder)
+      throw error
+    }
+  }
   var outcome = fetch(resource, to: original, network: false)
   if case .needsNetwork = outcome {
     downloaded = true
     // Only the downloaded original; the copy made from it is the result.
     try? FileManager.default.removeItem(at: original)
+    try stopIfWanted()
     outcome = fetch(resource, to: original, network: true)
   }
   switch outcome {
@@ -260,10 +301,15 @@ private let export = Operation(
   case .timedOut:
     // A folder left behind on failure holds no result and only takes space.
     try? FileManager.default.removeItem(at: folder)
-    throw HelperError(code: "timeout", message: "Copying the item took longer than \(Int(exportSeconds)) s\(downloaded ? ", downloading it from iCloud" : "").")
+    throw HelperError(code: "timeout", message: "Copying the item did not finish within \(Int(exportSeconds)) s or the time the request had left\(downloaded ? ", downloading it from iCloud" : "").")
+  case .cancelled:
+    // A folder left behind on failure holds no result and only takes space.
+    try? FileManager.default.removeItem(at: folder)
+    throw HelperError(code: "cancelled", message: "The request was cancelled.")
   }
   var result: JSON = ["id": item.localIdentifier, "format": jpeg ? "jpeg" : "original"]
   if downloaded { result["downloaded"] = true }
+  try stopIfWanted()
   let path: URL
   if jpeg {
     // Drawn from the original with its orientation applied and no metadata, so no location travels with it.

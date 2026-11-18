@@ -238,9 +238,46 @@ func content(of lines: [String]) -> [String] {
 // The element number a line starts with.
 func number(ofLine line: String) -> Int? { parse(line)?.number }
 
+// Whether two reads hold lines in another order, such as rows sorted anew, whatever else was added or removed. The
+// rows both reads hold are matched by their exact line first, then by what they say where that names one row on each
+// side, as for a row that got a new number; the rest are added or removed and do not count. A reorder is a matched
+// pair whose order differs between the reads, so rows that only got new numbers, in the same order, are none. Rows
+// that say the same as others match no row by what they say, so the same rows by what they say, all of them, in
+// another order are a reorder too.
+func linesReordered(before: [String], after: [String]) -> Bool {
+  var exact: [String: [Int]] = [:]
+  for (index, line) in before.enumerated() { exact[line, default: []].append(index) }
+  // The position in `before` of each row of `after` that matched, by its position in `after`.
+  var matched: [Int: Int] = [:]
+  var usedBefore = Set<Int>()
+  for (index, line) in after.enumerated() {
+    guard var indices = exact[line], !indices.isEmpty else { continue }
+    let first = indices.removeFirst()
+    exact[line] = indices
+    matched[index] = first
+    usedBefore.insert(first)
+  }
+  let beforeContent = content(of: before)
+  let afterContent = content(of: after)
+  if beforeContent != afterContent, beforeContent.sorted() == afterContent.sorted() { return true }
+  // What the rows left over say, with where they are, kept only when it names one row.
+  func unique(_ texts: [String], skipping used: (Int) -> Bool) -> [String: Int] {
+    var found: [String: Int?] = [:]
+    for (index, text) in texts.enumerated() where !used(index) {
+      found[text] = found[text] == nil ? .some(index) : .some(nil)
+    }
+    return found.compactMapValues { $0 }
+  }
+  let leftBefore = unique(beforeContent) { usedBefore.contains($0) }
+  let leftAfter = unique(afterContent) { matched[$0] != nil }
+  for (text, index) in leftAfter { if let other = leftBefore[text] { matched[index] = other } }
+  let order = matched.sorted { $0.key < $1.key }.map(\.value)
+  return zip(order, order.dropFirst()).contains { $0 > $1 }
+}
+
 // What changed between two reads, by what the lines say. Apps such as System Settings hand out new elements for
 // unchanged ones, which gives them new numbers; such a line is no change, and comes back under `renumbered` with the
-// number to use now.
+// number to use now. Lines in another order are a change, marked `reordered`, also next to added and removed ones.
 func changeReport(before: [String], after: [String]) -> JSON {
   let beforeSet = Set(before)
   let afterSet = Set(after)
@@ -271,7 +308,10 @@ func changeReport(before: [String], after: [String]) -> JSON {
   }
   let limit = 40
   let trimmed = { (lines: [String]) in lines.prefix(limit).map { $0.trimmingCharacters(in: .whitespaces) } }
-  var report: JSON = ["changed": !(added.isEmpty && removed.isEmpty), "added": trimmed(added), "removed": trimmed(removed)]
+  // Lines in another order are a change no added or removed line shows.
+  let reordered = linesReordered(before: before, after: after)
+  var report: JSON = ["changed": !(added.isEmpty && removed.isEmpty) || reordered, "added": trimmed(added), "removed": trimmed(removed)]
+  if reordered { report["reordered"] = true }
   if added.count > limit || removed.count > limit { report["more_changes"] = true }
   if !renumbered.isEmpty { report["renumbered"] = trimmed(renumbered) }
   if renumbered.count > limit { report["more_renumbered"] = true }

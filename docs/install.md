@@ -96,7 +96,7 @@ Backstage keeps its files at the XDG defaults, in `0700` directories. The `XDG_*
 | `/Applications/Backstage.app` (or `~/Applications`) | The app, and the command in `Contents/Helpers/backstage` |
 | `~/.config/backstage/approvals.json` | The app list (`0600`) |
 | `~/.config/backstage/settings.json` | The window's switches (Allow every app, Windows while locked, the menu bar item), the last tab, and which apps' data macOS has been asked about (`0600`) |
-| `~/.local/share/backstage/` | The signing keychain `signing.keychain-db`, the certificate's hash in `signing.identity`, and the setup lock |
+| `~/.local/share/backstage/` | The signing keychain `signing.keychain-db`, the certificate's hash in `signing.identity`, and the setup lock `setup-lock` |
 | `~/.local/state/backstage/` | The socket `helper.sock`, the start lock and the activity log `decisions.jsonl` (`0600`) |
 
 Copies an agent asked for and recordings live in private folders in the system's temporary folder; [PRIVACY.md](../PRIVACY.md#what-stays-on-disk) lists them. Outside these places, macOS keeps what it owns: the permissions, the login item (Open at login) and the app's defaults.

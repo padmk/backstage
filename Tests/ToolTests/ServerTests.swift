@@ -236,6 +236,16 @@ private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
     #expect(helper.all("hello").count == 2)
   }
 
+  // A helper that refuses the session, as one restarting does, keeps the connection open; the command ends it, so no
+  // retry leaves a connection and a reader behind.
+  @Test func endsTheConnectionWhenTheHelperRefusesItsHello() throws {
+    let home = TemporaryHome()
+    let helper = try FakeHelper(home: home, helloError: ["code": "restarting", "message": "Restarting."])
+    let server = try ServerProcess(home: home)
+    #expect(textOf(try server.call("list_apps")).hasPrefix("restarting"))
+    try until { helper.connectionsEnded == 1 ? true : nil }
+  }
+
   // A helper that restarted has forgotten the session, so numbers from before must not name its new elements.
   @Test func numbersElementsFromANewRangeOnEveryNewConnection() throws {
     let setup = try Setup { _ in ["result": ["ok": true]] }
@@ -311,6 +321,67 @@ private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
     #expect(hellos.last?["client_name"] as? String == "claude-code")
   }
 
+  // A restart that cannot take the start lock still ends the connection to the helper it meant to replace.
+  @Test func endsTheConnectionWhenTheStartLockCannotBeTaken() throws {
+    let home = TemporaryHome()
+    let installed = try FakeBundle(in: home, named: "Installed", build: 0xA1)
+    let helper = try FakeHelper(home: home, builds: ["other"])
+    let lock = open(home.path + "/start-lock", O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+    defer { close(lock) }
+    #expect(flock(lock, LOCK_EX) == 0)
+    let server = try ServerProcess(home: home, executable: installed.command, environment: managing(installed.path).merging(["HELPER_TEST_TIMEOUT": "1"]) { $1 })
+    let result = try server.call("list_apps")
+    #expect(result["isError"] as? Bool == true)
+    #expect(textOf(result).contains("still holds"), "\(textOf(result))")
+    try until { helper.connectionsEnded == 1 ? true : nil }
+    #expect(helper.first("quit") == nil)
+  }
+
+  // A bundle of the first handoff revision drops a stop signal pending at its start, so a session never moves to it.
+  @Test func aBundleOfTheFirstHandoffRevisionGetsNoSession() throws {
+    let home = TemporaryHome()
+    let installed = try FakeBundle(in: home, named: "Installed", build: 0xA1, handoffRevision: 1)
+    let older = try FakeBundle(in: home, named: "Older", build: 0xB2)
+    let helper = try FakeHelper(home: home, builds: [installed.build]) { _ in ["result": ["ok": true]] }
+    let server = try ServerProcess(home: home, executable: older.command, environment: managing(installed.path))
+    let pressed = try server.call("press", ["app": "Notes", "element": 1])
+    #expect(textOf(pressed).contains("belongs to another build"), "\(textOf(pressed))")
+    #expect(helper.all("hello").count == 1)
+    #expect(helper.first("press") == nil)
+  }
+
+  // An older command whose client does not read: the replies fill the pipe, and the call that finds the newer build
+  // starts a handoff that waits for that output.
+  private func handoffWaitingForOutput(_ home: TemporaryHome) throws -> (helper: FakeHelper, server: ServerProcess) {
+    let installed = try FakeBundle(in: home, named: "Installed", build: 0xA1, handoffRevision: Product.sessionHandoffRevision)
+    let older = try FakeBundle(in: home, named: "Older", build: 0xB2)
+    let helper = try FakeHelper(home: home, builds: [installed.build]) { _ in ["result": ["ok": true]] }
+    let server = try ServerProcess(home: home, executable: older.command, environment: managing(installed.path), readsOutput: false)
+    for id in 1...200 { server.write(line(["jsonrpc": "2.0", "id": id, "method": "tools/list"])) }
+    // Once the replies have filled the pipe, the rest wait to be written.
+    try server.waitUntilOutputIsFull()
+    server.write(line(["jsonrpc": "2.0", "id": 1000, "method": "tools/call", "params": ["name": "press", "arguments": ["app": "Notes", "element": 1]]]))
+    try until { helper.all("hello").count == 1 ? true : nil }
+    return (helper, server)
+  }
+
+  // The exec would cut a reply in the middle, so the handoff gives up and this command goes on serving the client.
+  @Test func aHandoffGivesUpWhileTheClientDoesNotReadAndInputGoesOn() throws {
+    let home = TemporaryHome()
+    let (helper, server) = try handoffWaitingForOutput(home)
+    // Well past the 1 s the handoff waits for the output.
+    Thread.sleep(forTimeInterval: 2.5)
+    server.startReading()
+    let pressed = try #require(try until { server.received.first { ($0["id"] as? Int) == 1000 } }["result"] as? Object)
+    #expect(textOf(pressed).contains("belongs to another build"), "\(textOf(pressed))")
+    // An id no earlier request used, so only this ping's own answer counts.
+    server.write(line(["jsonrpc": "2.0", "id": 2000, "method": "ping"]))
+    let pong = try until { server.received.first { ($0["id"] as? Int) == 2000 } }
+    #expect((pong["result"] as? Object)?.isEmpty == true)
+    #expect(helper.all("hello").count == 1)
+    #expect(helper.first("press") == nil)
+  }
+
   @Test func reportsNoHelperInsteadOfHanging() throws {
     let home = TemporaryHome()
     let server = try ServerProcess(home: home)
@@ -326,6 +397,155 @@ private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
     #expect(ended.status == 0 && ended.reason == .exit)
   }
 
+  // Replies to a client that stopped reading fill the pipe and block the output; a signal still ends the process.
+  // The command answers a ping first, so the signal arrives once it handles signals, not while it still starts.
+  @Test func endsOnASignalWhileTheClientDoesNotRead() throws {
+    let home = TemporaryHome()
+    let server = try ServerProcess(home: home, readsOutput: false)
+    server.write(line(["jsonrpc": "2.0", "id": 0, "method": "ping"]))
+    #expect(server.readOneLine()?["id"] as? Int == 0)
+    for id in 1...200 { server.write(line(["jsonrpc": "2.0", "id": id, "method": "tools/list"])) }
+    try server.waitUntilOutputIsFull()
+    kill(server.process.processIdentifier, SIGTERM)
+    // A process that hangs is killed, so it does not outlive the test.
+    defer { if server.process.isRunning { kill(server.process.processIdentifier, SIGKILL) } }
+    let ended = try server.waitForExit(timeout: 5)
+    #expect(ended.status == 0 && ended.reason == .exit)
+  }
+
+  // A handoff execs the next command with the stop signals blocked, so one that came during the exec is pending there.
+  // Started suspended with SIGTERM blocked and then sent it, the command is in that state; it must stop.
+  @Test func aStopSignalPendingAtStartStopsTheCommand() throws {
+    let home = TemporaryHome()
+    let command = try SpawnedCommand(home: home, termBlocked: true, suspended: true)
+    kill(command.pid, SIGTERM)
+    kill(command.pid, SIGCONT)
+    #expect(command.exitedCleanly())
+  }
+
+  // The state of a handoff comes in a regular file; a pipe that never ends must not keep a stop waiting.
+  @Test func aStopWhileTheHandoffStateIsAPipeEndsTheCommand() throws {
+    let home = TemporaryHome()
+    var resume: [Int32] = [0, 0]
+    #expect(pipe(&resume) == 0)
+    defer { close(resume[1]) }
+    // Blocked from the start, so the signal waits for the command however long it takes to start.
+    let command = try SpawnedCommand(home: home, termBlocked: true, resume: resume[0])
+    close(resume[0])
+    // The pipe's writer stays open, so only a command that does not read it from the pipe serves.
+    command.write(line(["jsonrpc": "2.0", "id": 1, "method": "ping"]))
+    #expect(command.readOneLine()?["id"] as? Int == 1)
+    kill(command.pid, SIGTERM)
+    #expect(command.exitedCleanly())
+  }
+
+  // A stop that begins before the server is attached ends the process with nothing handled and nothing said: the
+  // stop is held after it began while the main thread reaches the attach, a handoff passed on a press and a new tool
+  // list, and another press waits on stdin.
+  @Test func aStopBeforeTheServerIsAttachedHandlesAndSaysNothing() throws {
+    let home = TemporaryHome()
+    let helper = try FakeHelper(home: home)
+    let press = line(["jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["name": "press", "arguments": ["app": "Notes", "element": 1]]])
+    let state = home.path + "/state"
+    try (line(["tools_digest": "an older list", "generation": 1]) + "\n" + press + "\n").write(toFile: state, atomically: true, encoding: .utf8)
+    let resume = open(state, O_RDONLY)
+    #expect(resume >= 0)
+    let command = try SpawnedCommand(home: home, termBlocked: true, suspended: true, resume: resume, environment: ["HELPER_TEST_STOP_DELAY=1"])
+    close(resume)
+    command.write(press)
+    kill(command.pid, SIGTERM)
+    kill(command.pid, SIGCONT)
+    try until { FileManager.default.fileExists(atPath: home.path + "/stop-hold") ? true : nil }
+    #expect(command.exitedCleanly())
+    #expect(command.readOneLine(timeout: 1) == nil)
+    #expect(helper.requests.isEmpty)
+  }
+
+  // Once a stop has begun, the command reads no more input: a ping sent while the stop is held stays unread and
+  // gets no answer.
+  @Test func aStopWhileServingReadsNoMoreInput() throws {
+    let home = TemporaryHome()
+    let command = try SpawnedCommand(home: home, termBlocked: true, environment: ["HELPER_TEST_STOP_DELAY=1"])
+    command.write(line(["jsonrpc": "2.0", "id": 1, "method": "ping"]))
+    #expect(command.readOneLine()?["id"] as? Int == 1)
+    kill(command.pid, SIGTERM)
+    try until { FileManager.default.fileExists(atPath: home.path + "/stop-hold") ? true : nil }
+    let late = line(["jsonrpc": "2.0", "id": 2, "method": "ping"])
+    command.write(late)
+    #expect(command.exitedCleanly())
+    #expect(command.unreadInput == late.utf8.count + 1)
+    #expect(command.readOneLine(timeout: 1) == nil)
+  }
+
+  // A stop signal while a handoff holds the stop's lock, right before its exec, reaches the installed command.
+  @Test func aStopSignalDuringTheExecOfAHandoffStopsTheNextCommand() throws {
+    let home = TemporaryHome()
+    let installed = try FakeBundle(in: home, named: "Installed", build: 0xA1, handoffRevision: Product.sessionHandoffRevision)
+    let older = try FakeBundle(in: home, named: "Older", build: 0xB2)
+    let helper = try FakeHelper(home: home, builds: [installed.build]) { _ in ["result": ["ok": true]] }
+    let environment = managing(installed.path).merging(["HELPER_TEST_EXEC_DELAY": "1", "HELPER_TEST_STOP_DELAY": "0.1"]) { $1 }
+    let server = try ServerProcess(home: home, executable: older.command, environment: environment)
+    _ = try server.initialize("claude-code")
+    server.write(line(["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "press", "arguments": ["app": "Notes", "element": 1]]]))
+    try until { FileManager.default.fileExists(atPath: home.path + "/exec-hold") ? true : nil }
+    kill(server.process.processIdentifier, SIGTERM)
+    // A command that lives on after the handoff is killed, so it does not outlive the test.
+    defer { if server.process.isRunning { kill(server.process.processIdentifier, SIGKILL) } }
+    let ended = try server.waitForExit(timeout: 5)
+    // The stop ran in the installed command, which the exec started with the session's state.
+    let stopped = try String(contentsOfFile: home.path + "/stop-hold", encoding: .utf8)
+    #expect(stopped.hasPrefix(installed.command) && stopped.contains("--resume-fd"), "\(stopped)")
+    #expect(ended.status == 0 && ended.reason == .exit)
+    #expect(helper.first("press") == nil)
+  }
+
+  // The installed bundle may change after the handoff first looked at it: checked again holding the setup lock, a bundle
+  // of the first handoff revision gets no session.
+  @Test func aHandoffChecksTheInstalledBundleAgainHoldingTheSetupLock() throws {
+    let home = TemporaryHome()
+    let installed = try FakeBundle(in: home, named: "Installed", build: 0xA1, handoffRevision: Product.sessionHandoffRevision)
+    let older = try FakeBundle(in: home, named: "Older", build: 0xB2)
+    let helper = try FakeHelper(home: home, builds: [installed.build]) { _ in ["result": ["ok": true]] }
+    // Setup holds its lock, as while it replaces the installed app.
+    let lock = open(home.path + "/setup-lock", O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+    #expect(lock >= 0 && flock(lock, LOCK_EX) == 0)
+    let server = try ServerProcess(home: home, executable: older.command, environment: managing(installed.path))
+    _ = try server.initialize("claude-code")
+    server.write(line(["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "press", "arguments": ["app": "Notes", "element": 1]]]))
+    try until { helper.all("hello").count == 1 ? true : nil }
+    // The handoff's first look at the bundle follows the hello at once; it then waits for the lock.
+    Thread.sleep(forTimeInterval: 0.5)
+    try ([Product.sessionHandoffKey: 1] as NSDictionary).write(to: URL(fileURLWithPath: installed.path + "/Contents/Info.plist"))
+    close(lock)
+    let pressed = try #require(try until { server.received.first { ($0["id"] as? Int) == 2 } }["result"] as? Object)
+    #expect(textOf(pressed).contains("belongs to another build"), "\(textOf(pressed))")
+    #expect(helper.all("hello").count == 1)
+    #expect(helper.first("press") == nil)
+  }
+
+  // A handoff holds the lock setup takes to replace the installed app from its last check of that bundle through its
+  // exec, so no other bundle comes in between, and the lock does not cross into the installed command.
+  @Test func aHandoffHoldsTheSetupLockThroughItsExecAndNotAfter() throws {
+    let home = TemporaryHome()
+    let installed = try FakeBundle(in: home, named: "Installed", build: 0xA1, handoffRevision: Product.sessionHandoffRevision)
+    let older = try FakeBundle(in: home, named: "Older", build: 0xB2)
+    let helper = try FakeHelper(home: home, builds: [installed.build]) { _ in ["result": ["ok": true]] }
+    let environment = managing(installed.path).merging(["HELPER_TEST_EXEC_DELAY": "0.5"]) { $1 }
+    let server = try ServerProcess(home: home, executable: older.command, environment: environment)
+    _ = try server.initialize("claude-code")
+    server.write(line(["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "press", "arguments": ["app": "Notes", "element": 1]]]))
+    try until { FileManager.default.fileExists(atPath: home.path + "/exec-hold") ? true : nil }
+    let lock = open(home.path + "/setup-lock", O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+    #expect(lock >= 0)
+    defer { close(lock) }
+    #expect(flock(lock, LOCK_EX | LOCK_NB) != 0 && errno == EWOULDBLOCK)
+    // The installed command serves the call, so the exec has happened; the lock is free then.
+    let pressed = try #require(try until { server.received.first { ($0["id"] as? Int) == 2 } }["result"] as? Object)
+    #expect(textOf(pressed).contains("ok"))
+    #expect(helper.all("hello").count == 2)
+    #expect(flock(lock, LOCK_EX | LOCK_NB) == 0)
+  }
+
   @Test(arguments: [SIGTERM, SIGINT, SIGHUP])
   func endsOnASignal(signal: Int32) throws {
     let setup = try Setup()
@@ -333,5 +553,94 @@ private func statelessMeta(_ protocolVersion: String = "2026-07-28") -> Object {
     kill(setup.server.process.processIdentifier, signal)
     let ended = try setup.server.waitForExit()
     #expect(ended.status == 0 && ended.reason == .exit)
+  }
+}
+
+// `backstage mcp` started with posix_spawn, for what Process cannot set up: a signal mask, a start suspended, and the
+// descriptor of a handoff's state. Its stdin and stdout are pipes that stay open until this is gone.
+private final class SpawnedCommand {
+  let pid: pid_t
+  private let input: Int32
+  private let output: Int32
+  // A copy of the read end of its stdin, so the test can see what the command has not read.
+  private let inputReader: Int32
+
+  init(home: TemporaryHome, termBlocked: Bool = false, suspended: Bool = false, resume: Int32? = nil, environment extra: [String] = []) throws {
+    var pipeEnds: [Int32] = [0, 0]
+    var outputEnds: [Int32] = [0, 0]
+    guard pipe(&pipeEnds) == 0, pipe(&outputEnds) == 0 else { throw TestFailure("pipe failed") }
+    input = pipeEnds[1]
+    output = outputEnds[0]
+    inputReader = fcntl(pipeEnds[0], F_DUPFD_CLOEXEC, 0)
+    defer {
+      close(pipeEnds[0])
+      close(outputEnds[1])
+    }
+    var attributes: posix_spawnattr_t?
+    var actions: posix_spawn_file_actions_t?
+    posix_spawnattr_init(&attributes)
+    posix_spawn_file_actions_init(&actions)
+    defer {
+      posix_spawnattr_destroy(&attributes)
+      posix_spawn_file_actions_destroy(&actions)
+    }
+    var blocked = sigset_t()
+    sigemptyset(&blocked)
+    if termBlocked { sigaddset(&blocked, SIGTERM) }
+    var defaults = sigset_t()
+    sigemptyset(&defaults)
+    sigaddset(&defaults, SIGTERM)
+    let suspendedFlag = suspended ? POSIX_SPAWN_START_SUSPENDED : 0
+    posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_CLOEXEC_DEFAULT | suspendedFlag))
+    posix_spawnattr_setsigmask(&attributes, &blocked)
+    posix_spawnattr_setsigdefault(&attributes, &defaults)
+    posix_spawn_file_actions_adddup2(&actions, pipeEnds[0], STDIN_FILENO)
+    posix_spawn_file_actions_adddup2(&actions, outputEnds[1], STDOUT_FILENO)
+    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0)
+    var arguments = [commandBinary, "mcp"]
+    if let resume {
+      posix_spawn_file_actions_adddup2(&actions, resume, 3)
+      arguments += ["--resume-fd", "3"]
+    }
+    let environment = ["HOME=\(home.path)", "HELPER_TEST_HOME=\(home.path)", "HELPER_NO_START=1"] + extra
+    let argv: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) } + [nil]
+    let envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup($0) } + [nil]
+    defer { (argv + envp).forEach { free($0) } }
+    var spawned: pid_t = 0
+    guard posix_spawn(&spawned, commandBinary, &actions, &attributes, argv, envp) == 0 else { throw TestFailure("posix_spawn failed") }
+    pid = spawned
+  }
+
+  // Whether it exited with status 0 within 5 s; one that did not is killed, so it does not outlive the test.
+  func exitedCleanly() -> Bool {
+    var status: Int32 = 0
+    // A timeout means the command lives on, which the answer reports.
+    let ended = try? until(timeout: 5) { waitpid(pid, &status, WNOHANG) == pid ? true : nil }
+    guard ended == true else {
+      kill(pid, SIGKILL)
+      waitpid(pid, &status, 0)
+      return false
+    }
+    return status & 0x7f == 0 && (status >> 8) & 0xff == 0
+  }
+
+  func write(_ text: String) {
+    let bytes = Array((text + "\n").utf8)
+    _ = bytes.withUnsafeBytes { Darwin.write(input, $0.baseAddress, $0.count) }
+  }
+
+  func readOneLine(timeout: TimeInterval = 10) -> Object? { readLine(output, timeout: timeout) }
+
+  // How many bytes written to its stdin nobody has read.
+  var unreadInput: Int {
+    var count: Int32 = 0
+    _ = ioctl(inputReader, bytesWaitingRequest, &count)
+    return Int(count)
+  }
+
+  deinit {
+    close(input)
+    close(output)
+    close(inputReader)
   }
 }

@@ -31,7 +31,7 @@ public enum Product {
   // Wire format: the key in an MCP initialize request's _meta by which one command, reaching another Mac's command
   // again, asks it to number elements from a range of their own.
   public static let elementNumberBaseKey = "\(bundleIdentifier)/elementNumberBase"
-  public static let sessionHandoffRevision = 1
+  public static let sessionHandoffRevision = 2
 
   // The pane of Privacy & Security in System Settings for one permission, such as Privacy_Accessibility.
   public static func privacyPaneURL(_ pane: String) -> String {

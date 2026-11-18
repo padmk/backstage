@@ -11,7 +11,9 @@ struct ProcessOutput {
 
 // Runs a program to its end, with a time limit, and fails with its error output when it does not succeed.
 @discardableResult
-func runProcess(_ path: String, _ arguments: [String], timeout: TimeInterval = 180, allowFailure: Bool = false) throws -> ProcessOutput {
+// `start` runs the given function, which starts the process, so a caller can decide in one step whether it starts.
+func runProcess(_ path: String, _ arguments: [String], timeout: TimeInterval = 180, allowFailure: Bool = false,
+                start: (() throws -> Void) throws -> Void = { try $0() }) throws -> ProcessOutput {
   let process = Process()
   process.executableURL = URL(fileURLWithPath: path)
   process.arguments = arguments
@@ -20,7 +22,7 @@ func runProcess(_ path: String, _ arguments: [String], timeout: TimeInterval = 1
   process.standardOutput = output
   process.standardError = errors
   process.standardInput = FileHandle.nullDevice
-  try process.run()
+  try start { try process.run() }
   // Read while it runs, so a full pipe never blocks it.
   let outputReader = PipeReader(output.fileHandleForReading)
   let errorReader = PipeReader(errors.fileHandleForReading)

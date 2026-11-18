@@ -35,15 +35,28 @@ func toolsDigest() -> String {
   return String(hash, radix: 16)
 }
 
-// Writes the state and the input to an unlinked private file and execs the installed command with it. Returns only
-// when that fails, leaving this process as it was.
-func execInstalledCommand(state: HandoffState, input: Data, directories: Directories) -> Bool {
-  // Without the directory there is no handoff, and the session stays with this command.
-  guard (try? ensurePrivateDirectory(directories.state)) != nil else { return false }
+// The signals that stop the MCP server. They stay blocked in every thread, so none is delivered: dispatch sources see
+// each one, and one that arrives while a handoff execs stays pending into the installed command, which then stops.
+// Observed on macOS 27: a blocked signal sent before a POSIX_SPAWN_SETEXEC exec that resets it to its default action
+// is still pending in the new image, while one sent with the action SIG_IGN is discarded at once.
+let stopSignals: [Int32] = [SIGINT, SIGTERM, SIGHUP]
+
+func signalSet(_ signals: [Int32]) -> sigset_t {
+  var set = sigset_t()
+  sigemptyset(&set)
+  for signalNumber in signals { sigaddset(&set, signalNumber) }
+  return set
+}
+
+// Writes the state and the input to an unlinked private file, ready for the installed command: its descriptor, or
+// nil when there is nothing to hand over with, and the session stays with this command.
+func writeHandoff(state: HandoffState, input: Data, directories: Directories) -> Int32? {
+  // Without the directory there is no handoff.
+  guard (try? ensurePrivateDirectory(directories.state)) != nil else { return nil }
   let template = directories.state + "/handoff.XXXXXX"
   var path = Array(template.utf8CString)
   let descriptor = mkstemp(&path)
-  guard descriptor >= 0 else { return false }
+  guard descriptor >= 0 else { return nil }
   unlink(path)
   var header: JSON = ["tools_digest": state.toolsDigest, "generation": state.generation]
   if let name = state.clientName { header["client_name"] = name }
@@ -54,8 +67,14 @@ func execInstalledCommand(state: HandoffState, input: Data, directories: Directo
   // The new command reads at most this much, so more would lose input; the session stays here instead.
   guard contents.count <= maxResumeBytes, writeAll(descriptor, contents), lseek(descriptor, 0, SEEK_SET) == 0 else {
     close(descriptor)
-    return false
+    return nil
   }
+  return descriptor
+}
+
+// Execs the installed command with the state `writeHandoff` left in `descriptor`. Returns only when that fails,
+// leaving this process as it was and the descriptor open.
+func execInstalledCommand(resume descriptor: Int32) {
   var attributes: posix_spawnattr_t?
   var actions: posix_spawn_file_actions_t?
   posix_spawnattr_init(&attributes)
@@ -65,14 +84,12 @@ func execInstalledCommand(state: HandoffState, input: Data, directories: Directo
     posix_spawn_file_actions_destroy(&actions)
   }
   // Only stdin, stdout, stderr and the state cross over: the helper's socket and anything else close. The signal
-  // mask and the ignored signals of this process would cross over too, so both start clean.
+  // mask and the signals' actions would cross over too, so the mask blocks only the stop signals, which keeps one
+  // that is pending, and every action starts at its default.
   posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETEXEC | POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF))
-  var none = sigset_t()
-  sigemptyset(&none)
-  posix_spawnattr_setsigmask(&attributes, &none)
-  var defaults = sigset_t()
-  sigemptyset(&defaults)
-  for signalNumber in [SIGINT, SIGTERM, SIGHUP, SIGPIPE] { sigaddset(&defaults, signalNumber) }
+  var blocked = signalSet(stopSignals)
+  posix_spawnattr_setsigmask(&attributes, &blocked)
+  var defaults = signalSet(stopSignals + [SIGPIPE])
   posix_spawnattr_setsigdefault(&attributes, &defaults)
   for kept in [STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO, descriptor] { posix_spawn_file_actions_addinherit_np(&actions, kept) }
   let arguments = [installedCommandPath, "mcp", resumeArgument, String(descriptor)]
@@ -80,15 +97,16 @@ func execInstalledCommand(state: HandoffState, input: Data, directories: Directo
   defer { argv.forEach { free($0) } }
   var pid: pid_t = 0
   _ = posix_spawn(&pid, installedCommandPath, &actions, &attributes, argv, environ)
-  close(descriptor)
-  return false
 }
 
-// The state and the input a handoff left, read once at start.
+// The state and the input a handoff left, read once at start. Only a regular file, as `writeHandoff` leaves, is read:
+// a pipe or a device could keep the command waiting before it serves anything.
 func readResume(arguments: [String]) -> (HandoffState, Data)? {
   guard let index = arguments.firstIndex(of: resumeArgument), index + 1 < arguments.count,
     let descriptor = Int32(arguments[index + 1]) else { return nil }
   defer { close(descriptor) }
+  var status = stat()
+  guard fstat(descriptor, &status) == 0, status.st_mode & S_IFMT == S_IFREG else { return nil }
   var contents = Data()
   var buffer = [UInt8](repeating: 0, count: 65536)
   while contents.count < maxResumeBytes {

@@ -60,29 +60,36 @@ func cli(_ home: TemporaryHome, input: String? = nil, _ arguments: String...) th
 // Unchecked: what the helper sent and whether it closed are read and written holding `lock`; the descriptor is a
 // constant.
 final class RawSocket: @unchecked Sendable {
-  private let descriptor: Int32
+  // Closed by the reader once the reads end, never by this object, so its number is not reused while still in use.
+  private let descriptor: OwnedDescriptor
   private let lock = NSLock()
   private var text = ""
   private var closedByHelper = false
 
   init(_ path: String) throws {
-    descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+    let opened = socket(AF_UNIX, SOCK_STREAM, 0)
     var noSignal: Int32 = 1
-    setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
+    setsockopt(opened, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
     var address = sockaddr_un()
     address.sun_family = sa_family_t(AF_UNIX)
     withUnsafeMutableBytes(of: &address.sun_path) { raw in
       for (index, byte) in path.utf8.enumerated() { raw[index] = byte }
     }
     let connected = withUnsafePointer(to: &address) {
-      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(opened, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
     }
-    guard connected == 0 else { throw TestFailure("Could not connect to \(path)") }
-    let socketDescriptor = self.descriptor
+    guard connected == 0 else {
+      close(opened)
+      throw TestFailure("Could not connect to \(path)")
+    }
+    let owned = OwnedDescriptor(opened)
+    descriptor = owned
     Thread { [weak self] in
+      // The descriptor stays open while this reads, so the read never reaches another number.
+      defer { owned.close() }
       var buffer = [UInt8](repeating: 0, count: 65536)
       while true {
-        let count = read(socketDescriptor, &buffer, buffer.count)
+        let count = read(owned.value, &buffer, buffer.count)
         guard let self else { return }
         guard count > 0 else {
           self.lock.withLock { self.closedByHelper = true }
@@ -94,10 +101,8 @@ final class RawSocket: @unchecked Sendable {
     }.start()
   }
 
-  deinit {
-    shutdown(descriptor, SHUT_RDWR)
-    close(descriptor)
-  }
+  // Ends the reads, so the reader closes the descriptor.
+  deinit { descriptor.ifOpen { shutdown($0, SHUT_RDWR) } }
 
   var received: String { lock.withLock { text } }
 
@@ -108,11 +113,13 @@ final class RawSocket: @unchecked Sendable {
 
   func send(_ text: String) {
     let data = Array((text + "\n").utf8)
-    var offset = 0
-    while offset < data.count {
-      let written = data[offset...].withUnsafeBytes { write(descriptor, $0.baseAddress, $0.count) }
-      if written <= 0 { return }
-      offset += written
+    descriptor.ifOpen { descriptor in
+      var offset = 0
+      while offset < data.count {
+        let written = data[offset...].withUnsafeBytes { write(descriptor, $0.baseAddress, $0.count) }
+        if written <= 0 { return }
+        offset += written
+      }
     }
   }
 }
@@ -286,7 +293,9 @@ private func apps(_ server: ServerProcess) throws -> [Object] {
     // The listen queue is short, so a connection may have to try again; one that answers holds its place.
     var open = try (0..<64).map { _ in try until { try? RawSocket(setup.home.socketPath) } }
     for socket in open { socket.send(line(["id": 1, "method": "status"])) }
-    _ = try until { open.allSatisfy { !$0.replies.isEmpty } ? true : nil }
+    // Each status reads every grant the app checks; 64 at once, with the other tests running, have taken more than 10 s
+    // (62 answered by then), and how long they take is not what this test is about.
+    _ = try until(timeout: 30) { open.allSatisfy { !$0.replies.isEmpty } ? true : nil }
     let refused = try RawSocket(setup.home.socketPath)
     _ = try until { refused.ended ? true : nil }
     #expect(open.allSatisfy { !$0.ended })

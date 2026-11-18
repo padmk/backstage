@@ -19,6 +19,8 @@ private var toolCapabilities: JSON { ["tools": ["listChanged": true] as JSON] }
 // A handoff waits this long for calls that already reached the old helper to finish; otherwise it does not happen.
 private let handoffDrainSeconds: TimeInterval = 5
 private let handoffPollSeconds: TimeInterval = 0.02
+// How long a stop or a handoff waits for output already sent to be written to a client that may have stopped reading.
+private let outputFlushSeconds: TimeInterval = 1
 
 // The policy comes first: clients cut long server instructions, and several servers share that budget.
 let instructions =
@@ -26,14 +28,13 @@ let instructions =
   + "\n\n"
   + "Operate allowed Mac apps in the background. For a well-known app, such as Notes, Reminders, Calendar or System Settings, call list_operations first: its ready operations are faster than the window and check their own result. In any other app, list_menu_commands shows what it can do and run_menu_command runs it; otherwise read with get_window_state, act by element number and check `state` in the reply. Menus, pop-up buttons, popovers and palettes an action opens show on the user's screen above their work: choose the item or close them with press_key escape before moving on. list_windows, set_window and close manage windows. Nothing here brings an app forward, though an app may do so itself. Start or restart an app with launch_app (after close with quit: true), not open in the shell, which brings it forward and takes the user's focus. When a click does not land, check with a screenshot and retry it with click_at and foreground: true, which brings the window forward for that one click and gives the focus back; tell the user. For other actions that do not land, tell the user. Use the shell for files and command-line tools; for an allowed app's data use its ready operations, not osascript, so macOS asks once, for \(Product.appName). On permission_missing, tell the user what the message says to allow in the Backstage window. While the screen is locked (screen_locked in list_apps), windows are out of reach: use ready operations, and menu commands through get_window_state with menu_bar: true and press; never try to unlock the Mac. For another of the user's Macs, pass computer with the name `ssh` reaches it under, the one the user calls it by or a Host in ~/.ssh/config, to any tool; that Mac's own app list and checks apply, and its user may be at it. On computer_not_approved, tell the user to add that Mac in the Backstage window, and do not reach it another way."
 
-// Unchecked: the calls of one client run on the `calls` queue at once, so every mutable property is guarded. `lock`
-// guards the client's name and the calls in progress, `inputLock` the input framer and the handoff flag, and only the
-// serial `output` queue writes to stdout; the other properties are constants or the Sendable clients of the helper and
+// Unchecked: the calls of one client run at once, each on a thread of its own, so every mutable property is guarded. `lock`
+// guards the client's name and the calls in progress, `inputLock` the input framer and each read, and only the
+// serial `output` queue writes to stdout and reads and writes `outputFailed`; the other properties are constants or the Sendable clients of the helper and
 // of other Macs.
 final class MCPServer: @unchecked Sendable {
   private let helper: HelperClient
   private let output = DispatchQueue(label: "mcp-output")
-  private let calls = DispatchQueue(label: "mcp-calls", attributes: .concurrent)
   private let lock = NSLock()
   private var clientName: String?
   // Each call in progress, by its MCP id: the ticket naming its helper request, and the line it came in, which a
@@ -43,18 +44,25 @@ final class MCPServer: @unchecked Sendable {
   // Each call in progress on another Mac, by its MCP id, with its request there once sent.
   private var remoteCalls: [String: RemoteCancellation] = [:]
   private let remote: RemoteComputers
-  private let onOutputFailure: () -> Void
+  // The process's phase: whether input is read, a handoff may exec, a stop has begun.
+  private let lifecycle: ServerLifecycle
+  // Where replies go: stdout, or a pipe in tests.
+  private let outputDescriptor: Int32
+  // A write to stdout failed, so the client has what came before it at most. Only on the `output` queue.
+  private var outputFailed = false
   private let directories: Directories
   private let handoff: HandoffState
 
-  // The client's input. A handoff stops it between reads, so no byte is read and then lost.
+  // The client's input. A handoff begins holding this lock, so it stops reading between reads and no byte is read
+  // and then lost.
   private let inputLock = NSLock()
   private var framer = LineFramer()
-  private var handingOff = false
 
-  init(directories: Directories, managesHelper: Bool, expectedBuild: String?, resumed: HandoffState?, onOutputFailure: @escaping () -> Void) {
+  init(directories: Directories, managesHelper: Bool, expectedBuild: String?, resumed: HandoffState?, lifecycle: ServerLifecycle,
+       output: Int32 = STDOUT_FILENO) {
     var server: MCPServer?
-    self.onOutputFailure = onOutputFailure
+    self.lifecycle = lifecycle
+    outputDescriptor = output
     self.directories = directories
     handoff = resumed ?? HandoffState(clientName: nil, toolsDigest: toolsDigest(), generation: 0, computers: [])
     clientName = resumed?.clientName
@@ -69,15 +77,16 @@ final class MCPServer: @unchecked Sendable {
 
   private var currentClientName: String? { lock.withLock { clientName } }
 
+  // For good: a call already on its way is refused as `stopping` instead of reaching a helper or another Mac.
   func close() {
-    remote.closeAll()
+    remote.closeForGood()
     helper.close()
   }
 
   // MARK: Input
 
-  // Reads the client's input until it ends. A read happens only once input is waiting and no handoff has begun,
-  // so a handoff leaves every byte it did not handle either in its state or still in stdin.
+  // Reads the client's input until it ends. A read happens only once input is waiting and only while serving, so a
+  // handoff leaves every byte it did not handle either in its state or still in stdin, and a stop handles no more.
   func readInput(after resumed: Data) {
     inputLock.withLock { for line in framer.lines(in: resumed) { handle(line: line) } }
     var buffer = [UInt8](repeating: 0, count: 65536)
@@ -86,7 +95,7 @@ final class MCPServer: @unchecked Sendable {
       if poll(&ready, 1, -1) < 0, errno != EINTR { return }
       let ended: Bool = inputLock.withLock {
         // While a handoff runs, input stays where it is; one that gives up lets reading go on.
-        if handingOff { return false }
+        guard lifecycle.serves else { return false }
         let count = Darwin.read(STDIN_FILENO, &buffer, buffer.count)
         if count < 0 { return errno != EINTR && errno != EAGAIN }
         guard count > 0 else { return true }
@@ -94,7 +103,7 @@ final class MCPServer: @unchecked Sendable {
         return false
       }
       if ended { return }
-      if inputLock.withLock({ handingOff }) { Thread.sleep(forTimeInterval: handoffPollSeconds) }
+      if !lifecycle.serves { Thread.sleep(forTimeInterval: handoffPollSeconds) }
     }
   }
 
@@ -102,8 +111,9 @@ final class MCPServer: @unchecked Sendable {
   // Runs holding the helper client's connection lock, so no request reaches a helper meanwhile: the calls still in
   // progress either wait for that lock, unsent, and cross over, or are finishing with the old helper's failure.
   func handOff() {
-    guard installedCommandTakesHandoff() else { return }
-    inputLock.withLock { handingOff = true }
+    guard installedCommandTakesHandoff(), inputLock.withLock({ lifecycle.transition(.beginHandoff) }) != nil else { return }
+    // Every way out but a working exec goes back to serving, unless a stop has begun meanwhile.
+    defer { lifecycle.transition(.endHandoff) }
     let deadline = Date().addingTimeInterval(handoffDrainSeconds)
     var unsent: [(ticket: Ticket, line: String, order: Int)] = []
     while true {
@@ -113,10 +123,7 @@ final class MCPServer: @unchecked Sendable {
         unsent = calls
         break
       }
-      guard Date() < deadline else {
-        inputLock.withLock { handingOff = false }
-        return
-      }
+      guard Date() < deadline else { return }
       Thread.sleep(forTimeInterval: handoffPollSeconds)
     }
     // A call the client cancelled is not run again.
@@ -126,13 +133,30 @@ final class MCPServer: @unchecked Sendable {
       input.append(0x0A)
     }
     input.append(inputLock.withLock { framer.remainder })
-    flush()
+    // A reply still being written would be cut by the exec, so a client that does not read keeps this process; after a
+    // failed write the client is gone, and the process is stopping.
+    guard flush() else { return }
     remote.closeAll()
     // The tools this process served are what the client knows now.
     let state = HandoffState(clientName: currentClientName, toolsDigest: toolsDigest(), generation: handoff.generation + 1,
                              computers: remote.reachedComputers, elementNumberBase: helper.elementNumberBase)
-    _ = execInstalledCommand(state: state, input: input, directories: directories)
-    inputLock.withLock { handingOff = false }
+    // Written before the stop's lock is taken, so a stop waits only for the exec itself.
+    guard let resume = writeHandoff(state: state, input: input, directories: directories) else { return }
+    defer { Darwin.close(resume) }
+    // The lock setup holds while it replaces the installed app, held from the last check of that bundle through the
+    // exec, so no other bundle comes in between; the exec closes its descriptor (O_CLOEXEC, and the spawn closes every
+    // descriptor it does not pass on). A setup that keeps it longer than the drain leaves the session here. A stop that
+    // began meanwhile wins: the process ends rather than live on as the installed command.
+    do {
+      try ensurePrivateDirectory(directories.data)
+      try withFileLock(setupLockPath(directories), held: "A running setup holds", waiting: handoffDrainSeconds) {
+        guard installedCommandTakesHandoff() else { return }
+        _ = lifecycle.execHandoff { execInstalledCommand(resume: resume) }
+      }
+    } catch {
+      // The session stays with this command; the next call that needs a connection tries again.
+      return
+    }
   }
 
   // After a handoff to a build with other tools, the client is told to list them again.
@@ -141,6 +165,10 @@ final class MCPServer: @unchecked Sendable {
   }
 
   func handle(line: String) {
+    // Every line, read or passed on by a handoff, is handled only while serving, and one that is not gets no reply
+    // at all, not even for a parse error: the process is stopping, and output from what came in after the stop began
+    // would arrive behind it.
+    guard lifecycle.serves else { return }
     let parsed: Any
     do {
       parsed = try JSONSerialization.jsonObject(with: Data(line.utf8), options: [.fragmentsAllowed])
@@ -168,12 +196,22 @@ final class MCPServer: @unchecked Sendable {
     full["jsonrpc"] = "2.0"
     let data = jsonLine(full)
     output.async {
-      if !writeAll(STDOUT_FILENO, data) { self.onOutputFailure() }
+      if !writeAll(self.outputDescriptor, data) {
+        self.outputFailed = true
+        // The output queue itself reports the failure, so the stop, which waits for that queue, runs elsewhere.
+        let lifecycle = self.lifecycle
+        DispatchQueue.global().async { lifecycle.stop() }
+      }
     }
   }
 
-  // Waits until everything sent so far is written.
-  func flush() { output.sync {} }
+  // Waits until everything sent so far is written, or for `seconds` at most: stdout blocks while the client does not
+  // read it. Returns whether it was all written, which a failed write rules out.
+  func flush(within seconds: TimeInterval = outputFlushSeconds) -> Bool {
+    let answer = FlushAnswer()
+    output.async { answer.set(written: !self.outputFailed) }
+    return answer.wait(seconds) == true
+  }
 
   private func textResult(_ value: Any) -> JSON {
     ["content": [["type": "text", "text": value as? String ?? jsonText(value)]]]
@@ -291,7 +329,9 @@ final class MCPServer: @unchecked Sendable {
       callsInProgress[key] = (ticket, line, callsReceived)
     }
     let shared = SharedJSON(fields)
-    calls.async {
+    // On a thread of its own, not a Dispatch queue: while Dispatch's threads are busy, a call there can start seconds
+    // late, and a call waits on the helper for as long as it runs.
+    Thread.detachNewThread {
       defer { self.lock.withLock { _ = self.callsInProgress.removeValue(forKey: key) } }
       do {
         reply(try self.callTool(name, shared.value, ticket: ticket))
@@ -314,7 +354,9 @@ final class MCPServer: @unchecked Sendable {
       remoteCalls[key] = cancellation
     }
     let shared = SharedJSON(arguments)
-    calls.async {
+    // On a thread of its own, not a Dispatch queue: while Dispatch's threads are busy, a call there can start seconds
+    // late, and a call waits on the helper for as long as it runs.
+    Thread.detachNewThread {
       defer {
         self.lock.withLock {
           _ = self.callsInProgress.removeValue(forKey: key)
@@ -355,52 +397,70 @@ final class MCPServer: @unchecked Sendable {
 
 // Runs the server until the client closes stdin, its output fails, or a signal asks it to stop.
 func runMCPServer(arguments: [String]) -> Never {
+  // Before any other thread starts, so every thread inherits the mask; Dispatch's worker threads block all signals.
+  var blocked = signalSet(stopSignals)
+  pthread_sigmask(SIG_BLOCK, &blocked, nil)
   let testHome = ProcessInfo.processInfo.environment["HELPER_TEST_HOME"]
   let directories = Directories(testHome: testHome)
   let managesHelper = ProcessInfo.processInfo.environment["HELPER_NO_START"] == nil
-  let stop = ServerStop()
-  let resumed = readResume(arguments: arguments)
-  let server = MCPServer(directories: directories, managesHelper: managesHelper, expectedBuild: appBuildOfOwnBundle(), resumed: resumed?.0,
-                         // The output queue itself reports the failure, so the shutdown, which waits for that queue, runs elsewhere.
-                         onOutputFailure: { DispatchQueue.global().async { stop.run() } })
-  stop.attach(server)
-  // Kept for as long as the process runs, which dispatchMain never ends.
-  let signalSources = [SIGINT, SIGTERM, SIGHUP].map { signalNumber in
-    signal(signalNumber, SIG_IGN)
+  let lifecycle = ServerLifecycle()
+  // Armed before anything that may wait, such as reading the state of a handoff; a stop before the server is attached
+  // only ends the process. Kept for as long as the process runs.
+  let signalSources = stopSignals.map { signalNumber in
+    // An action that does nothing, not SIG_IGN, which would discard a signal at once instead of keeping it pending
+    // through a handoff; blocked, it never runs.
+    var action = sigaction()
+    action.__sigaction_u.__sa_handler = { _ in }
+    action.sa_flags = SA_RESTART
+    sigaction(signalNumber, &action, nil)
     let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .global())
-    source.setEventHandler { stop.run() }
+    source.setEventHandler { lifecycle.stop() }
     source.resume()
     return source
   }
-  server.announceToolChanges()
-  let reader = Thread {
-    server.readInput(after: resumed?.1 ?? Data())
-    stop.run()
+  // A stop signal that came while the previous command handed this session over is pending here: it stops this one.
+  var pending = sigset_t()
+  sigpending(&pending)
+  // The stop begins here, before the attach, which it then refuses; the rest of it runs on a thread of its own, as a
+  // signal's does, while this thread goes on to that attach.
+  if stopSignals.contains(where: { sigismember(&pending, $0) == 1 }), let left = lifecycle.transition(.stop) {
+    DispatchQueue.global().async { lifecycle.end(after: left) }
   }
-  reader.start()
-  withExtendedLifetime(signalSources) { dispatchMain() }
+  let resumed = readResume(arguments: arguments)
+  let server = MCPServer(directories: directories, managesHelper: managesHelper, expectedBuild: appBuildOfOwnBundle(), resumed: resumed?.0,
+                         lifecycle: lifecycle)
+  // A stop that began first refuses the server, which then neither reads input nor announces anything.
+  if lifecycle.transition(.attach(server)) != nil {
+    server.announceToolChanges()
+    let reader = Thread {
+      server.readInput(after: resumed?.1 ?? Data())
+      lifecycle.stop()
+    }
+    reader.start()
+  }
+  // The main thread waits here for good, with the stop signals still blocked. dispatchMain would instead hand
+  // signals to a thread of Dispatch's own that unblocks them, where the handler consumes one that must stay pending
+  // through a handoff. Nothing in this command uses the main queue or the main run loop.
+  let forever = DispatchSemaphore(value: 0)
+  withExtendedLifetime(signalSources) { () -> Never in
+    while true { forever.wait() }
+  }
 }
 
-// Ends the process once, from whichever comes first: the end of input, a failed write or a signal.
-private final class ServerStop: Sendable {
-  private struct State {
-    var server: MCPServer?
-    var stopped = false
+// What a flush found once the output queue reached it: whether everything before it was written.
+private final class FlushAnswer: Sendable {
+  private let written = Mutex<Bool?>(nil)
+  private let reached = DispatchSemaphore(value: 0)
+
+  func set(written value: Bool) {
+    written.withLock { $0 = value }
+    reached.signal()
   }
 
-  private let state = Mutex(State())
-
-  func attach(_ server: MCPServer) { state.withLock { $0.server = server } }
-
-  func run() {
-    let (first, server) = state.withLock { state in
-      defer { state.stopped = true }
-      return (!state.stopped, state.server)
-    }
-    guard first else { return }
-    server?.close()
-    server?.flush()
-    exit(0)
+  // nil when the queue did not get there in time.
+  func wait(_ seconds: TimeInterval) -> Bool? {
+    guard reached.wait(timeout: .now() + seconds) == .success else { return nil }
+    return written.withLock { $0 }
   }
 }
 

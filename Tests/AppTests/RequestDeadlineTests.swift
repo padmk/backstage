@@ -124,6 +124,65 @@ private func code(of error: any Error) -> String? { (error as? HelperError)?.cod
     #expect(!FileManager.default.fileExists(atPath: marker))
   }
 
+  // A wait under an app's lock, such as a Photos export, ends with the request: at its deadline and at its cancel.
+  @Test func aWaitEndsAtTheRequestsDeadline() throws {
+    let pair = try SocketPair()
+    pair.connection.begin(generation: 0, id: "1", deadline: Date().addingTimeInterval(1.5))
+    let started = Date()
+    let waited = withCurrentConnection(pair.connection) { waitWithinRequest(DispatchSemaphore(value: 0), atMost: 120) }
+    #expect(waited == .timedOut)
+    #expect(Date().timeIntervalSince(started) < 3)
+  }
+
+  @Test func aWaitEndsAtTheRequestsCancel() throws {
+    let pair = try SocketPair()
+    #expect(pair.connection.enqueue(id: "1"))
+    pair.connection.begin(generation: 0, id: "1", deadline: nil)
+    let connection = pair.connection
+    Thread.detachNewThread {
+      Thread.sleep(forTimeInterval: 0.3)
+      connection.cancel(requestId: "1")
+    }
+    let started = Date()
+    let waited = withCurrentConnection(connection) { waitWithinRequest(DispatchSemaphore(value: 0), atMost: 120) }
+    #expect(waited == .cancelled)
+    #expect(Date().timeIntervalSince(started) < 3)
+  }
+
+  // A copy does not start for a request that is cancelled, past its deadline or without time left for the work.
+  @Test func noWorkStartsForAStoppedRequest() throws {
+    let pair = try SocketPair()
+    let connection = pair.connection
+    connection.begin(generation: 0, id: "1", deadline: Date().addingTimeInterval(60))
+    #expect(withCurrentConnection(connection) { stopBeforeWork() } == nil)
+    connection.begin(generation: 0, id: "1", deadline: Date().addingTimeInterval(0.2))
+    #expect(withCurrentConnection(connection) { stopBeforeWork() } == .timedOut)
+    connection.finish(id: "1")
+    #expect(connection.enqueue(id: "2"))
+    connection.begin(generation: 0, id: "2", deadline: nil)
+    connection.cancel(requestId: "2")
+    #expect(withCurrentConnection(connection) { stopBeforeWork() } == .cancelled)
+  }
+
+  // A click through the system checks the request right before each button goes down: cancelled after the first
+  // press, it presses no more, and that press came up.
+  @Test func aCancelBetweenPressesStopsTheNextOne() throws {
+    let pair = try SocketPair()
+    let connection = pair.connection
+    #expect(connection.enqueue(id: "1"))
+    connection.begin(generation: 0, id: "1", deadline: nil)
+    var posted: [String] = []
+    #expect {
+      try withCurrentConnection(connection) {
+        try pressThroughSystem(count: 3, events: { ("down \($0)", "up \($0)") }, menuCheck: {}, windowCheck: {}, post: { event, _ in
+          posted.append(event)
+          if event == "up 1" { connection.cancel(requestId: "1") }
+        })
+      }
+    } throws: { code(of: $0) == "outcome_unknown" }
+    #expect(posted == ["down 1", "up 1"])
+  }
+
   // A client that stops reading must not hold the reply's write, and with it the connection's worker and a restart.
   @Test func aReplyToAClientThatStopsReadingGivesUpAtItsDeadline() throws {
     let pair = try SocketPair()

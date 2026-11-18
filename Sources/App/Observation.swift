@@ -146,23 +146,39 @@ private func treeState(app: AppIdentity, params: JSON, session: ApprovalSession)
 
   if params["full"] as? Bool != true, !isPartial, let previous, !previous.isPartial, !previous.reportedInPart,
      previous.covers(params, root: read.root) {
-    let before = Set(previous.lines)
-    let after = Set(read.tree.lines)
-    let added = read.tree.lines.filter { !before.contains($0) }
-    let removed = previous.lines.filter { !after.contains($0) }
-    if added.isEmpty, removed.isEmpty {
+    switch treeDifference(before: previous.lines, after: read.tree.lines) {
+    case .none:
       return ["tree": "\(read.header)\nNo change since your last read of this window. Pass full: true to see all of it."] as JSON
-    }
-    if added.count + removed.count < read.tree.lines.count {
-      let changes = added.map { "+ \($0)" } + removed.map { "- \($0)" }
+    case .lines(let changes):
       let text = [read.header, "Changes since your last read of this window (+ new or changed, - gone); pass full: true to see all of it:"] + changes
       return ["tree": text.joined(separator: "\n")] as JSON
+    case .whole:
+      break
     }
   }
   let knowledge = knowledgeLines(forBundleId: app.bundleId)
   var text = ([read.header] + knowledge + read.tree.lines).joined(separator: "\n")
   if let reason = read.tree.partialReason { text += "\n[Partial: \(reason)]" }
   return ["tree": text] as JSON
+}
+
+enum TreeDifference: Equatable {
+  case none
+  // The lines added (+) and removed (-), shorter than the whole tree.
+  case lines([String])
+  // Only the whole tree tells what changed: the changes are as long as it, or the same lines came in another order.
+  case whole
+}
+
+// How a read differs from the last read of the same place, line by line with their numbers.
+func treeDifference(before: [String], after: [String]) -> TreeDifference {
+  let beforeSet = Set(before)
+  let afterSet = Set(after)
+  let added = after.filter { !beforeSet.contains($0) }
+  let removed = before.filter { !afterSet.contains($0) }
+  if added.isEmpty, removed.isEmpty { return before == after ? .none : .whole }
+  guard added.count + removed.count < after.count, !linesReordered(before: before, after: after) else { return .whole }
+  return .lines(added.map { "+ \($0)" } + removed.map { "- \($0)" })
 }
 
 // A busy indicator that was not there before the action means the app is still working on it. Both sides are the
@@ -264,8 +280,8 @@ func observeChange(app: AppIdentity, session: ApprovalSession, watch: ChangeWatc
     // them; only a change in what the lines say counts as the app still changing.
     let readContent = content(of: read.tree.lines)
     if read.tree.lines != after {
+      if readContent != afterContent || linesReordered(before: after, after: read.tree.lines) { lastChange = now }
       after = read.tree.lines
-      if readContent != afterContent { lastChange = now }
       afterContent = readContent
     }
     afterFingerprints = read.tree.fingerprints
@@ -291,6 +307,7 @@ func observeChange(app: AppIdentity, session: ApprovalSession, watch: ChangeWatc
     report["note"] = "The app was still changing or showed a busy indicator after \(Int(settleLimitSeconds)) s. Read the state again before relying on it."
   }
   remember(LastRead(request: last.request, root: last.root, lines: after, isPartial: false,
-                    reportedInPart: last.reportedInPart || report["more_changes"] != nil || report["more_renumbered"] != nil), pid: app.pid, session: session)
+                    reportedInPart: last.reportedInPart || report["more_changes"] != nil || report["more_renumbered"] != nil
+                      || report["reordered"] != nil), pid: app.pid, session: session)
   return report
 }

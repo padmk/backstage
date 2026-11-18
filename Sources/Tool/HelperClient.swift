@@ -31,11 +31,15 @@ let requestTimeout: TimeInterval = {
 }()
 private let quitWait: TimeInterval = 3
 
-// One socket, read by its own thread. Replies go to the client's queue.
-// Unchecked: writes hold `writeLock`, and `closed` is read and written only on the helper client's serial queue.
-private final class SocketConnection: @unchecked Sendable {
+// One socket, read by its own thread. Replies go to the client's queue. The reader closes the descriptor, and only
+// through `close`, so no write or shut reaches a number the system has since given to another file.
+// Unchecked: writes hold `writeLock`, the descriptor's state is a Mutex, and `closed` is read and written only on the
+// helper client's serial queue.
+final class SocketConnection: @unchecked Sendable {
   let descriptor: Int32
   private let writeLock = NSLock()
+  // Whether `close` has run; checked and changed together with every use of the descriptor but the reader's.
+  private let descriptorClosed = Mutex(false)
   // Set by the reader once the helper's side is gone; read and written on the client's queue.
   var closed = false
 
@@ -46,14 +50,39 @@ private final class SocketConnection: @unchecked Sendable {
   }
 
   // A write that the helper does not take by the deadline fails rather than hangs, however slowly it drains.
+  // Once closed, nothing is written.
   func write(_ line: Data, deadline: Date = Date().addingTimeInterval(requestTimeout)) -> Bool {
     guard writeLock.lock(before: deadline) else { return false }
     defer { writeLock.unlock() }
+    guard !descriptorClosed.withLock({ $0 }) else { return false }
     return writeAll(descriptor, line, deadline: deadline)
   }
 
-  // Ends reads and writes; the reader thread then sees the end and reports it.
-  func shut() { Darwin.shutdown(descriptor, SHUT_RDWR) }
+  // Ends reads and writes; the reader thread then sees the end and reports it. Does nothing once closed.
+  func shut() {
+    descriptorClosed.withLock { closed in
+      if !closed { Darwin.shutdown(descriptor, SHUT_RDWR) }
+    }
+  }
+
+  // Returns once no write is under way, as after `shut`, when a write in progress gives up at once.
+  func waitForWrites() {
+    writeLock.lock()
+    writeLock.unlock()
+  }
+
+  // For the reader, after its last read. Shutting first ends a write in progress, which holds the write lock until
+  // it gives up; the close then waits for it, so no write is under way on the number it frees.
+  func close() {
+    shut()
+    writeLock.lock()
+    defer { writeLock.unlock() }
+    descriptorClosed.withLock { closed in
+      guard !closed else { return }
+      closed = true
+      Darwin.close(descriptor)
+    }
+  }
 }
 
 private func connectSocket(_ path: String) -> Int32? {
@@ -99,6 +128,14 @@ final class HelperClient: @unchecked Sendable {
   // One connection attempt at a time, shared by the callers that wait for it.
   private let connectLock = NSLock()
   private var current: SocketConnection?
+  // Set by `close`, for good: from then on no connection opens and no request is sent.
+  private var closedForGood = false
+  // Connections that have not been published yet, from their connect to their publication or their end, so `close`
+  // shuts them too.
+  private var openingSockets: [ObjectIdentifier: SocketConnection] = [:]
+  // Connections whose reader has seen the end and whose writer may still be finishing, until it has, so `close`
+  // waits for them too.
+  private var retiringSockets: [ObjectIdentifier: SocketConnection] = [:]
   private var nextId = 1
   private var waiting: [Int: (socket: SocketConnection, finish: (Result<Any, HelperFailure>) -> Void)] = [:]
   // Requests waiting for a connection, which have not reached any helper.
@@ -146,26 +183,39 @@ final class HelperClient: @unchecked Sendable {
   func isCancelled(_ ticket: Ticket) -> Bool { queue.sync { ticket.cancelled } }
 
   // Ends the request the ticket names, running or queued, leaving the others alone.
-  // Runs off the caller's thread, so a request stuck in its write never holds up the reader of the client's input, and
-  // on a thread of its own, since work on a busy Dispatch queue can start seconds late.
+  // The ticket is marked at once, so a handoff right after never passes the call on. The cancel for the helper is
+  // written off the caller's thread, so a request stuck in its write never holds up the reader of the client's input,
+  // and on a thread of its own, since work on a busy Dispatch queue can start seconds late.
   func cancel(_ ticket: Ticket?) {
     guard let ticket else { return }
+    queue.sync { ticket.cancelled = true }
     Thread.detachNewThread { self.sendCancel(ticket) }
   }
 
+  // Under the order lock, so a request written before the mark is seen as sent, and one checked after it is never written.
   private func sendCancel(_ ticket: Ticket) {
     guard orderLock.lock(before: Date().addingTimeInterval(requestTimeout)) else { return }
     defer { orderLock.unlock() }
     let target: (Int, SocketConnection)? = queue.sync {
-      ticket.cancelled = true
       guard ticket.sent, let id = ticket.id, let socket = current else { return nil }
       return (id, socket)
     }
     if let (id, socket) = target { _ = socket.write(jsonLine(["method": "cancel", "params": ["id": id]])) }
   }
 
+  // Ends this client for good, as when the command stops: a call that was already on its way gets `stopping` rather
+  // than a new connection to the helper.
+  // Returns once nothing more can be written to the helper: the published connection and those still opening are
+  // shut, and a write in progress has given up.
   func close() {
-    queue.sync { current }?.shut()
+    let sockets = queue.sync { () -> [SocketConnection] in
+      closedForGood = true
+      return (current.map { [$0] } ?? []) + Array(openingSockets.values) + Array(retiringSockets.values)
+    }
+    for socket in sockets {
+      socket.shut()
+      socket.waitForWrites()
+    }
   }
 
   private func send(_ socket: SocketConnection, _ method: String, _ params: JSON, ticket: Ticket?) throws -> Any {
@@ -173,6 +223,9 @@ final class HelperClient: @unchecked Sendable {
     var outcome: Result<Any, HelperFailure>?
     let id: Int = try queue.sync {
       if ticket?.cancelled == true { throw HelperFailure(code: "cancelled", message: "The request was cancelled.") }
+      if closedForGood { throw stoppingFailure }
+      // The reader has already failed this socket's requests, so one registered now would wait for its deadline.
+      if socket.closed { throw stoppedFailure }
       let id = nextId
       nextId += 1
       ticket?.id = id
@@ -219,12 +272,24 @@ final class HelperClient: @unchecked Sendable {
     pending?.finish(result)
   }
 
+  private let stoppingFailure = HelperFailure(code: "stopping", message: "This command is stopping, so the request was not sent.")
   private let stoppedFailure = HelperFailure(code: "helper_stopped", message: "The helper stopped. The action may or may not have run; read the state before trying again.")
 
   // MARK: The connection
 
-  private func attach(_ descriptor: Int32) -> SocketConnection {
+  // Registers a new connection as opening, under the same state `close` sets, so one that a close came before is
+  // ended unused and every other is shut by a close from then on.
+  private func attach(_ descriptor: Int32) throws -> SocketConnection {
     let socket = SocketConnection(descriptor: descriptor)
+    let admitted = queue.sync { () -> Bool in
+      guard !closedForGood else { return false }
+      openingSockets[ObjectIdentifier(socket)] = socket
+      return true
+    }
+    guard admitted else {
+      socket.close()
+      throw stoppingFailure
+    }
     let thread = Thread { [weak self] in self?.read(socket) }
     thread.start()
     return socket
@@ -258,25 +323,47 @@ final class HelperClient: @unchecked Sendable {
     let failed: [(Result<Any, HelperFailure>) -> Void] = queue.sync {
       socket.closed = true
       if current === socket { current = nil }
+      openingSockets.removeValue(forKey: ObjectIdentifier(socket))
+      retiringSockets[ObjectIdentifier(socket)] = socket
       let mine = waiting.filter { $0.value.socket === socket }
       for id in mine.keys { waiting.removeValue(forKey: id) }
       return mine.values.map(\.finish)
     }
     for finish in failed { finish(.failure(stoppedFailure)) }
-    Darwin.close(socket.descriptor)
+    socket.close()
+    // Its writer has finished, so a close has nothing left to wait for here.
+    queue.sync { _ = retiringSockets.removeValue(forKey: ObjectIdentifier(socket)) }
   }
 
   // A helper that goes away right after the handshake leaves no closed socket behind: the next attempt connects
   // again, and only a second loss in a row is reported.
   private func connection() throws -> SocketConnection {
     try connectLock.withLock {
-      if let socket = queue.sync(execute: { current }) { return socket }
+      let existing: SocketConnection? = try queue.sync {
+        if closedForGood { throw stoppingFailure }
+        return current
+      }
+      if let existing { return existing }
       for _ in 0..<2 {
-        let socket = try establish()
-        let published = queue.sync { () -> Bool in
+        let socket: SocketConnection
+        do {
+          socket = try establish()
+        } catch {
+          // A connection a close ended while it opened sent no request.
+          if queue.sync(execute: { closedForGood }) { throw stoppingFailure }
+          throw error
+        }
+        // A close while this connection opened ends it before any request goes over it.
+        let published = queue.sync { () -> Bool? in
+          openingSockets.removeValue(forKey: ObjectIdentifier(socket))
+          if closedForGood { return nil }
           guard !socket.closed else { return false }
           current = socket
           return true
+        }
+        guard let published else {
+          socket.shut()
+          throw stoppingFailure
         }
         if published { return socket }
       }
@@ -299,7 +386,13 @@ final class HelperClient: @unchecked Sendable {
     connectionsMade += 1
     if range.lowerBound > 1 { params["first_element_number"] = range.lowerBound }
     params["element_number_limit"] = range.upperBound
-    return try send(socket, "hello", params, ticket: nil) as? JSON ?? [:]
+    do {
+      return try send(socket, "hello", params, ticket: nil) as? JSON ?? [:]
+    } catch {
+      // A helper that refused the session, such as one restarting, keeps the connection open otherwise.
+      socket.shut()
+      throw error
+    }
   }
 
   private func establish() throws -> SocketConnection {
@@ -307,7 +400,7 @@ final class HelperClient: @unchecked Sendable {
       guard managesHelper else { throw HelperFailure(code: nil, message: "No helper listens on \(directories.socketPath)") }
       return try startHelper()
     }
-    let socket = attach(descriptor)
+    let socket = try attach(descriptor)
     let reply = try hello(socket)
     guard managesHelper, let expectedBuild, reply["build"] as? String != expectedBuild else { return socket }
     // The helper runs another build. Only when the installed app is this command's own build is the helper
@@ -317,6 +410,8 @@ final class HelperClient: @unchecked Sendable {
       onOutdated?()
       throw differsFromInstalled()
     }
+    // The socket is never handed out from here, so it is shut also when the lock cannot be taken.
+    defer { socket.shut() }
     return try withStartLock {
       // The old helper may already be gone; the restart goes on.
       _ = try? send(socket, "quit", [:], ticket: nil)
@@ -355,11 +450,18 @@ final class HelperClient: @unchecked Sendable {
       throw differsFromInstalled()
     }
     let launch = { () throws -> SocketConnection in
-      if let descriptor = connectSocket(self.directories.socketPath) { return self.attach(descriptor) }
-      try runProcess("/usr/bin/open", ["-g", "-j", installedAppPath, "--args", Product.backgroundArgument], timeout: 15)
+      if let descriptor = connectSocket(self.directories.socketPath) { return try self.attach(descriptor) }
+      // A client closed for good starts no helper: the check and the start happen in one step on the client's queue,
+      // so a close either comes first and nothing starts, or returns after `open` started; the wait happens off it.
+      try runProcess("/usr/bin/open", ["-g", "-j", installedAppPath, "--args", Product.backgroundArgument], timeout: 15) { start in
+        try self.queue.sync {
+          if self.closedForGood { throw self.stoppingFailure }
+          try start()
+        }
+      }
       let started = Date()
       while Date().timeIntervalSince(started) < startTimeout {
-        if let descriptor = connectSocket(self.directories.socketPath) { return self.attach(descriptor) }
+        if let descriptor = connectSocket(self.directories.socketPath) { return try self.attach(descriptor) }
         Thread.sleep(forTimeInterval: 0.1)
       }
       throw HelperFailure(code: nil, message: "The helper did not start. Run: \(commandHint()) doctor")
@@ -374,20 +476,32 @@ final class HelperClient: @unchecked Sendable {
   }
 
   // One start at a time: a second open of a running app counts as the user reopening it, which shows its window
-  // and takes focus. The kernel releases the lock when its holder exits, crashes or execs another command, so a
-  // lock is never left behind and never taken from a start that is still running.
+  // and takes focus.
   private func withStartLock<T>(_ action: () throws -> T) throws -> T {
     try ensurePrivateDirectory(directories.state)
-    let path = directories.state + "/start-lock"
-    let descriptor = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
-    guard descriptor >= 0 else { throw HelperFailure(code: nil, message: "Could not open \(path): \(String(cString: strerror(errno)))") }
-    defer { Darwin.close(descriptor) }
-    let started = Date()
-    while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
-      guard errno == EWOULDBLOCK || errno == EINTR else { throw HelperFailure(code: nil, message: "Could not lock \(path): \(String(cString: strerror(errno)))") }
-      if Date().timeIntervalSince(started) > requestTimeout { throw HelperFailure(code: nil, message: "Another start of the helper still holds \(path)") }
-      Thread.sleep(forTimeInterval: 0.1)
-    }
-    return try action()
+    return try withFileLock(directories.state + "/start-lock", held: "Another start of the helper still holds", action)
   }
+}
+
+// Runs `action` holding an exclusive lock on the file at `path`, waiting up to the request timeout for another holder.
+// The kernel releases the lock when its holder exits, crashes or execs another command, so a lock is never left
+// behind and never taken from a holder that is still running.
+// `sleep` waits between tries; tests pass one of their own.
+func withFileLock<T>(_ path: String, held: String, waiting timeout: TimeInterval = requestTimeout,
+                     sleep: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }, _ action: () throws -> T) throws -> T {
+  let descriptor = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+  guard descriptor >= 0 else { throw HelperFailure(code: nil, message: "Could not open \(path): \(String(cString: strerror(errno)))") }
+  defer { Darwin.close(descriptor) }
+  // Monotonic, so a change of the clock neither shortens nor stretches the wait.
+  let deadline = DispatchTime.now() + timeout
+  let late = HelperFailure(code: nil, message: "\(held) \(path)")
+  while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+    guard errno == EWOULDBLOCK || errno == EINTR else { throw HelperFailure(code: nil, message: "Could not lock \(path): \(String(cString: strerror(errno)))") }
+    let now = DispatchTime.now()
+    guard now < deadline else { throw late }
+    sleep(min(0.1, Double(deadline.uptimeNanoseconds - now.uptimeNanoseconds) / 1e9))
+  }
+  // A lock taken only after the deadline comes too late for the caller; the close above lets it go.
+  guard DispatchTime.now() <= deadline else { throw late }
+  return try action()
 }

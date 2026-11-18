@@ -264,9 +264,19 @@ func postScroll(at point: CGPoint, target: PointerTarget, pid: pid_t, lines: Int
 // The last resort for a window that ignores background input: the app comes forward, the click goes through
 // the real cursor, and the cursor goes back to where it was. The caller gives the focus back.
 // A click posted to the whole system lands on whatever window is on top at that point, which may belong to
-// another app or a Backstage window. It is refused unless the top window there is the app's own.
-private func requireOwnWindowOnTop(at point: CGPoint, pid: pid_t) throws {
+// another app, a Backstage window or another window of the same app. It is refused unless the top window there is
+// the one asked for.
+private func requireOwnWindowOnTop(at point: CGPoint, pid: pid_t, window: CGWindowID?) throws {
   let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+  if let message = coveringWindowProblem(windows, at: point, pid: pid, window: window) {
+    throw HelperError(code: "point_covered", message: message)
+  }
+}
+
+// Why a click at `point` would not land in the window numbered `window` of process `pid`, given the on-screen
+// windows front to back as CGWindowListCopyWindowInfo lists them; nil when it would. A window whose number is not
+// known is refused.
+func coveringWindowProblem(_ windows: [[String: Any]], at point: CGPoint, pid: pid_t, window: CGWindowID?) -> String? {
   let top = windows.first { info in
     guard let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
       let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
@@ -276,8 +286,13 @@ private func requireOwnWindowOnTop(at point: CGPoint, pid: pid_t) throws {
   }
   guard let top, (top[kCGWindowOwnerPID as String] as? Int).map({ pid_t($0) }) == pid else {
     let owner = top?[kCGWindowOwnerName as String] as? String ?? "another window"
-    throw HelperError(code: "point_covered", message: "\(owner) is on top at that point, so nothing was clicked.")
+    return "\(owner) is on top at that point, so nothing was clicked."
   }
+  guard let window else { return "The window's number could not be read, so it is unknown what is on top; nothing was clicked." }
+  guard (top[kCGWindowNumber as String] as? Int).map({ CGWindowID($0) }) == window else {
+    return "Another window of the app is on top at that point, so nothing was clicked."
+  }
+  return nil
 }
 
 // Brings an app forward and waits until it is. macOS may ignore activate() from an app in the background, as
@@ -315,23 +330,43 @@ func postForegroundClick(at point: CGPoint, window: AXUIElement, app identity: A
     throw HelperError(code: "action_failed", message: "Could not create a mouse event.")
   }
   moved.flags = []
-  try requireOwnWindowOnTop(at: point, pid: pid)
+  let number = windowNumber(of: window)
+  try requireOwnWindowOnTop(at: point, pid: pid, window: number)
   postSystemWide(moved, start)
   PointerActivity.noteOwnSystemInput()
   sleep(seconds: pointerEventGap)
-  for click in 1...min(max(1, count), 3) {
-    for type in [style.types.down, style.types.up] {
-      // Checked right before each press, so a window that appeared meanwhile, such as an approval, is not hit.
-      if type == style.types.down { try requireOwnWindowOnTop(at: point, pid: pid) }
+  try pressThroughSystem(count: count, events: { click in
+    let make = { (type: CGEventType) throws -> CGEvent in
       guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: style.button) else {
         throw HelperError(code: "action_failed", message: "Could not create a mouse event.")
       }
       event.flags = style.flags
       event.setIntegerValueField(.mouseEventClickState, value: Int64(click))
-      postSystemWide(event, start)
-      PointerActivity.noteOwnSystemInput()
-      sleep(seconds: pointerEventGap)
+      return event
     }
-  }
+    return (try make(style.types.down), try make(style.types.up))
+  }, menuCheck: { try requireAllowedPoint(point, app: identity) }, windowCheck: {
+    try requireOwnWindowOnTop(at: point, pid: pid, window: number)
+  }, post: { event, press in
+    postSystemWide(event, press)
+    PointerActivity.noteOwnSystemInput()
+    sleep(seconds: pointerEventGap)
+  })
   sleep(seconds: 0.1)
+}
+
+// The presses of a click through the system. Both events of a press are made first; then, right before the button
+// goes down, what lies under the point passes the menu check (`menuCheck`), the window asked for must be on top
+// (`windowCheck`), and the effect gate checks the request's cancel and deadline, its permission covering that press
+// alone: activating the app or an earlier press may have changed any of them. A button that went down always comes up.
+func pressThroughSystem<Event>(count: Int, events: (Int) throws -> (down: Event, up: Event), menuCheck: () throws -> Void,
+                               windowCheck: () throws -> Void, post: (Event, EffectStart) -> Void) throws {
+  for click in 1...min(max(1, count), 3) {
+    let press = try events(click)
+    try menuCheck()
+    try windowCheck()
+    let start = try beginEffect()
+    post(press.down, start)
+    post(press.up, start)
+  }
 }
